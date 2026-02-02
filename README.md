@@ -1,10 +1,8 @@
 # Experiments with cozy-desktop
 
-[![go.dev reference](https://pkg.go.dev/badge/github.com/nono/cozy-desktop-experiments)](https://pkg.go.dev/github.com/nono/cozy-desktop-experiments)
-
 This repository is a place where I can put ideas and experiments on how to
-improve the desktop client for Cozy Cloud. Currently, I am trying to rewrite a
-client in Go with an emphasis on tests and simulation.
+improve the desktop client for Cozy Cloud. Currently, I am trying to vibecode a
+client in Rust.
 
 ## What would be needed for a full client
 
@@ -13,7 +11,7 @@ This work would be needed if we want to release a new desktop client for Cozy
 users:
 
 - Support of Windows and macOS
-- UI
+- GUI
 - packagingn auto-update, and auto-start
 - logs, sentry, and a way to contact the support team
 - documentation
@@ -21,6 +19,7 @@ users:
 - managing errors like cozy blocked or moved to a new address
 - quota on the Cozy, and no more space on the local disk
 - opening cozy-notes
+- shared drives
 - etc.
 
 ## License
