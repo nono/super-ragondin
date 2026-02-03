@@ -1,7 +1,7 @@
 [package]
 name = "cozy-desktop"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -16,6 +16,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 md-5 = "0.10"
 hex = "0.4"
 url = "2"
+urlencoding = "2"
+chrono = "0.4"
+base64 = "0.22"
+bytes = "1"
 
 [dev-dependencies]
 proptest = "1"
