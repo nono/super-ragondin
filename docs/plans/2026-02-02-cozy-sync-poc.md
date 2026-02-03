@@ -15,6 +15,191 @@
 
 ---
 
+## Review Findings & Architectural Corrections
+
+### Critical: Identity Model Fix
+
+The original plan used a single `NodeId` across all trees, but local IDs (inode-based, ephemeral) don't map to Cozy remote IDs. This breaks the 3-tree comparison across restarts and makes move/rename detection unreliable.
+
+**Solution:** The Synced tree stores a **binding record** that maps both identities:
+
+```rust
+/// A binding record in the Synced tree that links local and remote identities
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncedRecord {
+    /// Local filesystem identity (device_id, inode) - stable across renames
+    pub local_id: LocalFileId,
+    /// Remote Cozy document ID
+    pub remote_id: RemoteId,
+    /// Relative path at last sync (for debugging/display)
+    pub rel_path: String,
+    /// Content hash at last sync
+    pub md5sum: Option<String>,
+    /// Size at last sync
+    pub size: Option<u64>,
+    /// Remote CouchDB revision at last sync
+    pub rev: String,
+    /// Node type
+    pub node_type: NodeType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LocalFileId {
+    pub device_id: u64,
+    pub inode: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RemoteId(pub String);
+```
+
+The planner joins trees by:
+1. Local tree → Synced via `LocalFileId`
+2. Remote tree → Synced via `RemoteId`
+3. Detect moves/renames when identity matches but path differs
+
+### Single-Writer Semantics
+
+**Enforce:** Only the control thread mutates fjall trees. I/O threads send events via channels:
+
+```rust
+enum LocalEvent {
+    FileChanged { path: PathBuf, local_id: LocalFileId, metadata: Metadata },
+    FileDeleted { path: PathBuf },
+    ScanComplete { nodes: Vec<LocalNode> },
+}
+
+enum RemoteEvent {
+    ChangeReceived { remote_id: RemoteId, node: RemoteNode, deleted: bool },
+    FetchComplete { seq: u64 },
+}
+```
+
+This keeps deterministic tests feasible and avoids races where I/O threads update trees mid-plan.
+
+### Extended SyncOp with Preconditions
+
+Operations must be idempotent and retry-safe. Include expected state for conflict detection:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncOp {
+    Download {
+        remote_id: RemoteId,
+        local_path: PathBuf,
+        expected_rev: String,
+        expected_md5: String,
+    },
+    Upload {
+        local_id: LocalFileId,
+        local_path: PathBuf,
+        parent_remote_id: RemoteId,
+        expected_md5: String,
+    },
+    CreateLocalDir {
+        remote_id: RemoteId,
+        local_path: PathBuf,
+    },
+    CreateRemoteDir {
+        local_id: LocalFileId,
+        local_path: PathBuf,
+        parent_remote_id: RemoteId,
+    },
+    DeleteLocal {
+        local_path: PathBuf,
+        expected_md5: Option<String>,
+    },
+    DeleteRemote {
+        remote_id: RemoteId,
+        expected_rev: String,
+    },
+    MoveLocal {
+        local_id: LocalFileId,
+        from_path: PathBuf,
+        to_path: PathBuf,
+    },
+    MoveRemote {
+        remote_id: RemoteId,
+        new_parent_id: RemoteId,
+        new_name: String,
+        expected_rev: String,
+    },
+    Conflict {
+        local_id: Option<LocalFileId>,
+        remote_id: Option<RemoteId>,
+        reason: String,
+    },
+}
+```
+
+### Operation Ordering Constraints
+
+The planner must respect dependencies:
+1. Create directories before files (parents before children)
+2. Process moves before content updates if they change parent dirs
+3. Delete children before parents
+4. Deletes processed last to avoid dangling references
+
+### Error Handling Improvements
+
+```rust
+#[derive(Error, Debug)]
+pub enum Error {
+    // ... existing variants ...
+
+    #[error("Revision mismatch: expected {expected}, got {actual}")]
+    RevisionMismatch { expected: String, actual: String },
+
+    #[error("Retryable error: {0}")]
+    Retryable(String),
+
+    #[error("Permanent error: {0}")]
+    Permanent(String),
+}
+
+impl Error {
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Error::Retryable(_) | Error::Http(_))
+    }
+}
+```
+
+HTTP errors should be classified: 429/5xx are retryable with backoff, 4xx are permanent.
+
+### Scanner Fixes
+
+1. Use `symlink_metadata()` and skip symlinks/special files
+2. After hashing, re-stat and confirm size/mtime unchanged (TOCTOU protection)
+3. Use `(size, mtime)` as quick signature; only hash when signature differs
+4. Use temp files + atomic rename for downloads
+
+### Watcher Robustness
+
+1. On inotify overflow, schedule a full rescan of affected subtree
+2. Maintain an "operation journal" to suppress self-induced events (downloads triggering upload plans)
+3. Coalesce rapid events with debouncing
+
+### Code Fixes
+
+- Change `md-5 = "0.10"` to `md5 = "0.7"` in Cargo.toml (or update imports to use `md_5` crate)
+- Remove unused `path_to_id` from scanner or use it for incremental updates
+- Make `scan_file()` consistent with `scan()` by sharing the inode→id mapping
+
+### Testing Invariants
+
+After each simulated step, assert:
+1. **Convergence:** If idle, `Local == Remote == Synced` (modulo ignored metadata)
+2. **Confluence:** Applying plan then re-planning yields no new ops
+3. **Safety:** No op violates preconditions (e.g., delete non-empty dir)
+
+Add deterministic scenario tests before property tests:
+- Create/modify/delete locally
+- Create/modify/delete remotely  
+- Concurrent edit conflict
+- Rename detection (initially as delete+create)
+
+---
+
 ## Phase 1: Project Setup & Core Data Model
 
 ### Task 1: Initialize Rust Project

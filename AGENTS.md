@@ -31,6 +31,7 @@ cargo clippy         # Run linter (pedantic + nursery enabled)
 
 - [Cozy-stack authentication](https://docs.cozy.io/en/cozy-stack/auth/)
 - [Cozy-stack files API](https://docs.cozy.io/en/cozy-stack/files/)
+- [io.cozy.files doctype](https://github.com/cozy/cozy-doctypes/blob/master/docs/io.cozy.files.md)
 - [inotify-rs](https://github.com/hannobraun/inotify-rs)
 - [fjall - Log-structured, embeddable key-value storage engine in Rust](https://github.com/fjall-rs/fjall)
 - [proptest - Hypothesis-like property testing for Rust](https://github.com/proptest-rs/proptest)
