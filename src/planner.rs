@@ -67,7 +67,7 @@ impl<'a> Planner<'a> {
             let remote = remote_by_id.get(&synced.remote_id);
 
             if let (None, Some(local_node)) = (remote, local) {
-                results.push(Self::plan_remote_deleted(synced, local_node));
+                results.push(self.plan_remote_deleted(synced, local_node));
             }
 
             if let (None, Some(remote_node)) = (local, remote) {
@@ -88,7 +88,7 @@ impl<'a> Planner<'a> {
         match (local, synced) {
             (Some(local), Some(synced)) => self.plan_all_three(remote, local, synced),
             (Some(local), None) => Self::plan_created_both_sides(remote, local),
-            (None, None) => Some(self.plan_remote_only(remote)),
+            (None, None) => self.plan_remote_only(remote),
             (None, Some(_)) => None,
         }
     }
@@ -147,21 +147,24 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn plan_remote_only(&self, remote: &RemoteNode) -> PlanResult {
+    fn plan_remote_only(&self, remote: &RemoteNode) -> Option<PlanResult> {
+        // Skip root directory - it maps to sync_root which already exists
+        remote.parent_id.as_ref()?;
+
         let local_path = self.compute_local_path(remote);
 
         if remote.node_type == NodeType::Directory {
-            PlanResult::Op(SyncOp::CreateLocalDir {
+            Some(PlanResult::Op(SyncOp::CreateLocalDir {
                 remote_id: remote.id.clone(),
                 local_path,
-            })
+            }))
         } else {
-            PlanResult::Op(SyncOp::DownloadNew {
+            Some(PlanResult::Op(SyncOp::DownloadNew {
                 remote_id: remote.id.clone(),
                 local_path,
                 expected_rev: remote.rev.clone(),
                 expected_md5: remote.md5sum.clone().unwrap_or_default(),
-            })
+            }))
         }
     }
 
@@ -201,7 +204,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn plan_remote_deleted(synced: &SyncedRecord, local: &LocalNode) -> PlanResult {
+    fn plan_remote_deleted(&self, synced: &SyncedRecord, local: &LocalNode) -> PlanResult {
         let local_changed = !Self::local_matches_synced(local, synced);
 
         if local_changed {
@@ -214,7 +217,7 @@ impl<'a> Planner<'a> {
         } else {
             PlanResult::Op(SyncOp::DeleteLocal {
                 local_id: local.id.clone(),
-                local_path: PathBuf::from(&synced.rel_path),
+                local_path: self.sync_root.join(&synced.rel_path),
                 expected_md5: synced.md5sum.clone(),
             })
         }
@@ -245,11 +248,61 @@ impl<'a> Planner<'a> {
     }
 
     fn compute_local_path(&self, remote: &RemoteNode) -> PathBuf {
-        self.sync_root.join(&remote.name)
+        let rel_path = self.compute_remote_rel_path(remote);
+        self.sync_root.join(rel_path)
+    }
+
+    #[allow(clippy::assigning_clones)]
+    fn compute_remote_rel_path(&self, remote: &RemoteNode) -> PathBuf {
+        let mut components = Vec::new();
+
+        if !remote.name.is_empty() {
+            components.push(remote.name.clone());
+        }
+
+        let mut current_parent = remote.parent_id.clone();
+        while let Some(ref parent_id) = current_parent {
+            if let Ok(Some(parent)) = self.store.get_remote_node(parent_id) {
+                if !parent.name.is_empty() {
+                    components.push(parent.name.clone());
+                }
+                current_parent = parent.parent_id.clone();
+            } else {
+                break;
+            }
+        }
+
+        components.reverse();
+        components.iter().collect()
     }
 
     fn compute_local_path_from_local(&self, local: &LocalNode) -> PathBuf {
-        self.sync_root.join(&local.name)
+        let rel_path = self.compute_local_rel_path(local);
+        self.sync_root.join(rel_path)
+    }
+
+    #[allow(clippy::assigning_clones)]
+    fn compute_local_rel_path(&self, local: &LocalNode) -> PathBuf {
+        let mut components = Vec::new();
+
+        if !local.name.is_empty() {
+            components.push(local.name.clone());
+        }
+
+        let mut current_parent = local.parent_id.clone();
+        while let Some(ref parent_id) = current_parent {
+            if let Ok(Some(parent)) = self.store.get_local_node(parent_id) {
+                if !parent.name.is_empty() {
+                    components.push(parent.name.clone());
+                }
+                current_parent = parent.parent_id.clone();
+            } else {
+                break;
+            }
+        }
+
+        components.reverse();
+        components.iter().collect()
     }
 
     fn remote_matches_synced(remote: &RemoteNode, synced: &SyncedRecord) -> bool {
