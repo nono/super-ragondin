@@ -151,7 +151,8 @@ impl SimulationRunner {
                 updated.md5sum = Some(md5sum);
                 updated.size = Some(content.len() as u64);
                 updated.mtime += 1;
-                self.local_fs.create_file(local_id, updated.clone(), content);
+                self.local_fs
+                    .create_file(local_id, updated.clone(), content);
                 self.store
                     .insert_local_node(&updated)
                     .map_err(|e| e.to_string())?;

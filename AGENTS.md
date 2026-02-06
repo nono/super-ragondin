@@ -21,8 +21,16 @@ cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 
 - `src/lib.rs` - Library root, module exports
 - `src/main.rs` - CLI entry point
-- `src/model.rs` - Core data types (Node, NodeId, SyncOp)
+- `src/config.rs` - Configuration (with `src/config/` submodules)
 - `src/error.rs` - Error types
+- `src/model.rs` - Core data types (Node, NodeId, SyncOp)
+- `src/planner.rs` - Sync operation planning
+- `src/local.rs` - Local filesystem watching (with `src/local/` submodules)
+- `src/remote.rs` - Remote Cozy API client (with `src/remote/` submodules)
+- `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
+- `src/sync.rs` - Sync engine (with `src/sync/` submodules)
+- `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
+- `tests/` - Integration tests
 
 ## Findings
 
