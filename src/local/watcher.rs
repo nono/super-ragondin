@@ -45,6 +45,7 @@ impl Watcher {
         };
 
         watcher.add_watch_recursive(root)?;
+        tracing::info!(root = %root.display(), "👁️ Starting filesystem watcher");
         Ok(watcher)
     }
 
@@ -67,6 +68,7 @@ impl Watcher {
 
         let wd = self.inotify.watches().add(path, mask)?;
         self.watches.insert(wd, path.to_path_buf());
+        tracing::trace!(path = %path.display(), "👁️ Added watch");
 
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
@@ -118,6 +120,7 @@ impl Watcher {
                         is_dir: true,
                         cookie: None,
                     };
+                    tracing::warn!("👁️ Inotify queue overflow, full rescan needed");
                     if self.tx.send(overflow_event).is_err() {
                         return Ok(());
                     }
@@ -127,6 +130,7 @@ impl Watcher {
                 // Handle watch invalidation (directory deleted/moved)
                 if event.mask.contains(EventMask::IGNORED) {
                     self.watches.remove(&event.wd);
+                    tracing::debug!("👁️ Watch invalidated");
                     continue;
                 }
                 if event.mask.contains(EventMask::DELETE_SELF)
@@ -175,8 +179,10 @@ impl Watcher {
                     cookie,
                 };
 
+                tracing::debug!(path = %watch_event.path.display(), kind = ?watch_event.kind, is_dir = watch_event.is_dir, "👁️ Filesystem event");
                 if self.tx.send(watch_event).is_err() {
-                    return Ok(()); // Receiver dropped, exit gracefully
+                    tracing::debug!("👁️ Watcher channel closed, stopping");
+                    return Ok(());
                 }
             }
         }

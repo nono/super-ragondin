@@ -26,6 +26,7 @@ impl TreeStore {
     /// # Errors
     /// Returns an error if the keyspace cannot be opened
     pub fn open(path: &Path) -> Result<Self> {
+        tracing::info!(path = %path.display(), "💾 Opening tree store");
         let keyspace = Config::new(path).open()?;
 
         let remote = keyspace.open_partition("remote", PartitionCreateOptions::default())?;
@@ -66,6 +67,11 @@ impl TreeStore {
             self.remote_children
                 .insert(child_key, node.id.as_str().as_bytes())?;
         }
+        tracing::trace!(
+            id = node.id.as_str(),
+            name = &node.name,
+            "💾 Inserted remote node"
+        );
         Ok(())
     }
 
@@ -96,6 +102,7 @@ impl TreeStore {
             self.remote_children.remove(child_key)?;
         }
         self.remote.remove(id.as_str().as_bytes())?;
+        tracing::trace!(id = id.as_str(), "💾 Deleted remote node");
         Ok(())
     }
 
@@ -146,6 +153,7 @@ impl TreeStore {
             let child_key = make_child_key_local(parent_id, &node.name);
             self.local_children.insert(child_key, key)?;
         }
+        tracing::trace!(name = &node.name, "💾 Inserted local node");
         Ok(())
     }
 
@@ -176,6 +184,7 @@ impl TreeStore {
             self.local_children.remove(child_key)?;
         }
         self.local.remove(id.to_bytes())?;
+        tracing::trace!("💾 Deleted local node");
         Ok(())
     }
 
@@ -226,6 +235,7 @@ impl TreeStore {
 
         self.synced_by_local.insert(local_key, &value)?;
         self.synced_by_remote.insert(remote_key, local_key)?;
+        tracing::trace!(rel_path = &record.rel_path, "💾 Inserted synced record");
         Ok(())
     }
 
@@ -270,6 +280,7 @@ impl TreeStore {
                 .remove(record.remote_id.as_str().as_bytes())?;
         }
         self.synced_by_local.remove(local_id.to_bytes())?;
+        tracing::trace!("💾 Deleted synced record");
         Ok(())
     }
 
@@ -293,6 +304,7 @@ impl TreeStore {
     /// Returns an error if persistence fails
     pub fn flush(&self) -> Result<()> {
         self.keyspace.persist(fjall::PersistMode::SyncAll)?;
+        tracing::debug!("💾 Store flushed to disk");
         Ok(())
     }
 }

@@ -30,6 +30,13 @@ impl<'a> Planner<'a> {
         let local_nodes = self.store.list_all_local()?;
         let synced_records = self.store.list_all_synced()?;
 
+        tracing::info!(
+            remote_count = remote_nodes.len(),
+            local_count = local_nodes.len(),
+            synced_count = synced_records.len(),
+            "📋 Planning sync operations"
+        );
+
         let local_by_id: HashMap<LocalFileId, &LocalNode> =
             local_nodes.iter().map(|n| (n.id.clone(), n)).collect();
         let remote_by_id: HashMap<RemoteId, &RemoteNode> =
@@ -76,6 +83,19 @@ impl<'a> Planner<'a> {
         }
 
         Self::sort_operations(&mut results);
+        let op_count = results
+            .iter()
+            .filter(|r| matches!(r, PlanResult::Op(_)))
+            .count();
+        let conflict_count = results
+            .iter()
+            .filter(|r| matches!(r, PlanResult::Conflict(_)))
+            .count();
+        tracing::info!(
+            operations = op_count,
+            conflicts = conflict_count,
+            "📋 Planning complete"
+        );
         Ok(results)
     }
 
@@ -123,6 +143,7 @@ impl<'a> Planner<'a> {
                 if Self::remote_equals_local(remote, local) {
                     None
                 } else {
+                    tracing::debug!(remote_id = remote.id.as_str(), "⚠️ Both sides modified");
                     Some(PlanResult::Conflict(Conflict {
                         local_id: Some(local.id.clone()),
                         remote_id: Some(remote.id.clone()),
@@ -151,6 +172,8 @@ impl<'a> Planner<'a> {
         // Skip root directory - it maps to sync_root which already exists
         remote.parent_id.as_ref()?;
 
+        tracing::debug!(remote_id = remote.id.as_str(), name = &remote.name, node_type = ?remote.node_type, "📋 New remote node, planning download");
+
         let local_path = self.compute_local_path(remote);
 
         if remote.node_type == NodeType::Directory {
@@ -173,6 +196,7 @@ impl<'a> Planner<'a> {
         let local_path = self.compute_local_path_from_local(local);
 
         if local.parent_id.is_some() {
+            tracing::debug!(name = &local.name, node_type = ?local.node_type, "📋 New local node, planning upload");
             match self.find_parent_remote_id(local.parent_id.as_ref()) {
                 Some(parent_remote_id) => {
                     if local.node_type == NodeType::Directory {
@@ -208,6 +232,10 @@ impl<'a> Planner<'a> {
         let local_changed = !Self::local_matches_synced(local, synced);
 
         if local_changed {
+            tracing::debug!(
+                remote_id = synced.remote_id.as_str(),
+                "⚠️ Remote deleted but local modified"
+            );
             PlanResult::Conflict(Conflict {
                 local_id: Some(local.id.clone()),
                 remote_id: Some(synced.remote_id.clone()),
@@ -227,6 +255,10 @@ impl<'a> Planner<'a> {
         let remote_changed = !Self::remote_matches_synced(remote, synced);
 
         if remote_changed {
+            tracing::debug!(
+                remote_id = remote.id.as_str(),
+                "⚠️ Local deleted but remote modified"
+            );
             PlanResult::Conflict(Conflict {
                 local_id: Some(synced.local_id.clone()),
                 remote_id: Some(remote.id.clone()),

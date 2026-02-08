@@ -81,6 +81,11 @@ impl OAuthClient {
     ) -> Result<Self> {
         let http = reqwest::Client::new();
         let normalized_url = instance_url.trim_end_matches('/');
+        tracing::info!(
+            instance_url = normalized_url,
+            client_name,
+            "🔑 Registering OAuth client"
+        );
 
         let request = RegisterRequest {
             redirect_uris: vec![REDIRECT_URI.to_string()],
@@ -99,6 +104,7 @@ impl OAuthClient {
             .json()
             .await?;
 
+        tracing::info!(client_id = &resp.client_id, "🔑 OAuth client registered");
         Ok(Self {
             instance_url: normalized_url.to_string(),
             client_id: resp.client_id,
@@ -127,6 +133,7 @@ impl OAuthClient {
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
     pub async fn exchange_code(&mut self, code: &str) -> Result<()> {
+        tracing::info!("🔑 Exchanging authorization code for tokens");
         let http = reqwest::Client::new();
 
         let resp: TokenResponse = http
@@ -146,6 +153,7 @@ impl OAuthClient {
 
         self.access_token = Some(resp.access_token);
         self.refresh_token = Some(resp.refresh_token);
+        tracing::info!("🔑 Token exchange successful");
         Ok(())
     }
 

@@ -46,13 +46,16 @@ impl SyncEngine {
     ///
     /// Returns an error if scanning or storage fails.
     pub fn initial_scan(&mut self) -> Result<()> {
+        tracing::info!(sync_dir = %self.sync_dir.display(), "🔍 Starting initial scan");
         let scanner = Scanner::new(&self.sync_dir);
         let local_nodes = scanner.scan()?;
+        let count = local_nodes.len();
 
         for node in &local_nodes {
             self.store.insert_local_node(node)?;
         }
 
+        tracing::info!(count, "🔍 Initial scan found nodes");
         self.store.flush()?;
         Ok(())
     }
@@ -98,7 +101,7 @@ impl SyncEngine {
             | SyncOp::CreateRemoteDir { .. }
             | SyncOp::MoveLocal { .. }
             | SyncOp::MoveRemote { .. } => {
-                tracing::warn!("Operation {:?} requires async execution", op);
+                tracing::warn!(op = ?op, "⏭️ Operation requires async execution, skipping");
                 Ok(())
             }
         }
@@ -109,6 +112,7 @@ impl SyncEngine {
         remote_id: &crate::model::RemoteId,
         local_path: &Path,
     ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), remote_id = remote_id.as_str(), "📁 Creating local directory");
         let remote_node = self
             .store
             .get_remote_node(remote_id)?
@@ -154,6 +158,7 @@ impl SyncEngine {
     }
 
     fn execute_delete_local(&self, local_id: &LocalFileId, local_path: &Path) -> Result<()> {
+        tracing::info!(path = %local_path.display(), "🗑️ Deleting local entry");
         if local_path.is_dir() {
             fs::remove_dir_all(local_path)?;
         } else if local_path.exists() {
@@ -168,7 +173,7 @@ impl SyncEngine {
     }
 
     fn execute_delete_remote(&self, remote_id: &crate::model::RemoteId) -> Result<()> {
-        // Just update the store - actual remote deletion would require async
+        tracing::info!(remote_id = remote_id.as_str(), "🗑️ Deleting remote entry");
         self.store.delete_remote_node(remote_id)?;
 
         // Also remove synced record if it exists

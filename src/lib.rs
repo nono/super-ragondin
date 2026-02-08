@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod local;
+pub mod logging;
 pub mod model;
 pub mod planner;
 pub mod remote;

@@ -97,6 +97,7 @@ impl CozyClient {
     /// Returns an error if the HTTP request fails, the server returns an error,
     /// or a change result is missing its document.
     pub async fn fetch_changes(&self, since: Option<&str>) -> Result<ChangesResponse> {
+        tracing::info!(since = ?since, "🌐 Fetching remote changes");
         let mut url = reqwest::Url::parse(&format!("{}/files/_changes", self.instance_url))?;
         url.query_pairs_mut().append_pair("include_docs", "true");
         if let Some(seq) = since {
@@ -116,6 +117,7 @@ impl CozyClient {
         let mut results = Vec::with_capacity(raw.results.len());
         for r in raw.results {
             let change_result = if r.deleted {
+                tracing::debug!(id = &r.id, "🗑️ Remote document deleted");
                 ChangeResult {
                     id: r.id.clone(),
                     seq: r.seq,
@@ -157,6 +159,11 @@ impl CozyClient {
             results.push(change_result);
         }
 
+        tracing::info!(
+            count = results.len(),
+            last_seq = &raw.last_seq,
+            "🌐 Received remote changes"
+        );
         Ok(ChangesResponse {
             last_seq: raw.last_seq,
             results,
@@ -169,6 +176,7 @@ impl CozyClient {
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
     pub async fn download_file(&self, file_id: &NodeId) -> Result<bytes::Bytes> {
+        tracing::info!(file_id = file_id.as_str(), "📥 Downloading file");
         let url = format!("{}/files/download/{}", self.instance_url, file_id.as_str());
         let bytes = self
             .http
@@ -179,6 +187,11 @@ impl CozyClient {
             .error_for_status()?
             .bytes()
             .await?;
+        tracing::debug!(
+            file_id = file_id.as_str(),
+            size = bytes.len(),
+            "📥 Download complete"
+        );
         Ok(bytes)
     }
 
@@ -195,6 +208,12 @@ impl CozyClient {
         content: Vec<u8>,
         md5sum: &str,
     ) -> Result<Node> {
+        tracing::info!(
+            parent_id = parent_id.as_str(),
+            name,
+            size = content.len(),
+            "📤 Uploading file"
+        );
         use base64::Engine;
 
         let mut url = reqwest::Url::parse(&format!(
@@ -231,6 +250,11 @@ impl CozyClient {
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
     pub async fn create_directory(&self, parent_id: &NodeId, name: &str) -> Result<Node> {
+        tracing::info!(
+            parent_id = parent_id.as_str(),
+            name,
+            "📁 Creating remote directory"
+        );
         let mut url = reqwest::Url::parse(&format!(
             "{}/files/{}",
             self.instance_url,
@@ -259,6 +283,7 @@ impl CozyClient {
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
     pub async fn trash(&self, id: &NodeId) -> Result<()> {
+        tracing::info!(id = id.as_str(), "🗑️ Trashing remote document");
         let url = format!("{}/files/{}", self.instance_url, id.as_str());
 
         self.http
@@ -282,6 +307,12 @@ impl CozyClient {
         new_parent_id: &NodeId,
         new_name: &str,
     ) -> Result<Node> {
+        tracing::info!(
+            id = id.as_str(),
+            new_parent_id = new_parent_id.as_str(),
+            new_name,
+            "🔀 Moving remote document"
+        );
         let url = format!("{}/files/{}", self.instance_url, id.as_str());
 
         let resp: FileResponse = self

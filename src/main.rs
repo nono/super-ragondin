@@ -12,16 +12,9 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cozy_desktop=info".into()),
-        )
-        .init();
+    cozy_desktop::logging::init();
 
     let args: Vec<String> = env::args().collect();
 
@@ -79,11 +72,12 @@ fn cmd_init(args: &[String]) -> Result<()> {
 
     config.save(&config_path())?;
 
-    tracing::info!("Initialized cozy-desktop");
-    tracing::info!("  Instance: {}", instance_url);
-    tracing::info!("  Sync dir: {}", sync_dir.display());
-    tracing::info!("  Data dir: {}", data_dir.display());
-    tracing::info!("Run 'cozy-desktop auth' to authenticate");
+    tracing::info!(
+        instance_url,
+        sync_dir = %sync_dir.display(),
+        data_dir = %data_dir.display(),
+        "⚙️ Initialized cozy-desktop, run 'cozy-desktop auth' to authenticate"
+    );
 
     Ok(())
 }
@@ -117,7 +111,7 @@ fn cmd_auth() -> Result<()> {
         config.oauth_client = Some(oauth);
         config.save(&config_path())?;
 
-        tracing::info!("Authentication successful!");
+        tracing::info!("🔑 Authentication successful");
 
         Ok::<_, Error>(())
     })?;
@@ -143,16 +137,16 @@ fn cmd_sync() -> Result<()> {
 
     let mut engine = SyncEngine::new(store, config.sync_dir.clone(), config.staging_dir());
 
-    tracing::info!("Scanning local filesystem...");
+    tracing::info!("🔄 Starting sync cycle");
     engine.initial_scan()?;
 
     let ops = engine.plan()?;
-    tracing::info!("Planned {} operations", ops.len());
+    tracing::info!(count = ops.len(), "📋 Planned operations");
 
     for op in &ops {
         match op {
-            PlanResult::Op(sync_op) => tracing::info!("  {:?}", sync_op),
-            PlanResult::Conflict(conflict) => tracing::warn!("  Conflict: {:?}", conflict),
+            PlanResult::Op(sync_op) => tracing::info!(op = ?sync_op, "🔄 Sync operation"),
+            PlanResult::Conflict(conflict) => tracing::warn!(conflict = ?conflict, "⚠️ Conflict"),
             PlanResult::NoOp => {}
         }
     }
@@ -165,7 +159,7 @@ fn cmd_sync() -> Result<()> {
 
     config.save(&config_path())?;
 
-    tracing::info!("Sync complete!");
+    tracing::info!("🔄 Sync complete");
 
     Ok(())
 }
@@ -182,8 +176,7 @@ fn cmd_watch() -> Result<()> {
         watcher.run().expect("Watcher failed");
     });
 
-    tracing::info!("Watching for changes in {}", config.sync_dir.display());
-    tracing::info!("Press Ctrl+C to stop");
+    tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 
     let mut last_sync = Instant::now();
     let debounce = Duration::from_secs(2);
@@ -191,26 +184,26 @@ fn cmd_watch() -> Result<()> {
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => {
-                tracing::debug!("Event: {:?}", event);
+                tracing::debug!(event = ?event, "👁️ Watch event received");
                 if last_sync.elapsed() > debounce {
-                    tracing::info!("Changes detected, syncing...");
+                    tracing::info!("🔄 Changes detected, syncing");
                     if let Err(e) = cmd_sync() {
-                        tracing::error!("Sync failed: {}", e);
+                        tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_sync.elapsed() > Duration::from_secs(30) {
-                    tracing::info!("Periodic sync...");
+                    tracing::info!("🔄 Periodic sync");
                     if let Err(e) = cmd_sync() {
-                        tracing::error!("Sync failed: {}", e);
+                        tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::error!("Watcher disconnected");
+                tracing::error!("❌ Watcher disconnected");
                 break;
             }
         }

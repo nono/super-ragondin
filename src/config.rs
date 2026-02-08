@@ -22,6 +22,7 @@ impl Config {
     ///
     /// Returns an error if reading or parsing the file fails.
     pub fn load(path: &Path) -> Result<Option<Self>> {
+        tracing::debug!(path = %path.display(), "⚙️ Loading config");
         if !path.exists() {
             return Ok(None);
         }
@@ -38,6 +39,7 @@ impl Config {
     ///
     /// Returns an error if writing the file fails.
     pub fn save(&self, path: &Path) -> Result<()> {
+        tracing::debug!(path = %path.display(), "⚙️ Saving config");
         let content = serde_json::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

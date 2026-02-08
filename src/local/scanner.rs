@@ -24,10 +24,12 @@ impl Scanner {
     /// # Errors
     /// Returns an error if filesystem operations fail.
     pub fn scan(&self) -> Result<Vec<LocalNode>> {
+        tracing::info!(root = %self.root.display(), "🔍 Starting local filesystem scan");
         let mut nodes = Vec::new();
         let mut inode_to_id: HashMap<(u64, u64), LocalFileId> = HashMap::new();
 
         Self::scan_recursive(&self.root, None, &mut nodes, &mut inode_to_id)?;
+        tracing::info!(root = %self.root.display(), count = nodes.len(), "🔍 Scan complete");
         Ok(nodes)
     }
 
@@ -48,6 +50,7 @@ impl Scanner {
 
             // Skip symlinks and special files
             if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+                tracing::debug!(path = %entry_path.display(), "⏭️ Skipping non-regular file");
                 continue;
             }
 
@@ -77,6 +80,7 @@ impl Scanner {
                     || metadata_after.ino() != inode
                 {
                     // File changed during hash, skip for now (will be caught on next scan)
+                    tracing::debug!(path = %entry_path.display(), "⏭️ File changed during hash, skipping");
                     continue;
                 }
 
@@ -162,9 +166,11 @@ impl Scanner {
             {
                 // File changed while hashing, retry with bounded attempts
                 if retries_left > 0 {
+                    tracing::debug!(path = %path.display(), retries_left, "🔍 File changed during hash, retrying");
                     return Self::scan_file_with_retries(path, retries_left - 1);
                 }
                 // File still unstable after retries, skip it
+                tracing::warn!(path = %path.display(), "⏭️ File unstable after retries, skipping");
                 return Ok(None);
             }
 
