@@ -330,6 +330,8 @@ pub enum ConflictKind {
     NameCollision,
     /// Both sides moved/renamed
     BothMoved,
+    /// Name contains unsafe characters (path traversal)
+    InvalidName,
 }
 
 /// Result of planning sync operations for an item

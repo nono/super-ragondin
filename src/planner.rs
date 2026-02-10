@@ -101,6 +101,15 @@ impl<'a> Planner<'a> {
         local: Option<&LocalNode>,
         synced: Option<&SyncedRecord>,
     ) -> Vec<PlanResult> {
+        if !Self::is_safe_name(&remote.name) {
+            tracing::warn!(remote_id = remote.id.as_str(), name = &remote.name, "⚠️ Unsafe remote name, rejecting");
+            return vec![PlanResult::Conflict(Conflict {
+                local_id: None,
+                remote_id: Some(remote.id.clone()),
+                reason: format!("Unsafe remote file name: {:?}", remote.name),
+                kind: ConflictKind::InvalidName,
+            })];
+        }
         match (local, synced) {
             (Some(local), Some(synced)) => self.plan_all_three(remote, local, synced),
             (Some(local), None) => Self::plan_created_both_sides(remote, local),
@@ -266,6 +275,16 @@ impl<'a> Planner<'a> {
 
     #[allow(clippy::option_if_let_else)]
     fn plan_local_only(&self, local: &LocalNode) -> Vec<PlanResult> {
+        if !Self::is_safe_name(&local.name) {
+            tracing::warn!(name = &local.name, "⚠️ Unsafe local name, rejecting");
+            return vec![PlanResult::Conflict(Conflict {
+                local_id: Some(local.id.clone()),
+                remote_id: None,
+                reason: format!("Unsafe local file name: {:?}", local.name),
+                kind: ConflictKind::InvalidName,
+            })];
+        }
+
         let local_path = self.compute_local_path_from_local(local);
 
         if local.parent_id.is_some() {
@@ -481,6 +500,19 @@ impl<'a> Planner<'a> {
         } else {
             true
         }
+    }
+
+    fn is_safe_name(name: &str) -> bool {
+        if name.is_empty() {
+            return true;
+        }
+        if name == "." || name == ".." {
+            return false;
+        }
+        if name.contains('/') || name.contains('\\') || name.contains('\0') {
+            return false;
+        }
+        true
     }
 
     fn sort_operations(results: &mut [PlanResult]) {

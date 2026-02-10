@@ -1079,3 +1079,79 @@ fn test_local_rename_and_content_change_generates_move_and_upload() {
         );
     }
 }
+
+#[test]
+fn test_remote_name_dotdot_is_rejected_as_conflict() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let remote_file = make_remote_file(
+        remote_id("f1"),
+        Some(remote_id("root")),
+        "..",
+        "abc123",
+    );
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
+    assert!(!has_download, "Should NOT plan a download for '..' name");
+
+    let has_conflict = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Conflict(c) if c.kind == ConflictKind::InvalidName));
+    assert!(has_conflict, "Should produce InvalidName conflict for '..' name");
+}
+
+#[test]
+fn test_remote_name_with_slash_is_rejected_as_conflict() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let remote_file = make_remote_file(
+        remote_id("f1"),
+        Some(remote_id("root")),
+        "a/../../etc/passwd",
+        "abc123",
+    );
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
+    assert!(!has_download, "Should NOT plan a download for name with '/'");
+
+    let has_conflict = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Conflict(c) if c.kind == ConflictKind::InvalidName));
+    assert!(has_conflict, "Should produce InvalidName conflict for name with '/'");
+}
+
+#[test]
+fn test_remote_name_dot_is_rejected_as_conflict() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let remote_file = make_remote_file(
+        remote_id("f1"),
+        Some(remote_id("root")),
+        ".",
+        "abc123",
+    );
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
+    assert!(!has_download, "Should NOT plan a download for '.' name");
+}
