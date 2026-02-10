@@ -193,6 +193,7 @@ fn test_sync_engine_execute_create_local_dir() {
 #[test]
 fn test_sync_engine_execute_delete_local() {
     use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
+    use md5::{Digest, Md5};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
 
@@ -201,7 +202,12 @@ fn test_sync_engine_execute_delete_local() {
 
     // Create a file to delete
     let file_path = sync_dir.path().join("to_delete.txt");
-    fs::write(&file_path, "content").unwrap();
+    let content = b"content";
+    fs::write(&file_path, content).unwrap();
+
+    let mut hasher = Md5::new();
+    hasher.update(content);
+    let md5 = hex::encode(hasher.finalize());
 
     let metadata = fs::metadata(&file_path).unwrap();
     let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
@@ -214,8 +220,8 @@ fn test_sync_engine_execute_delete_local() {
         parent_id: None,
         name: "to_delete.txt".to_string(),
         node_type: NodeType::File,
-        md5sum: Some("abc".to_string()),
-        size: Some(7),
+        md5sum: Some(md5.clone()),
+        size: Some(content.len() as u64),
         mtime: 1000,
     };
     store.insert_local_node(&local_node).unwrap();
@@ -227,11 +233,11 @@ fn test_sync_engine_execute_delete_local() {
         sync_dir.path().join(".staging"),
     );
 
-    // Create delete operation
+    // Create delete operation with correct md5
     let op = SyncOp::DeleteLocal {
         local_id: local_id.clone(),
         local_path: file_path.clone(),
-        expected_md5: Some("abc".to_string()),
+        expected_md5: Some(md5),
     };
 
     // Execute
@@ -382,4 +388,160 @@ fn test_sync_engine_execute_move_local() {
     assert!(!from_path.exists(), "Old path should not exist");
     assert!(to_path.exists(), "New path should exist");
     assert_eq!(fs::read_to_string(&to_path).unwrap(), "content");
+}
+
+#[test]
+fn test_delete_local_refuses_when_md5_changed() {
+    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let file_path = sync_dir.path().join("important.txt");
+    fs::write(&file_path, "original content").unwrap();
+
+    let metadata = fs::metadata(&file_path).unwrap();
+    let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let local_node = LocalNode {
+        id: local_id.clone(),
+        parent_id: None,
+        name: "important.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("old_md5".to_string()),
+        size: Some(16),
+        mtime: 1000,
+    };
+    store.insert_local_node(&local_node).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+    );
+
+    // User modifies the file between planning and execution
+    fs::write(&file_path, "modified content!!!").unwrap();
+
+    let op = SyncOp::DeleteLocal {
+        local_id: local_id.clone(),
+        local_path: file_path.clone(),
+        expected_md5: Some("old_md5".to_string()),
+    };
+
+    // Should refuse to delete since md5 no longer matches
+    let result = engine.execute_op(&op);
+    assert!(result.is_err(), "Should refuse to delete modified file");
+    assert!(file_path.exists(), "File must still exist after refused delete");
+}
+
+#[test]
+fn test_delete_local_succeeds_when_md5_matches() {
+    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
+    use md5::{Digest, Md5};
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let file_path = sync_dir.path().join("to_delete.txt");
+    let content = b"delete me";
+    fs::write(&file_path, content).unwrap();
+
+    let mut hasher = Md5::new();
+    hasher.update(content);
+    let md5 = hex::encode(hasher.finalize());
+
+    let metadata = fs::metadata(&file_path).unwrap();
+    let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let local_node = LocalNode {
+        id: local_id.clone(),
+        parent_id: None,
+        name: "to_delete.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some(md5.clone()),
+        size: Some(content.len() as u64),
+        mtime: 1000,
+    };
+    store.insert_local_node(&local_node).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+    );
+
+    let op = SyncOp::DeleteLocal {
+        local_id,
+        local_path: file_path.clone(),
+        expected_md5: Some(md5),
+    };
+
+    engine.execute_op(&op).unwrap();
+    assert!(!file_path.exists(), "File should be deleted when md5 matches");
+}
+
+#[test]
+fn test_move_local_refuses_when_inode_mismatches() {
+    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let from_path = sync_dir.path().join("old.txt");
+    fs::write(&from_path, "content").unwrap();
+
+    let metadata = fs::metadata(&from_path).unwrap();
+    let real_id = LocalFileId::new(metadata.dev(), metadata.ino());
+    let parent_id = {
+        let m = fs::metadata(sync_dir.path()).unwrap();
+        LocalFileId::new(m.dev(), m.ino())
+    };
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let local_node = LocalNode {
+        id: real_id.clone(),
+        parent_id: Some(parent_id.clone()),
+        name: "old.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(7),
+        mtime: 1000,
+    };
+    store.insert_local_node(&local_node).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+    );
+
+    // Use a wrong local_id (different inode) - simulates the file being
+    // replaced between planning and execution
+    let wrong_id = LocalFileId::new(metadata.dev(), metadata.ino() + 999);
+
+    let to_path = sync_dir.path().join("new.txt");
+    let op = SyncOp::MoveLocal {
+        local_id: wrong_id,
+        from_path: from_path.clone(),
+        to_path: to_path.clone(),
+        expected_parent_id: Some(parent_id),
+        expected_name: "old.txt".to_string(),
+    };
+
+    let result = engine.execute_op(&op);
+    assert!(result.is_err(), "Should refuse to move when inode mismatches");
+    assert!(from_path.exists(), "Original file must still exist");
+    assert!(!to_path.exists(), "Destination must not be created");
 }

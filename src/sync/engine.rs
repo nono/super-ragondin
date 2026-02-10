@@ -3,7 +3,9 @@ use crate::local::scanner::Scanner;
 use crate::model::{LocalFileId, NodeType, PlanResult, SyncOp, SyncedRecord};
 use crate::planner::Planner;
 use crate::store::TreeStore;
+use md5::{Digest, Md5};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -85,8 +87,8 @@ impl SyncEngine {
             SyncOp::DeleteLocal {
                 local_id,
                 local_path,
-                expected_md5: _,
-            } => self.execute_delete_local(local_id, local_path),
+                expected_md5,
+            } => self.execute_delete_local(local_id, local_path, expected_md5.as_deref()),
 
             SyncOp::DeleteRemote {
                 remote_id,
@@ -173,12 +175,27 @@ impl SyncEngine {
         Ok(())
     }
 
-    fn execute_delete_local(&self, local_id: &LocalFileId, local_path: &Path) -> Result<()> {
+    fn execute_delete_local(
+        &self,
+        local_id: &LocalFileId,
+        local_path: &Path,
+        expected_md5: Option<&str>,
+    ) -> Result<()> {
         tracing::info!(path = %local_path.display(), "🗑️ Deleting local entry");
-        if local_path.is_dir() {
-            fs::remove_dir_all(local_path)?;
-        } else if local_path.exists() {
+
+        if local_path.is_file() {
+            if let Some(expected) = expected_md5 {
+                let actual = Self::compute_md5(local_path)?;
+                if actual != expected {
+                    return Err(Error::Conflict(format!(
+                        "File {} was modified (expected md5 {expected}, got {actual})",
+                        local_path.display()
+                    )));
+                }
+            }
             fs::remove_file(local_path)?;
+        } else if local_path.is_dir() {
+            fs::remove_dir_all(local_path)?;
         }
 
         self.store.delete_local_node(local_id)?;
@@ -195,6 +212,20 @@ impl SyncEngine {
         to_path: &Path,
     ) -> Result<()> {
         tracing::info!(from = %from_path.display(), to = %to_path.display(), "📦 Moving local file");
+
+        if from_path.exists() {
+            let metadata = fs::symlink_metadata(from_path)?;
+            let actual_id = LocalFileId::new(metadata.dev(), metadata.ino());
+            if actual_id != *local_id {
+                return Err(Error::Conflict(format!(
+                    "File {} identity changed (expected {:?}, got {:?})",
+                    from_path.display(),
+                    local_id,
+                    actual_id
+                )));
+            }
+        }
+
         if let Some(parent) = to_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -229,6 +260,22 @@ impl SyncEngine {
 
         self.store.flush()?;
         Ok(())
+    }
+
+    fn compute_md5(path: &Path) -> Result<String> {
+        let mut file = fs::File::open(path)?;
+        let mut hasher = Md5::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        Ok(hex::encode(hasher.finalize()))
     }
 
     fn execute_delete_remote(&self, remote_id: &crate::model::RemoteId) -> Result<()> {
