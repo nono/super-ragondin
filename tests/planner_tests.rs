@@ -1035,8 +1035,7 @@ fn test_local_rename_and_content_change_generates_move_and_upload() {
     );
     store.insert_synced(&synced).unwrap();
 
-    let local_file =
-        make_local_file(lid.clone(), Some(parent_lid.clone()), "new.txt", "new_hash");
+    let local_file = make_local_file(lid.clone(), Some(parent_lid.clone()), "new.txt", "new_hash");
     store.insert_local_node(&local_file).unwrap();
 
     let remote_file =
@@ -1069,8 +1068,9 @@ fn test_local_rename_and_content_change_generates_move_and_upload() {
         "MoveRemote should be sorted before UploadUpdate"
     );
 
-    if let Some(PlanResult::Op(SyncOp::UploadUpdate { local_path, .. })) =
-        ops.iter().find(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })))
+    if let Some(PlanResult::Op(SyncOp::UploadUpdate { local_path, .. })) = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })))
     {
         assert_eq!(
             local_path,

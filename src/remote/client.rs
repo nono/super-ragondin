@@ -1,3 +1,5 @@
+use base64::Engine;
+
 use crate::error::{Error, Result};
 use crate::model::{Node, NodeId, NodeType};
 use serde::Deserialize;
@@ -214,8 +216,6 @@ impl CozyClient {
             size = content.len(),
             "📤 Uploading file"
         );
-        use base64::Engine;
-
         let mut url = reqwest::Url::parse(&format!(
             "{}/files/{}",
             self.instance_url,
