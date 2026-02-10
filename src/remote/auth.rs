@@ -39,13 +39,9 @@ struct TokenResponse {
 pub struct OAuthClient {
     pub instance_url: String,
     pub client_id: String,
-    #[serde(skip_serializing)]
     pub client_secret: String,
-    #[serde(skip_serializing)]
     pub registration_access_token: String,
-    #[serde(skip_serializing)]
     pub access_token: Option<String>,
-    #[serde(skip_serializing)]
     pub refresh_token: Option<String>,
 }
 
@@ -160,5 +156,30 @@ impl OAuthClient {
     #[must_use]
     pub fn access_token(&self) -> Option<&str> {
         self.access_token.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_client_roundtrip_preserves_secrets() {
+        let client = OAuthClient {
+            instance_url: "https://test.mycozy.cloud".to_string(),
+            client_id: "client-123".to_string(),
+            client_secret: "secret-456".to_string(),
+            registration_access_token: "reg-token-789".to_string(),
+            access_token: Some("access-abc".to_string()),
+            refresh_token: Some("refresh-def".to_string()),
+        };
+
+        let json = serde_json::to_string(&client).unwrap();
+        let restored: OAuthClient = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.client_secret, "secret-456");
+        assert_eq!(restored.registration_access_token, "reg-token-789");
+        assert_eq!(restored.access_token, Some("access-abc".to_string()));
+        assert_eq!(restored.refresh_token, Some("refresh-def".to_string()));
     }
 }

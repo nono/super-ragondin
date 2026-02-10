@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::remote::auth::OAuthClient;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +45,10 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, content)?;
+        let tmp_path = path.with_extension("json.tmp");
+        fs::write(&tmp_path, content)?;
+        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&tmp_path, path)?;
         Ok(())
     }
 
@@ -56,5 +60,56 @@ impl Config {
     #[must_use]
     pub fn store_dir(&self) -> PathBuf {
         self.data_dir.join("store")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn test_config() -> Config {
+        Config {
+            instance_url: "https://test.mycozy.cloud".to_string(),
+            sync_dir: PathBuf::from("/tmp/sync"),
+            data_dir: PathBuf::from("/tmp/data"),
+            oauth_client: Some(OAuthClient {
+                instance_url: "https://test.mycozy.cloud".to_string(),
+                client_id: "id".to_string(),
+                client_secret: "secret".to_string(),
+                registration_access_token: "reg-token".to_string(),
+                access_token: Some("access".to_string()),
+                refresh_token: Some("refresh".to_string()),
+            }),
+            last_seq: None,
+        }
+    }
+
+    #[test]
+    fn save_sets_owner_only_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        let config = test_config();
+        config.save(&path).unwrap();
+
+        let perms = fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn save_load_roundtrip_preserves_oauth_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        let config = test_config();
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path).unwrap().unwrap();
+        let oauth = loaded.oauth_client.unwrap();
+        assert_eq!(oauth.client_secret, "secret");
+        assert_eq!(oauth.registration_access_token, "reg-token");
+        assert_eq!(oauth.access_token, Some("access".to_string()));
+        assert_eq!(oauth.refresh_token, Some("refresh".to_string()));
     }
 }
