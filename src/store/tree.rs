@@ -58,6 +58,13 @@ impl TreeStore {
     /// # Errors
     /// Returns an error if serialization or storage fails
     pub fn insert_remote_node(&self, node: &RemoteNode) -> Result<()> {
+        if let Some(old_node) = self.get_remote_node(&node.id)?
+            && let Some(old_parent) = &old_node.parent_id
+        {
+            let old_child_key = make_child_key_remote(old_parent, &old_node.name);
+            self.remote_children.remove(old_child_key)?;
+        }
+
         let key = node.id.as_str().as_bytes();
         let value = serde_json::to_vec(node)?;
         self.remote.insert(key, value)?;
@@ -145,6 +152,13 @@ impl TreeStore {
     /// # Errors
     /// Returns an error if serialization or storage fails
     pub fn insert_local_node(&self, node: &LocalNode) -> Result<()> {
+        if let Some(old_node) = self.get_local_node(&node.id)?
+            && let Some(old_parent) = &old_node.parent_id
+        {
+            let old_child_key = make_child_key_local(old_parent, &old_node.name);
+            self.local_children.remove(old_child_key)?;
+        }
+
         let key = node.id.to_bytes();
         let value = serde_json::to_vec(node)?;
         self.local.insert(key, value)?;

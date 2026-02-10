@@ -204,6 +204,18 @@ pub struct SyncedRecord {
     pub rev: String,
     /// Node type
     pub node_type: NodeType,
+    /// Local file name at last sync (for move detection)
+    #[serde(default)]
+    pub local_name: Option<String>,
+    /// Local parent ID at last sync (for move detection)
+    #[serde(default)]
+    pub local_parent_id: Option<LocalFileId>,
+    /// Remote file name at last sync (for move detection)
+    #[serde(default)]
+    pub remote_name: Option<String>,
+    /// Remote parent ID at last sync (for move detection)
+    #[serde(default)]
+    pub remote_parent_id: Option<RemoteId>,
 }
 
 /// Which tree a node belongs to
@@ -278,7 +290,7 @@ pub enum SyncOp {
         local_id: LocalFileId,
         from_path: PathBuf,
         to_path: PathBuf,
-        expected_parent_id: LocalFileId,
+        expected_parent_id: Option<LocalFileId>,
         expected_name: String,
     },
     /// Move/rename on remote
@@ -316,6 +328,8 @@ pub enum ConflictKind {
     ParentMissing,
     /// Name collision (different files with same path)
     NameCollision,
+    /// Both sides moved/renamed
+    BothMoved,
 }
 
 /// Result of planning sync operations for an item
@@ -431,12 +445,62 @@ mod tests {
             size: Some(1024),
             rev: "1-xyz".to_string(),
             node_type: NodeType::File,
+            local_name: None,
+            local_parent_id: None,
+            remote_name: None,
+            remote_parent_id: None,
         };
 
         let json = serde_json::to_string(&record).unwrap();
         let deserialized: SyncedRecord = serde_json::from_str(&json).unwrap();
 
         assert_eq!(record, deserialized);
+    }
+
+    #[test]
+    fn synced_record_with_location_fields() {
+        let record = SyncedRecord {
+            local_id: LocalFileId::new(1, 100),
+            remote_id: RemoteId::new("remote-123"),
+            rel_path: "docs/file.txt".to_string(),
+            md5sum: Some("abc123".to_string()),
+            size: Some(1024),
+            rev: "1-xyz".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("file.txt".to_string()),
+            local_parent_id: Some(LocalFileId::new(1, 50)),
+            remote_name: Some("file.txt".to_string()),
+            remote_parent_id: Some(RemoteId::new("docs-dir")),
+        };
+
+        let json = serde_json::to_string(&record).unwrap();
+        let deserialized: SyncedRecord = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(record, deserialized);
+        assert_eq!(deserialized.local_name, Some("file.txt".to_string()));
+        assert_eq!(
+            deserialized.remote_parent_id,
+            Some(RemoteId::new("docs-dir"))
+        );
+    }
+
+    #[test]
+    fn synced_record_backward_compatible_deserialization() {
+        let json = r#"{
+            "local_id": {"device_id": 1, "inode": 100},
+            "remote_id": "remote-123",
+            "rel_path": "file.txt",
+            "md5sum": "abc",
+            "size": 100,
+            "rev": "1-x",
+            "node_type": "file"
+        }"#;
+
+        let record: SyncedRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(record.local_name, None);
+        assert_eq!(record.local_parent_id, None);
+        assert_eq!(record.remote_name, None);
+        assert_eq!(record.remote_parent_id, None);
     }
 
     #[test]

@@ -85,6 +85,36 @@ fn make_synced(
         size: Some(100),
         rev: "1-abc".to_string(),
         node_type,
+        local_name: None,
+        local_parent_id: None,
+        remote_name: None,
+        remote_parent_id: None,
+    }
+}
+
+fn make_synced_with_location(
+    local_id: LocalFileId,
+    remote_id: RemoteId,
+    path: &str,
+    md5: Option<&str>,
+    node_type: NodeType,
+    local_name: &str,
+    local_parent_id: Option<LocalFileId>,
+    remote_name: &str,
+    remote_parent_id: Option<RemoteId>,
+) -> SyncedRecord {
+    SyncedRecord {
+        local_id,
+        remote_id,
+        rel_path: path.to_string(),
+        md5sum: md5.map(String::from),
+        size: Some(100),
+        rev: "1-abc".to_string(),
+        node_type,
+        local_name: Some(local_name.to_string()),
+        local_parent_id,
+        remote_name: Some(remote_name.to_string()),
+        remote_parent_id,
     }
 }
 
@@ -494,6 +524,10 @@ fn test_upload_update_uses_remote_rev_not_synced_rev() {
         size: Some(100),
         rev: "1-old".to_string(),
         node_type: NodeType::File,
+        local_name: None,
+        local_parent_id: None,
+        remote_name: None,
+        remote_parent_id: None,
     };
 
     let local_file = make_local_file(lid.clone(), None, "doc.txt", "new_hash");
@@ -511,5 +545,537 @@ fn test_upload_update_uses_remote_rev_not_synced_rev() {
             assert_eq!(expected_rev, "3-current");
         }
         other => panic!("Expected UploadUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_remote_rename_generates_move_local() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+
+    let parent_local = make_local_dir(parent_lid.clone(), None, "");
+    let parent_remote = make_remote_dir(parent_rid.clone(), None, "");
+    store.insert_local_node(&parent_local).unwrap();
+    store.insert_remote_node(&parent_remote).unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file = make_local_file(lid.clone(), Some(parent_lid.clone()), "old.txt", "hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    let remote_file = make_remote_file(rid.clone(), Some(parent_rid.clone()), "new.txt", "hash");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let move_op = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })));
+    assert!(move_op.is_some(), "Should plan MoveLocal for remote rename");
+
+    if let Some(PlanResult::Op(SyncOp::MoveLocal {
+        local_id: op_lid,
+        from_path,
+        to_path,
+        ..
+    })) = move_op
+    {
+        assert_eq!(*op_lid, lid);
+        assert!(from_path.to_string_lossy().contains("old.txt"));
+        assert!(to_path.to_string_lossy().contains("new.txt"));
+    }
+}
+
+#[test]
+fn test_remote_move_to_different_dir_generates_move_local() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent1_lid = local_id(1, 1);
+    let parent1_rid = remote_id("dir1");
+    let parent2_lid = local_id(1, 2);
+    let parent2_rid = remote_id("dir2");
+    let root_lid = local_id(1, 0);
+    let root_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    let root_local = make_local_dir(root_lid.clone(), None, "");
+    let root_remote = make_remote_dir(root_rid.clone(), None, "");
+    store.insert_local_node(&root_local).unwrap();
+    store.insert_remote_node(&root_remote).unwrap();
+
+    let synced_p1 = make_synced_with_location(
+        parent1_lid.clone(),
+        parent1_rid.clone(),
+        "dir1",
+        None,
+        NodeType::Directory,
+        "dir1",
+        Some(root_lid.clone()),
+        "dir1",
+        Some(root_rid.clone()),
+    );
+    store.insert_synced(&synced_p1).unwrap();
+    let p1_local = make_local_dir(parent1_lid.clone(), Some(root_lid.clone()), "dir1");
+    let p1_remote = make_remote_dir(parent1_rid.clone(), Some(root_rid.clone()), "dir1");
+    store.insert_local_node(&p1_local).unwrap();
+    store.insert_remote_node(&p1_remote).unwrap();
+
+    let synced_p2 = make_synced_with_location(
+        parent2_lid.clone(),
+        parent2_rid.clone(),
+        "dir2",
+        None,
+        NodeType::Directory,
+        "dir2",
+        Some(root_lid.clone()),
+        "dir2",
+        Some(root_rid.clone()),
+    );
+    store.insert_synced(&synced_p2).unwrap();
+    let p2_local = make_local_dir(parent2_lid.clone(), Some(root_lid.clone()), "dir2");
+    let p2_remote = make_remote_dir(parent2_rid.clone(), Some(root_rid.clone()), "dir2");
+    store.insert_local_node(&p2_local).unwrap();
+    store.insert_remote_node(&p2_remote).unwrap();
+
+    let synced_file = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "dir1/file.txt",
+        Some("hash"),
+        NodeType::File,
+        "file.txt",
+        Some(parent1_lid.clone()),
+        "file.txt",
+        Some(parent1_rid.clone()),
+    );
+    store.insert_synced(&synced_file).unwrap();
+
+    let local_file = make_local_file(lid.clone(), Some(parent1_lid.clone()), "file.txt", "hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    let remote_file = make_remote_file(rid.clone(), Some(parent2_rid.clone()), "file.txt", "hash");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let move_op = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })));
+    assert!(
+        move_op.is_some(),
+        "Should plan MoveLocal for remote directory move"
+    );
+
+    if let Some(PlanResult::Op(SyncOp::MoveLocal { to_path, .. })) = move_op {
+        assert!(
+            to_path.to_string_lossy().contains("dir2"),
+            "Should move to dir2"
+        );
+    }
+}
+
+#[test]
+fn test_local_rename_generates_move_remote() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    let parent_local = make_local_dir(parent_lid.clone(), None, "");
+    let parent_remote = make_remote_dir(parent_rid.clone(), None, "");
+    store.insert_local_node(&parent_local).unwrap();
+    store.insert_remote_node(&parent_remote).unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file = make_local_file(lid.clone(), Some(parent_lid.clone()), "new.txt", "hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    let remote_file = make_remote_file(rid.clone(), Some(parent_rid.clone()), "old.txt", "hash");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let move_op = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::MoveRemote { .. })));
+    assert!(move_op.is_some(), "Should plan MoveRemote for local rename");
+
+    if let Some(PlanResult::Op(SyncOp::MoveRemote {
+        remote_id: op_rid,
+        new_name,
+        ..
+    })) = move_op
+    {
+        assert_eq!(op_rid.as_str(), "f1");
+        assert_eq!(new_name, "new.txt");
+    }
+}
+
+#[test]
+fn test_both_moved_to_same_location_is_noop() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file = make_local_file(lid.clone(), Some(parent_lid.clone()), "new.txt", "hash");
+    let remote_file = make_remote_file(rid.clone(), Some(parent_rid.clone()), "new.txt", "hash");
+    store.insert_local_node(&local_file).unwrap();
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let move_ops: Vec<_> = ops
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                PlanResult::Op(SyncOp::MoveLocal { .. } | SyncOp::MoveRemote { .. })
+            )
+        })
+        .collect();
+    assert!(
+        move_ops.is_empty(),
+        "No move ops when both sides moved to same location"
+    );
+}
+
+#[test]
+fn test_both_moved_to_different_locations_is_conflict() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file = make_local_file(
+        lid.clone(),
+        Some(parent_lid.clone()),
+        "local_name.txt",
+        "hash",
+    );
+    store.insert_local_node(&local_file).unwrap();
+
+    let remote_file = make_remote_file(
+        rid.clone(),
+        Some(parent_rid.clone()),
+        "remote_name.txt",
+        "hash",
+    );
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let conflict = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Conflict(c) if c.kind == ConflictKind::BothMoved));
+    assert!(conflict.is_some(), "Should produce BothMoved conflict");
+}
+
+#[test]
+fn test_remote_rename_and_content_change_generates_move_and_download() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("old_hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file = make_local_file(lid.clone(), Some(parent_lid.clone()), "old.txt", "old_hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    let mut remote_file =
+        make_remote_file(rid.clone(), Some(parent_rid.clone()), "new.txt", "new_hash");
+    remote_file.rev = "2-abc".to_string();
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_move = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })));
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadUpdate { .. })));
+
+    assert!(has_move, "Should plan MoveLocal");
+    assert!(has_download, "Should plan DownloadUpdate");
+
+    let move_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })))
+        .unwrap();
+    let download_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::DownloadUpdate { .. })))
+        .unwrap();
+    assert!(
+        move_idx < download_idx,
+        "MoveLocal should be sorted before DownloadUpdate"
+    );
+}
+
+#[test]
+fn test_local_rename_and_content_change_generates_move_and_upload() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "old.txt",
+        Some("old_hash"),
+        NodeType::File,
+        "old.txt",
+        Some(parent_lid.clone()),
+        "old.txt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let local_file =
+        make_local_file(lid.clone(), Some(parent_lid.clone()), "new.txt", "new_hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    let remote_file =
+        make_remote_file(rid.clone(), Some(parent_rid.clone()), "old.txt", "old_hash");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_move = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::MoveRemote { .. })));
+    let has_upload = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })));
+
+    assert!(has_move, "Should plan MoveRemote");
+    assert!(has_upload, "Should plan UploadUpdate");
+
+    let move_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::MoveRemote { .. })))
+        .unwrap();
+    let upload_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })))
+        .unwrap();
+    assert!(
+        move_idx < upload_idx,
+        "MoveRemote should be sorted before UploadUpdate"
+    );
+
+    if let Some(PlanResult::Op(SyncOp::UploadUpdate { local_path, .. })) =
+        ops.iter().find(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })))
+    {
+        assert_eq!(
+            local_path,
+            &PathBuf::from("/sync/new.txt"),
+            "UploadUpdate should use post-move local path"
+        );
     }
 }

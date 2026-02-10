@@ -55,6 +55,18 @@ impl MockFs {
         self.nodes.get(id)
     }
 
+    pub fn move_node(
+        &mut self,
+        id: &LocalFileId,
+        new_parent: Option<LocalFileId>,
+        new_name: String,
+    ) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.parent_id = new_parent;
+            node.name = new_name;
+        }
+    }
+
     #[must_use]
     pub fn list_all(&self) -> Vec<&LocalNode> {
         self.nodes.values().collect()

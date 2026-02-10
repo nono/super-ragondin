@@ -65,6 +65,10 @@ fn test_synced_record_crud() {
         size: Some(2048),
         rev: "2-xyz".to_string(),
         node_type: NodeType::File,
+        local_name: None,
+        local_parent_id: None,
+        remote_name: None,
+        remote_parent_id: None,
     };
 
     store.insert_synced(&record).unwrap();
@@ -267,6 +271,10 @@ fn test_list_all_synced() {
         size: None,
         rev: "1-a".to_string(),
         node_type: NodeType::File,
+        local_name: None,
+        local_parent_id: None,
+        remote_name: None,
+        remote_parent_id: None,
     };
 
     let record2 = SyncedRecord {
@@ -277,6 +285,10 @@ fn test_list_all_synced() {
         size: None,
         rev: "1-b".to_string(),
         node_type: NodeType::File,
+        local_name: None,
+        local_parent_id: None,
+        remote_name: None,
+        remote_parent_id: None,
     };
 
     store.insert_synced(&record1).unwrap();
@@ -284,6 +296,143 @@ fn test_list_all_synced() {
 
     let all = store.list_all_synced().unwrap();
     assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn test_update_local_node_removes_old_child_key() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let parent1 = LocalFileId::new(1, 1);
+    let parent2 = LocalFileId::new(1, 2);
+    let child = LocalFileId::new(1, 100);
+
+    let parent1_node = LocalNode {
+        id: parent1.clone(),
+        parent_id: None,
+        name: "dir1".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        mtime: 1000,
+    };
+    let parent2_node = LocalNode {
+        id: parent2.clone(),
+        parent_id: None,
+        name: "dir2".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        mtime: 1000,
+    };
+    store.insert_local_node(&parent1_node).unwrap();
+    store.insert_local_node(&parent2_node).unwrap();
+
+    let child_node = LocalNode {
+        id: child.clone(),
+        parent_id: Some(parent1.clone()),
+        name: "file.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(100),
+        mtime: 1000,
+    };
+    store.insert_local_node(&child_node).unwrap();
+
+    let children1 = store.list_local_children(&parent1).unwrap();
+    assert_eq!(children1.len(), 1);
+
+    let moved_node = LocalNode {
+        id: child.clone(),
+        parent_id: Some(parent2.clone()),
+        name: "renamed.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(100),
+        mtime: 1001,
+    };
+    store.insert_local_node(&moved_node).unwrap();
+
+    let children1_after = store.list_local_children(&parent1).unwrap();
+    assert_eq!(
+        children1_after.len(),
+        0,
+        "Old parent should have no children after move"
+    );
+
+    let children2 = store.list_local_children(&parent2).unwrap();
+    assert_eq!(children2.len(), 1);
+    assert_eq!(children2[0].name, "renamed.txt");
+}
+
+#[test]
+fn test_update_remote_node_removes_old_child_key() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let parent1 = RemoteId::new("parent1");
+    let parent2 = RemoteId::new("parent2");
+
+    let parent1_node = RemoteNode {
+        id: parent1.clone(),
+        parent_id: None,
+        name: "dir1".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 1000,
+        rev: "1-a".to_string(),
+    };
+    let parent2_node = RemoteNode {
+        id: parent2.clone(),
+        parent_id: None,
+        name: "dir2".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 1000,
+        rev: "1-b".to_string(),
+    };
+    store.insert_remote_node(&parent1_node).unwrap();
+    store.insert_remote_node(&parent2_node).unwrap();
+
+    let child = RemoteNode {
+        id: RemoteId::new("child"),
+        parent_id: Some(parent1.clone()),
+        name: "file.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(100),
+        updated_at: 1000,
+        rev: "1-c".to_string(),
+    };
+    store.insert_remote_node(&child).unwrap();
+
+    let children1 = store.list_remote_children(&parent1).unwrap();
+    assert_eq!(children1.len(), 1);
+
+    let moved = RemoteNode {
+        id: RemoteId::new("child"),
+        parent_id: Some(parent2.clone()),
+        name: "renamed.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(100),
+        updated_at: 1001,
+        rev: "2-c".to_string(),
+    };
+    store.insert_remote_node(&moved).unwrap();
+
+    let children1_after = store.list_remote_children(&parent1).unwrap();
+    assert_eq!(
+        children1_after.len(),
+        0,
+        "Old parent should have no children after move"
+    );
+
+    let children2 = store.list_remote_children(&parent2).unwrap();
+    assert_eq!(children2.len(), 1);
+    assert_eq!(children2[0].name, "renamed.txt");
 }
 
 #[test]

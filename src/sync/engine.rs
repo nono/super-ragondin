@@ -93,13 +93,20 @@ impl SyncEngine {
                 expected_rev: _,
             } => self.execute_delete_remote(remote_id),
 
+            SyncOp::MoveLocal {
+                local_id,
+                from_path,
+                to_path,
+                expected_parent_id: _,
+                expected_name: _,
+            } => self.execute_move_local(local_id, from_path, to_path),
+
             // These operations require async/network - not implemented in this phase
             SyncOp::DownloadNew { .. }
             | SyncOp::DownloadUpdate { .. }
             | SyncOp::UploadNew { .. }
             | SyncOp::UploadUpdate { .. }
             | SyncOp::CreateRemoteDir { .. }
-            | SyncOp::MoveLocal { .. }
             | SyncOp::MoveRemote { .. } => {
                 tracing::warn!(op = ?op, "⏭️ Operation requires async execution, skipping");
                 Ok(())
@@ -120,11 +127,17 @@ impl SyncEngine {
 
         fs::create_dir_all(local_path)?;
 
-        // Get the inode of the newly created directory
         let metadata = fs::metadata(local_path)?;
         let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
 
-        // Create synced record
+        let local_parent_id = remote_node.parent_id.as_ref().and_then(|rpid| {
+            self.store
+                .get_synced_by_remote(rpid)
+                .ok()
+                .flatten()
+                .map(|s| s.local_id)
+        });
+
         let synced = SyncedRecord {
             local_id: local_id.clone(),
             remote_id: remote_id.clone(),
@@ -137,12 +150,15 @@ impl SyncEngine {
             size: None,
             rev: remote_node.rev.clone(),
             node_type: NodeType::Directory,
+            local_name: Some(remote_node.name.clone()),
+            local_parent_id: local_parent_id.clone(),
+            remote_name: Some(remote_node.name.clone()),
+            remote_parent_id: remote_node.parent_id.clone(),
         };
 
-        // Create local node
         let local_node = crate::model::LocalNode {
             id: local_id,
-            parent_id: None, // TODO: compute parent
+            parent_id: local_parent_id,
             name: remote_node.name,
             node_type: NodeType::Directory,
             md5sum: None,
@@ -169,6 +185,49 @@ impl SyncEngine {
         self.store.delete_synced(local_id)?;
         self.store.flush()?;
 
+        Ok(())
+    }
+
+    fn execute_move_local(
+        &self,
+        local_id: &LocalFileId,
+        from_path: &Path,
+        to_path: &Path,
+    ) -> Result<()> {
+        tracing::info!(from = %from_path.display(), to = %to_path.display(), "📦 Moving local file");
+        if let Some(parent) = to_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(from_path, to_path)?;
+
+        if let Some(mut node) = self.store.get_local_node(local_id)? {
+            node.name = to_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if let Some(parent_path) = to_path.parent() {
+                let parent_meta = fs::metadata(parent_path)?;
+                node.parent_id = Some(LocalFileId::new(parent_meta.dev(), parent_meta.ino()));
+            }
+            self.store.insert_local_node(&node)?;
+
+            if let Some(mut synced) = self.store.get_synced_by_local(local_id)? {
+                synced.local_name = Some(node.name.clone());
+                synced.local_parent_id.clone_from(&node.parent_id);
+                if let Ok(Some(remote_node)) = self.store.get_remote_node(&synced.remote_id) {
+                    synced.remote_name = Some(remote_node.name.clone());
+                    synced.remote_parent_id.clone_from(&remote_node.parent_id);
+                }
+                synced.rel_path = to_path
+                    .strip_prefix(&self.sync_dir)
+                    .unwrap_or(to_path)
+                    .to_string_lossy()
+                    .to_string();
+                self.store.insert_synced(&synced)?;
+            }
+        }
+
+        self.store.flush()?;
         Ok(())
     }
 

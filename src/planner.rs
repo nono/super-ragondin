@@ -54,9 +54,7 @@ impl<'a> Planner<'a> {
             let synced = synced_by_remote.get(&remote.id);
             let local = synced.and_then(|s| local_by_id.get(&s.local_id));
 
-            if let Some(result) = self.plan_remote_node(remote, local.copied(), synced.copied()) {
-                results.push(result);
-            }
+            results.extend(self.plan_remote_node(remote, local.copied(), synced.copied()));
         }
 
         for local in &local_nodes {
@@ -64,9 +62,7 @@ impl<'a> Planner<'a> {
             if synced.is_some() {
                 continue;
             }
-            if let Some(result) = self.plan_local_only(local) {
-                results.push(result);
-            }
+            results.extend(self.plan_local_only(local));
         }
 
         for synced in &synced_records {
@@ -104,12 +100,12 @@ impl<'a> Planner<'a> {
         remote: &RemoteNode,
         local: Option<&LocalNode>,
         synced: Option<&SyncedRecord>,
-    ) -> Option<PlanResult> {
+    ) -> Vec<PlanResult> {
         match (local, synced) {
             (Some(local), Some(synced)) => self.plan_all_three(remote, local, synced),
             (Some(local), None) => Self::plan_created_both_sides(remote, local),
             (None, None) => self.plan_remote_only(remote),
-            (None, Some(_)) => None,
+            (None, Some(_)) => vec![],
         }
     }
 
@@ -118,81 +114,158 @@ impl<'a> Planner<'a> {
         remote: &RemoteNode,
         local: &LocalNode,
         synced: &SyncedRecord,
-    ) -> Option<PlanResult> {
-        let remote_changed = !Self::remote_matches_synced(remote, synced);
-        let local_changed = !Self::local_matches_synced(local, synced);
+    ) -> Vec<PlanResult> {
+        let mut ops = Vec::new();
 
-        match (remote_changed, local_changed) {
-            (false, false) => None,
-            (true, false) => Some(PlanResult::Op(SyncOp::DownloadUpdate {
-                remote_id: remote.id.clone(),
-                local_id: local.id.clone(),
-                local_path: self.compute_local_path(remote),
-                expected_rev: remote.rev.clone(),
-                expected_remote_md5: remote.md5sum.clone().unwrap_or_default(),
-                expected_local_md5: local.md5sum.clone().unwrap_or_default(),
-            })),
-            (false, true) => Some(PlanResult::Op(SyncOp::UploadUpdate {
-                local_id: local.id.clone(),
-                remote_id: remote.id.clone(),
-                local_path: self.compute_local_path(remote),
-                expected_local_md5: local.md5sum.clone().unwrap_or_default(),
-                expected_rev: remote.rev.clone(),
-            })),
+        let remote_content_changed = !Self::remote_matches_synced(remote, synced);
+        let local_content_changed = !Self::local_matches_synced(local, synced);
+
+        let remote_loc_changed = Self::remote_location_changed(remote, synced);
+        let local_loc_changed = Self::local_location_changed(local, synced);
+
+        if remote_loc_changed && local_loc_changed {
+            if self.both_moved_to_same_location(local, remote) {
+                // no move op needed
+            } else {
+                tracing::debug!(remote_id = remote.id.as_str(), "⚠️ Both sides moved");
+                ops.push(PlanResult::Conflict(Conflict {
+                    local_id: Some(local.id.clone()),
+                    remote_id: Some(remote.id.clone()),
+                    reason: "Moved on both sides to different locations".to_string(),
+                    kind: ConflictKind::BothMoved,
+                }));
+                return ops;
+            }
+        } else if remote_loc_changed {
+            ops.push(self.plan_move_local(remote, local, synced));
+        } else if local_loc_changed {
+            if let Some(move_op) = self.plan_move_remote(remote, local, synced) {
+                ops.push(move_op);
+            } else {
+                ops.push(PlanResult::Conflict(Conflict {
+                    local_id: Some(local.id.clone()),
+                    remote_id: Some(remote.id.clone()),
+                    reason: "Parent directory not synced for move".to_string(),
+                    kind: ConflictKind::ParentMissing,
+                }));
+                return ops;
+            }
+        }
+
+        match (remote_content_changed, local_content_changed) {
+            (false, false) => {}
+            (true, false) => {
+                ops.push(PlanResult::Op(SyncOp::DownloadUpdate {
+                    remote_id: remote.id.clone(),
+                    local_id: local.id.clone(),
+                    local_path: self.compute_local_path(remote),
+                    expected_rev: remote.rev.clone(),
+                    expected_remote_md5: remote.md5sum.clone().unwrap_or_default(),
+                    expected_local_md5: local.md5sum.clone().unwrap_or_default(),
+                }));
+            }
+            (false, true) => {
+                ops.push(PlanResult::Op(SyncOp::UploadUpdate {
+                    local_id: local.id.clone(),
+                    remote_id: remote.id.clone(),
+                    local_path: self.compute_local_path_from_local(local),
+                    expected_local_md5: local.md5sum.clone().unwrap_or_default(),
+                    expected_rev: remote.rev.clone(),
+                }));
+            }
             (true, true) => {
-                if Self::remote_equals_local(remote, local) {
-                    None
-                } else {
+                if !Self::remote_equals_local(remote, local) {
                     tracing::debug!(remote_id = remote.id.as_str(), "⚠️ Both sides modified");
-                    Some(PlanResult::Conflict(Conflict {
+                    ops.push(PlanResult::Conflict(Conflict {
                         local_id: Some(local.id.clone()),
                         remote_id: Some(remote.id.clone()),
                         reason: "Modified on both sides".to_string(),
                         kind: ConflictKind::BothModified,
-                    }))
+                    }));
                 }
             }
         }
+
+        ops
     }
 
-    fn plan_created_both_sides(remote: &RemoteNode, local: &LocalNode) -> Option<PlanResult> {
+    fn plan_move_local(
+        &self,
+        remote: &RemoteNode,
+        local: &LocalNode,
+        _synced: &SyncedRecord,
+    ) -> PlanResult {
+        let from_path = self.compute_local_path_from_local(local);
+        let to_path = self.compute_local_path(remote);
+
+        PlanResult::Op(SyncOp::MoveLocal {
+            local_id: local.id.clone(),
+            from_path,
+            to_path,
+            expected_parent_id: local.parent_id.clone(),
+            expected_name: local.name.clone(),
+        })
+    }
+
+    fn plan_move_remote(
+        &self,
+        remote: &RemoteNode,
+        local: &LocalNode,
+        _synced: &SyncedRecord,
+    ) -> Option<PlanResult> {
+        let new_parent_remote_id = local
+            .parent_id
+            .as_ref()
+            .and_then(|pid| self.store.get_synced_by_local(pid).ok()?)
+            .map(|s| s.remote_id)?;
+
+        Some(PlanResult::Op(SyncOp::MoveRemote {
+            remote_id: remote.id.clone(),
+            new_parent_id: new_parent_remote_id,
+            new_name: local.name.clone(),
+            expected_rev: remote.rev.clone(),
+        }))
+    }
+
+    fn plan_created_both_sides(remote: &RemoteNode, local: &LocalNode) -> Vec<PlanResult> {
         if Self::remote_equals_local(remote, local) {
-            None
+            vec![]
         } else {
-            Some(PlanResult::Conflict(Conflict {
+            vec![PlanResult::Conflict(Conflict {
                 local_id: Some(local.id.clone()),
                 remote_id: Some(remote.id.clone()),
                 reason: "Created on both sides with different content".to_string(),
                 kind: ConflictKind::NameCollision,
-            }))
+            })]
         }
     }
 
-    fn plan_remote_only(&self, remote: &RemoteNode) -> Option<PlanResult> {
-        // Skip root directory - it maps to sync_root which already exists
-        remote.parent_id.as_ref()?;
+    fn plan_remote_only(&self, remote: &RemoteNode) -> Vec<PlanResult> {
+        let Some(_) = remote.parent_id.as_ref() else {
+            return vec![];
+        };
 
         tracing::debug!(remote_id = remote.id.as_str(), name = &remote.name, node_type = ?remote.node_type, "📋 New remote node, planning download");
 
         let local_path = self.compute_local_path(remote);
 
         if remote.node_type == NodeType::Directory {
-            Some(PlanResult::Op(SyncOp::CreateLocalDir {
+            vec![PlanResult::Op(SyncOp::CreateLocalDir {
                 remote_id: remote.id.clone(),
                 local_path,
-            }))
+            })]
         } else {
-            Some(PlanResult::Op(SyncOp::DownloadNew {
+            vec![PlanResult::Op(SyncOp::DownloadNew {
                 remote_id: remote.id.clone(),
                 local_path,
                 expected_rev: remote.rev.clone(),
                 expected_md5: remote.md5sum.clone().unwrap_or_default(),
-            }))
+            })]
         }
     }
 
     #[allow(clippy::option_if_let_else)]
-    fn plan_local_only(&self, local: &LocalNode) -> Option<PlanResult> {
+    fn plan_local_only(&self, local: &LocalNode) -> Vec<PlanResult> {
         let local_path = self.compute_local_path_from_local(local);
 
         if local.parent_id.is_some() {
@@ -200,31 +273,31 @@ impl<'a> Planner<'a> {
             match self.find_parent_remote_id(local.parent_id.as_ref()) {
                 Some(parent_remote_id) => {
                     if local.node_type == NodeType::Directory {
-                        Some(PlanResult::Op(SyncOp::CreateRemoteDir {
+                        vec![PlanResult::Op(SyncOp::CreateRemoteDir {
                             local_id: local.id.clone(),
                             local_path,
                             parent_remote_id,
                             name: local.name.clone(),
-                        }))
+                        })]
                     } else {
-                        Some(PlanResult::Op(SyncOp::UploadNew {
+                        vec![PlanResult::Op(SyncOp::UploadNew {
                             local_id: local.id.clone(),
                             local_path,
                             parent_remote_id,
                             name: local.name.clone(),
                             expected_md5: local.md5sum.clone().unwrap_or_default(),
-                        }))
+                        })]
                     }
                 }
-                None => Some(PlanResult::Conflict(Conflict {
+                None => vec![PlanResult::Conflict(Conflict {
                     local_id: Some(local.id.clone()),
                     remote_id: None,
                     reason: "Parent directory not synced".to_string(),
                     kind: ConflictKind::ParentMissing,
-                })),
+                })],
             }
         } else {
-            None
+            vec![]
         }
     }
 
@@ -245,7 +318,7 @@ impl<'a> Planner<'a> {
         } else {
             PlanResult::Op(SyncOp::DeleteLocal {
                 local_id: local.id.clone(),
-                local_path: self.sync_root.join(&synced.rel_path),
+                local_path: self.compute_local_path_from_local(local),
                 expected_md5: synced.md5sum.clone(),
             })
         }
@@ -270,6 +343,43 @@ impl<'a> Planner<'a> {
                 remote_id: remote.id.clone(),
                 expected_rev: synced.rev.clone(),
             })
+        }
+    }
+
+    fn remote_location_changed(remote: &RemoteNode, synced: &SyncedRecord) -> bool {
+        let Some(synced_name) = &synced.remote_name else {
+            return false;
+        };
+        let Some(synced_parent) = &synced.remote_parent_id else {
+            return synced_name.as_str() != remote.name;
+        };
+        synced_name.as_str() != remote.name || remote.parent_id.as_ref() != Some(synced_parent)
+    }
+
+    fn local_location_changed(local: &LocalNode, synced: &SyncedRecord) -> bool {
+        let Some(synced_name) = &synced.local_name else {
+            return false;
+        };
+        let Some(synced_parent) = &synced.local_parent_id else {
+            return synced_name.as_str() != local.name;
+        };
+        synced_name.as_str() != local.name || local.parent_id.as_ref() != Some(synced_parent)
+    }
+
+    fn both_moved_to_same_location(&self, local: &LocalNode, remote: &RemoteNode) -> bool {
+        if local.name != remote.name {
+            return false;
+        }
+        match (&local.parent_id, &remote.parent_id) {
+            (Some(local_pid), Some(remote_pid)) => {
+                if let Ok(Some(synced)) = self.store.get_synced_by_local(local_pid) {
+                    &synced.remote_id == remote_pid
+                } else {
+                    false
+                }
+            }
+            (None, None) => true,
+            _ => false,
         }
     }
 
@@ -376,13 +486,13 @@ impl<'a> Planner<'a> {
     fn sort_operations(results: &mut [PlanResult]) {
         results.sort_by_key(|r| match r {
             PlanResult::Op(SyncOp::CreateLocalDir { .. } | SyncOp::CreateRemoteDir { .. }) => 0,
+            PlanResult::Op(SyncOp::MoveLocal { .. } | SyncOp::MoveRemote { .. }) => 1,
             PlanResult::Op(
                 SyncOp::DownloadNew { .. }
                 | SyncOp::DownloadUpdate { .. }
                 | SyncOp::UploadNew { .. }
                 | SyncOp::UploadUpdate { .. },
-            ) => 1,
-            PlanResult::Op(SyncOp::MoveLocal { .. } | SyncOp::MoveRemote { .. }) => 2,
+            ) => 2,
             PlanResult::Op(SyncOp::DeleteLocal { .. } | SyncOp::DeleteRemote { .. }) => 3,
             PlanResult::Conflict(_) => 4,
             PlanResult::NoOp => 5,

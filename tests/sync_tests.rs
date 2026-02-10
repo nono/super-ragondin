@@ -328,3 +328,58 @@ fn test_planner_computes_nested_paths() {
         "Root directory should not be planned as CreateLocalDir"
     );
 }
+
+#[test]
+fn test_sync_engine_execute_move_local() {
+    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let from_path = sync_dir.path().join("old.txt");
+    fs::write(&from_path, "content").unwrap();
+
+    let metadata = fs::metadata(&from_path).unwrap();
+    let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+    let parent_id = {
+        let m = fs::metadata(sync_dir.path()).unwrap();
+        LocalFileId::new(m.dev(), m.ino())
+    };
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    let local_node = LocalNode {
+        id: local_id.clone(),
+        parent_id: Some(parent_id.clone()),
+        name: "old.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(7),
+        mtime: 1000,
+    };
+    store.insert_local_node(&local_node).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+    );
+
+    let to_path = sync_dir.path().join("new.txt");
+    let op = SyncOp::MoveLocal {
+        local_id: local_id.clone(),
+        from_path: from_path.clone(),
+        to_path: to_path.clone(),
+        expected_parent_id: Some(parent_id.clone()),
+        expected_name: "old.txt".to_string(),
+    };
+
+    engine.execute_op(&op).unwrap();
+
+    assert!(!from_path.exists(), "Old path should not exist");
+    assert!(to_path.exists(), "New path should exist");
+    assert_eq!(fs::read_to_string(&to_path).unwrap(), "content");
+}

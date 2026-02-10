@@ -86,6 +86,26 @@ impl MockRemote {
             .collect()
     }
 
+    pub fn move_node(&mut self, id: &RemoteId, new_parent_id: RemoteId, new_name: String) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.parent_id = Some(new_parent_id);
+            node.name = new_name;
+            let rev_num: u32 = node
+                .rev
+                .split('-')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+            node.rev = format!("{}-{}", rev_num + 1, id.as_str());
+        }
+        self.seq += 1;
+        self.changes.push(ChangeRecord {
+            seq: self.seq,
+            remote_id: id.clone(),
+            deleted: false,
+        });
+    }
+
     #[must_use]
     pub const fn current_seq(&self) -> u64 {
         self.seq

@@ -380,6 +380,70 @@ fn arbitrary_remote_id() -> impl Strategy<Value = RemoteId> {
     "[a-f0-9]{8}-[a-f0-9]{4}".prop_map(RemoteId::new)
 }
 
+#[test]
+fn simulation_runner_remote_rename_then_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "old.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "old.txt")
+        .collect();
+    assert_eq!(local_files.len(), 1);
+
+    runner
+        .apply(SimAction::RemoteMove {
+            id: file_id.clone(),
+            new_parent_id: root_id.clone(),
+            new_name: "new.txt".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let old_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "old.txt")
+        .collect();
+    assert_eq!(old_files.len(), 0, "Old name should be gone");
+
+    let new_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "new.txt")
+        .collect();
+    assert_eq!(new_files.len(), 1, "New name should exist");
+
+    runner.check_convergence().unwrap();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(50))]
 
@@ -454,6 +518,44 @@ proptest! {
         runner.apply(SimAction::Sync).unwrap();
 
         // Check convergence
+        runner.check_convergence().unwrap();
+    }
+
+    #[test]
+    fn prop_remote_rename_then_sync_converges(
+        original_name in arbitrary_file_name(),
+        new_name in arbitrary_file_name(),
+        content in arbitrary_content()
+    ) {
+        let dir = tempdir().unwrap();
+        let store = TreeStore::open(dir.path()).unwrap();
+        let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+        let root_id = RemoteId::new("root");
+        runner.apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        }).unwrap();
+
+        let file_id = RemoteId::new("file-1");
+        runner.apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: original_name,
+            content,
+        }).unwrap();
+
+        runner.apply(SimAction::Sync).unwrap();
+
+        runner.apply(SimAction::RemoteMove {
+            id: file_id,
+            new_parent_id: root_id,
+            new_name,
+        }).unwrap();
+
+        runner.apply(SimAction::Sync).unwrap();
+
         runner.check_convergence().unwrap();
     }
 
