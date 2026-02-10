@@ -102,7 +102,11 @@ impl<'a> Planner<'a> {
         synced: Option<&SyncedRecord>,
     ) -> Vec<PlanResult> {
         if !Self::is_safe_name(&remote.name) {
-            tracing::warn!(remote_id = remote.id.as_str(), name = &remote.name, "⚠️ Unsafe remote name, rejecting");
+            tracing::warn!(
+                remote_id = remote.id.as_str(),
+                name = &remote.name,
+                "⚠️ Unsafe remote name, rejecting"
+            );
             return vec![PlanResult::Conflict(Conflict {
                 local_id: None,
                 remote_id: Some(remote.id.clone()),

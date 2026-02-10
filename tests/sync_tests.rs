@@ -436,7 +436,10 @@ fn test_delete_local_refuses_when_md5_changed() {
     // Should refuse to delete since md5 no longer matches
     let result = engine.execute_op(&op);
     assert!(result.is_err(), "Should refuse to delete modified file");
-    assert!(file_path.exists(), "File must still exist after refused delete");
+    assert!(
+        file_path.exists(),
+        "File must still exist after refused delete"
+    );
 }
 
 #[test]
@@ -486,7 +489,10 @@ fn test_delete_local_succeeds_when_md5_matches() {
     };
 
     engine.execute_op(&op).unwrap();
-    assert!(!file_path.exists(), "File should be deleted when md5 matches");
+    assert!(
+        !file_path.exists(),
+        "File should be deleted when md5 matches"
+    );
 }
 
 #[test]
@@ -541,7 +547,10 @@ fn test_move_local_refuses_when_inode_mismatches() {
     };
 
     let result = engine.execute_op(&op);
-    assert!(result.is_err(), "Should refuse to move when inode mismatches");
+    assert!(
+        result.is_err(),
+        "Should refuse to move when inode mismatches"
+    );
     assert!(from_path.exists(), "Original file must still exist");
     assert!(!to_path.exists(), "Destination must not be created");
 }

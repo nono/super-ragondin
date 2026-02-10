@@ -7,6 +7,8 @@ Rust sync client for Cozy Cloud using the 3-tree model.
 - Use red-green Test-Driven Development
 - Do not commit automatically
 - Add dependencies with the `cargo add` command - try to avoid directly editing the `Cargo.toml` file to add dependencies.
+- Always run `cargo fmt --all` after editing Rust files
+- Always run `cargo clippy --all-features` after editing Rust files and fix any warnings
 
 ## Commands
 
