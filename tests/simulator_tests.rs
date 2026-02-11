@@ -969,6 +969,47 @@ proptest! {
     }
 }
 
+#[test]
+fn check_convergence_detects_directory_mismatch() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Create root on remote
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    // Sync to establish root
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Now add a directory only on remote (without syncing)
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("orphan-dir"),
+            parent_id: Some(root_id),
+            name: "photos".to_string(),
+        })
+        .unwrap();
+
+    // check_convergence should detect the directory mismatch
+    let result = runner.check_convergence();
+    assert!(
+        result.is_err(),
+        "Expected convergence error for directory mismatch"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("photos"),
+        "Error should mention the mismatched directory name, got: {err}"
+    );
+}
+
 #[derive(Debug, Clone)]
 struct SimState {
     remote_file_ids: Vec<RemoteId>,

@@ -785,7 +785,7 @@ impl SimulationRunner {
     }
 
     /// Check invariant: after sync, local and remote should have same files
-    /// (same paths and same content)
+    /// and directories (same paths and same content for files)
     ///
     /// # Errors
     /// Returns an error describing the convergence mismatch
@@ -818,7 +818,31 @@ impl SimulationRunner {
             let local_only: BTreeSet<_> = local_files.difference(&remote_files).collect();
             let remote_only: BTreeSet<_> = remote_files.difference(&local_files).collect();
             return Err(format!(
-                "Convergence failed:\n  local only: {local_only:?}\n  remote only: {remote_only:?}"
+                "File convergence failed:\n  local only: {local_only:?}\n  remote only: {remote_only:?}"
+            ));
+        }
+
+        let local_dirs: BTreeSet<String> = self
+            .local_fs
+            .list_all()
+            .iter()
+            .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+            .map(|n| self.local_path(n))
+            .collect();
+
+        let remote_dirs: BTreeSet<String> = self
+            .remote
+            .nodes
+            .values()
+            .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+            .map(|n| self.remote_path(n))
+            .collect();
+
+        if local_dirs != remote_dirs {
+            let local_only: BTreeSet<_> = local_dirs.difference(&remote_dirs).collect();
+            let remote_only: BTreeSet<_> = remote_dirs.difference(&local_dirs).collect();
+            return Err(format!(
+                "Directory convergence failed:\n  local only: {local_only:?}\n  remote only: {remote_only:?}"
             ));
         }
 
