@@ -699,6 +699,77 @@ fn simulation_local_delete_while_stopped_reconciled_on_restart() {
     );
 }
 
+// ==================== Idempotency Tests ====================
+
+#[test]
+fn sync_is_idempotent_after_remote_create() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "hello.txt".to_string(),
+            content: b"world".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn sync_is_idempotent_after_local_create() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    let file_local_id = LocalFileId::new(1, 11111);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "local.txt".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
@@ -809,8 +880,9 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence
+        // Check convergence and idempotency
         runner.check_convergence().unwrap();
+        runner.check_idempotency().unwrap();
     }
 
     #[test]
@@ -850,8 +922,9 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence
+        // Check convergence and idempotency
         runner.check_convergence().unwrap();
+        runner.check_idempotency().unwrap();
     }
 
     #[test]
@@ -925,8 +998,9 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence
+        // Check convergence and idempotency
         runner.check_convergence().unwrap();
+        runner.check_idempotency().unwrap();
     }
 
     #[test]
@@ -964,8 +1038,9 @@ proptest! {
         runner.apply(SimAction::RestartClient).unwrap();
         runner.apply(SimAction::Sync).unwrap();
 
-        // After sync, local and remote must converge
+        // After sync, local and remote must converge and be idempotent
         runner.check_convergence().unwrap();
+        runner.check_idempotency().unwrap();
     }
 }
 

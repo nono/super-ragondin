@@ -5,6 +5,7 @@ use crate::planner::Planner;
 use crate::store::TreeStore;
 use md5::{Digest, Md5};
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -847,5 +848,38 @@ impl SimulationRunner {
         }
 
         Ok(())
+    }
+
+    /// Check invariant: after sync, planning again should produce zero
+    /// operations. This catches bugs where sync creates side effects
+    /// that trigger further sync.
+    ///
+    /// # Errors
+    /// Returns an error listing unexpected operations or conflicts
+    pub fn check_idempotency(&self) -> Result<(), String> {
+        let planner = Planner::new(&self.store, self.sync_root.clone());
+        let results = planner.plan().map_err(|e| e.to_string())?;
+
+        let ops: Vec<_> = results
+            .iter()
+            .filter(|r| matches!(r, crate::model::PlanResult::Op(_)))
+            .collect();
+        let conflicts: Vec<_> = results
+            .iter()
+            .filter(|r| matches!(r, crate::model::PlanResult::Conflict(_)))
+            .collect();
+
+        if ops.is_empty() && conflicts.is_empty() {
+            return Ok(());
+        }
+
+        let mut msg = String::from("Sync not idempotent — second plan produced:\n");
+        for op in &ops {
+            let _ = writeln!(msg, "  op: {op:?}");
+        }
+        for conflict in &conflicts {
+            let _ = writeln!(msg, "  conflict: {conflict:?}");
+        }
+        Err(msg)
     }
 }
