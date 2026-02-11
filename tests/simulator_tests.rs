@@ -928,4 +928,211 @@ proptest! {
         // Check convergence
         runner.check_convergence().unwrap();
     }
+
+    #[test]
+    fn prop_arbitrary_action_sequence_converges(
+        seed in prop::collection::vec(any::<u8>(), 50..200)
+    ) {
+        let dir = tempdir().unwrap();
+        let store = TreeStore::open(dir.path()).unwrap();
+        let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+        // Setup: create root on remote and sync it
+        let root_id = RemoteId::new("root");
+        runner.apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        }).unwrap();
+        runner.apply(SimAction::Sync).unwrap();
+
+        // Get the root local ID assigned by sync
+        let root_local_id = runner.local_fs.list_all()
+            .into_iter()
+            .find(|n| n.name.is_empty())
+            .map(|n| n.id.clone())
+            .unwrap();
+
+        let actions = generate_valid_action_sequence(&seed, 20, root_local_id);
+
+        // Apply the generated action sequence
+        for action in &actions {
+            runner.apply(action.clone()).unwrap();
+        }
+
+        // Ensure client is running for final sync
+        runner.apply(SimAction::RestartClient).unwrap();
+        runner.apply(SimAction::Sync).unwrap();
+
+        // After sync, local and remote must converge
+        runner.check_convergence().unwrap();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SimState {
+    remote_file_ids: Vec<RemoteId>,
+    remote_dir_ids: Vec<RemoteId>,
+    local_file_ids: Vec<LocalFileId>,
+    local_dir_ids: Vec<LocalFileId>,
+    next_remote_counter: usize,
+    next_local_inode: u64,
+    stopped: bool,
+}
+
+impl SimState {
+    fn new(root_local_id: LocalFileId) -> Self {
+        Self {
+            remote_file_ids: Vec::new(),
+            remote_dir_ids: vec![RemoteId::new("root")],
+            local_file_ids: Vec::new(),
+            local_dir_ids: vec![root_local_id],
+            next_remote_counter: 0,
+            next_local_inode: 50_000,
+            stopped: false,
+        }
+    }
+
+    fn next_remote_id(&mut self) -> RemoteId {
+        let id = RemoteId::new(format!("gen-remote-{}", self.next_remote_counter));
+        self.next_remote_counter += 1;
+        id
+    }
+
+    fn next_local_file_id(&mut self) -> LocalFileId {
+        let id = LocalFileId::new(1, self.next_local_inode);
+        self.next_local_inode += 1;
+        id
+    }
+}
+
+fn pick<T: Clone>(items: &[T], byte: u8) -> T {
+    items[byte as usize % items.len()].clone()
+}
+
+fn name_from_bytes(b1: u8, b2: u8) -> String {
+    let len = (b1 % 6) as usize + 1;
+    let chars: String = (0..len)
+        .map(|i| {
+            let v = b2.wrapping_add(i as u8) % 26;
+            (b'a' + v) as char
+        })
+        .collect();
+    format!("{chars}.txt")
+}
+
+fn generate_valid_action_sequence(
+    seed: &[u8],
+    max_actions: usize,
+    root_local_id: LocalFileId,
+) -> Vec<SimAction> {
+    let mut state = SimState::new(root_local_id);
+    let mut actions = Vec::new();
+    let mut cursor = 0;
+
+    let read = |cursor: &mut usize| -> u8 {
+        if *cursor < seed.len() {
+            let v = seed[*cursor];
+            *cursor += 1;
+            v
+        } else {
+            0
+        }
+    };
+
+    for _ in 0..max_actions {
+        if cursor >= seed.len() {
+            break;
+        }
+
+        let action_type = read(&mut cursor);
+
+        let has_remote_files = !state.remote_file_ids.is_empty();
+        let has_local_files = !state.local_file_ids.is_empty();
+        let has_remote_dirs = !state.remote_dir_ids.is_empty();
+
+        let action = match action_type % 10 {
+            0 if has_remote_dirs => {
+                let id = state.next_remote_id();
+                let parent = pick(&state.remote_dir_ids, read(&mut cursor));
+                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                let content_len = (read(&mut cursor) % 20) as usize + 1;
+                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
+                state.remote_file_ids.push(id.clone());
+                SimAction::RemoteCreateFile {
+                    id,
+                    parent_id: parent,
+                    name,
+                    content,
+                }
+            }
+            1 if has_remote_files => {
+                let id = pick(&state.remote_file_ids, read(&mut cursor));
+                state.remote_file_ids.retain(|x| x != &id);
+                SimAction::RemoteDeleteFile { id }
+            }
+            2 if has_remote_files => {
+                let id = pick(&state.remote_file_ids, read(&mut cursor));
+                let content_len = (read(&mut cursor) % 20) as usize + 1;
+                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
+                SimAction::RemoteModifyFile { id, content }
+            }
+            3 if has_remote_files && has_remote_dirs => {
+                let id = pick(&state.remote_file_ids, read(&mut cursor));
+                let new_parent = pick(&state.remote_dir_ids, read(&mut cursor));
+                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                SimAction::RemoteMove {
+                    id,
+                    new_parent_id: new_parent,
+                    new_name,
+                }
+            }
+            4 => {
+                let local_id = state.next_local_file_id();
+                let parent = if state.local_dir_ids.is_empty() {
+                    None
+                } else {
+                    Some(pick(&state.local_dir_ids, read(&mut cursor)))
+                };
+                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                let content_len = (read(&mut cursor) % 20) as usize + 1;
+                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
+                state.local_file_ids.push(local_id.clone());
+                SimAction::LocalCreateFile {
+                    local_id,
+                    parent_local_id: parent,
+                    name,
+                    content,
+                }
+            }
+            5 if has_local_files => {
+                let id = pick(&state.local_file_ids, read(&mut cursor));
+                state.local_file_ids.retain(|x| x != &id);
+                SimAction::LocalDeleteFile { local_id: id }
+            }
+            6 if has_local_files => {
+                let id = pick(&state.local_file_ids, read(&mut cursor));
+                let content_len = (read(&mut cursor) % 20) as usize + 1;
+                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
+                SimAction::LocalModifyFile {
+                    local_id: id,
+                    content,
+                }
+            }
+            7 => SimAction::Sync,
+            8 if !state.stopped => {
+                state.stopped = true;
+                SimAction::StopClient
+            }
+            9 if state.stopped => {
+                state.stopped = false;
+                SimAction::RestartClient
+            }
+            _ => SimAction::Sync,
+        };
+
+        actions.push(action);
+    }
+
+    actions
 }
