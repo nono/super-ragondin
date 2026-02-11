@@ -30,6 +30,7 @@ pub struct SimulationRunner {
     pub last_seq: u64,
     /// Maps `RemoteId` -> `LocalFileId` for synced files
     remote_to_local: std::collections::HashMap<RemoteId, LocalFileId>,
+    stopped: bool,
 }
 
 /// Actions that can be simulated
@@ -82,6 +83,8 @@ pub enum SimAction {
         new_name: String,
     },
     Sync,
+    StopClient,
+    RestartClient,
 }
 
 impl SimulationRunner {
@@ -94,6 +97,7 @@ impl SimulationRunner {
             sync_root,
             last_seq: 0,
             remote_to_local: std::collections::HashMap::new(),
+            stopped: false,
         }
     }
 
@@ -121,9 +125,11 @@ impl SimulationRunner {
                     mtime: 1000,
                 };
                 self.local_fs.create_file(local_id, node.clone(), content);
-                self.store
-                    .insert_local_node(&node)
-                    .map_err(|e| e.to_string())?;
+                if !self.stopped {
+                    self.store
+                        .insert_local_node(&node)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             SimAction::LocalCreateDir {
                 local_id,
@@ -140,15 +146,19 @@ impl SimulationRunner {
                     mtime: 1000,
                 };
                 self.local_fs.create_dir(local_id, node.clone());
-                self.store
-                    .insert_local_node(&node)
-                    .map_err(|e| e.to_string())?;
+                if !self.stopped {
+                    self.store
+                        .insert_local_node(&node)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             SimAction::LocalDeleteFile { local_id } => {
                 self.local_fs.delete(&local_id);
-                self.store
-                    .delete_local_node(&local_id)
-                    .map_err(|e| e.to_string())?;
+                if !self.stopped {
+                    self.store
+                        .delete_local_node(&local_id)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             SimAction::LocalModifyFile { local_id, content } => {
                 let node = self
@@ -163,9 +173,11 @@ impl SimulationRunner {
                 updated.mtime += 1;
                 self.local_fs
                     .create_file(local_id, updated.clone(), content);
-                self.store
-                    .insert_local_node(&updated)
-                    .map_err(|e| e.to_string())?;
+                if !self.stopped {
+                    self.store
+                        .insert_local_node(&updated)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             SimAction::RemoteCreateFile {
                 id,
@@ -233,7 +245,9 @@ impl SimulationRunner {
             } => {
                 self.local_fs
                     .move_node(&local_id, new_parent_local_id, new_name);
-                if let Some(node) = self.local_fs.get_node(&local_id).cloned() {
+                if !self.stopped
+                    && let Some(node) = self.local_fs.get_node(&local_id).cloned()
+                {
                     self.store
                         .insert_local_node(&node)
                         .map_err(|e| e.to_string())?;
@@ -247,9 +261,39 @@ impl SimulationRunner {
                 self.remote.move_node(&id, new_parent_id, new_name);
             }
             SimAction::Sync => {
-                self.sync()?;
+                if !self.stopped {
+                    self.sync()?;
+                }
+            }
+            SimAction::StopClient => {
+                self.stopped = true;
+            }
+            SimAction::RestartClient => {
+                self.stopped = false;
+                self.reconcile_local()?;
             }
         }
+        Ok(())
+    }
+
+    fn reconcile_local(&self) -> Result<(), String> {
+        let fs_ids: HashSet<_> = self.local_fs.nodes.keys().cloned().collect();
+
+        let store_nodes = self.store.list_all_local().map_err(|e| e.to_string())?;
+        let store_ids: HashSet<_> = store_nodes.iter().map(|n| n.id.clone()).collect();
+
+        for id in store_ids.difference(&fs_ids) {
+            self.store
+                .delete_local_node(id)
+                .map_err(|e| e.to_string())?;
+        }
+
+        for node in self.local_fs.list_all() {
+            self.store
+                .insert_local_node(node)
+                .map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 

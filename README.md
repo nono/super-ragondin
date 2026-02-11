@@ -22,6 +22,14 @@ users:
 - shared drives
 - etc.
 
+## Commands
+
+To run 100 simulation tests:
+
+```bash
+PROPTEST_CASES=100 cargo test -q prop_
+```
+
 ## License
 
 The code is licensed as GNU AGPLv3. See the LICENSE file for the full license.

@@ -366,6 +366,276 @@ fn simulation_runner_remote_delete_propagates() {
     assert_eq!(local_files.len(), 0);
 }
 
+// ==================== Stop/Restart Tests ====================
+
+#[test]
+fn simulation_stop_prevents_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Sync should be a no-op while stopped
+    runner.apply(SimAction::Sync).unwrap();
+
+    // File should NOT have been synced locally
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .collect();
+    assert_eq!(local_files.len(), 0, "Sync should be no-op while stopped");
+}
+
+#[test]
+fn simulation_local_changes_while_stopped_skip_store() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Create a file locally while stopped
+    let file_local_id = LocalFileId::new(1, 8888);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "offline.txt".to_string(),
+            content: b"created while stopped".to_vec(),
+        })
+        .unwrap();
+
+    // File should exist in MockFs
+    assert!(
+        runner.local_fs.exists(&file_local_id),
+        "File should be in MockFs"
+    );
+
+    // But NOT in the store's local tree
+    let store_node = runner.store.get_local_node(&file_local_id);
+    assert!(
+        store_node.is_err() || store_node.unwrap().is_none(),
+        "File should NOT be in the store while stopped"
+    );
+}
+
+#[test]
+fn simulation_restart_reconciles_local_changes() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Create a file locally while stopped
+    let file_local_id = LocalFileId::new(1, 7777);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "offline.txt".to_string(),
+            content: b"created while stopped".to_vec(),
+        })
+        .unwrap();
+
+    // Restart the client — should reconcile MockFs into the store
+    runner.apply(SimAction::RestartClient).unwrap();
+
+    // Now the file should be in the store's local tree
+    let store_node = runner.store.get_local_node(&file_local_id).unwrap();
+    assert!(
+        store_node.is_some(),
+        "File should be in the store after restart"
+    );
+    assert_eq!(store_node.unwrap().name, "offline.txt");
+}
+
+#[test]
+fn simulation_stop_restart_full_cycle_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Create a local file while stopped
+    let file_local_id = LocalFileId::new(1, 6666);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "local_offline.txt".to_string(),
+            content: b"local offline".to_vec(),
+        })
+        .unwrap();
+
+    // Create a remote file while stopped
+    let remote_file_id = RemoteId::new("remote-offline-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: remote_file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "remote_offline.txt".to_string(),
+            content: b"remote offline".to_vec(),
+        })
+        .unwrap();
+
+    // Restart the client
+    runner.apply(SimAction::RestartClient).unwrap();
+
+    // Now sync — both files should converge
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_local_delete_while_stopped_reconciled_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "existing.txt".to_string(),
+            content: b"exists".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id of the synced file
+    let file_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "existing.txt")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Delete the file locally while stopped
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: file_local_id.clone(),
+        })
+        .unwrap();
+
+    // File gone from MockFs but still in store
+    assert!(!runner.local_fs.exists(&file_local_id));
+    assert!(
+        runner
+            .store
+            .get_local_node(&file_local_id)
+            .unwrap()
+            .is_some()
+    );
+
+    // Restart — should remove from store
+    runner.apply(SimAction::RestartClient).unwrap();
+
+    assert!(
+        runner
+            .store
+            .get_local_node(&file_local_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
