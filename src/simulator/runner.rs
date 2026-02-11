@@ -4,7 +4,7 @@ use crate::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, Synce
 use crate::planner::Planner;
 use crate::store::TreeStore;
 use md5::{Digest, Md5};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -748,29 +748,77 @@ impl SimulationRunner {
         Ok(())
     }
 
-    /// Check invariant: after sync, local and remote should have same files (by content)
+    fn local_path(&self, node: &LocalNode) -> String {
+        let mut parts = vec![node.name.clone()];
+        let mut current = node.parent_id.clone();
+        while let Some(ref pid) = current {
+            if let Some(parent) = self.local_fs.get_node(pid) {
+                if parent.name.is_empty() {
+                    break;
+                }
+                parts.push(parent.name.clone());
+                current.clone_from(&parent.parent_id);
+            } else {
+                break;
+            }
+        }
+        parts.reverse();
+        parts.join("/")
+    }
+
+    fn remote_path(&self, node: &RemoteNode) -> String {
+        let mut parts = vec![node.name.clone()];
+        let mut current = node.parent_id.clone();
+        while let Some(ref pid) = current {
+            if let Some(parent) = self.remote.get_node(pid) {
+                if parent.name.is_empty() {
+                    break;
+                }
+                parts.push(parent.name.clone());
+                current.clone_from(&parent.parent_id);
+            } else {
+                break;
+            }
+        }
+        parts.reverse();
+        parts.join("/")
+    }
+
+    /// Check invariant: after sync, local and remote should have same files
+    /// (same paths and same content)
     ///
     /// # Errors
     /// Returns an error describing the convergence mismatch
     pub fn check_convergence(&self) -> Result<(), String> {
-        let local_nodes = self.local_fs.list_all();
-        let local_by_md5: HashSet<_> = local_nodes
+        let local_files: BTreeSet<(String, String)> = self
+            .local_fs
+            .list_all()
             .iter()
             .filter(|n| n.node_type == NodeType::File)
-            .filter_map(|n| n.md5sum.as_ref())
+            .filter_map(|n| {
+                n.md5sum
+                    .as_ref()
+                    .map(|md5| (self.local_path(n), md5.clone()))
+            })
             .collect();
 
-        let remote_by_md5: HashSet<_> = self
+        let remote_files: BTreeSet<(String, String)> = self
             .remote
             .nodes
             .values()
             .filter(|n| n.node_type == NodeType::File)
-            .filter_map(|n| n.md5sum.as_ref())
+            .filter_map(|n| {
+                n.md5sum
+                    .as_ref()
+                    .map(|md5| (self.remote_path(n), md5.clone()))
+            })
             .collect();
 
-        if local_by_md5 != remote_by_md5 {
+        if local_files != remote_files {
+            let local_only: BTreeSet<_> = local_files.difference(&remote_files).collect();
+            let remote_only: BTreeSet<_> = remote_files.difference(&local_files).collect();
             return Err(format!(
-                "Convergence failed: local md5s {local_by_md5:?}, remote md5s {remote_by_md5:?}"
+                "Convergence failed:\n  local only: {local_only:?}\n  remote only: {remote_only:?}"
             ));
         }
 

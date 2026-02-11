@@ -366,6 +366,69 @@ fn simulation_runner_remote_delete_propagates() {
     assert_eq!(local_files.len(), 0);
 }
 
+// ==================== Convergence Path Tests ====================
+
+#[test]
+fn check_convergence_verifies_file_paths() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "hello.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Now rename locally only (without going through sync) to create a path mismatch
+    let file_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "hello.txt")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.local_fs.move_node(
+        &file_local_id,
+        Some(root_local_id),
+        "renamed.txt".to_string(),
+    );
+
+    // MD5 still matches, but paths differ — convergence should fail
+    let result = runner.check_convergence();
+    assert!(result.is_err(), "Convergence should fail when paths differ");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("renamed.txt") && err.contains("hello.txt"),
+        "Error should show differing paths: {err}"
+    );
+}
+
 // ==================== Stop/Restart Tests ====================
 
 #[test]
