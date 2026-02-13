@@ -236,6 +236,55 @@ fn simulation_runner_local_create_then_sync() {
 }
 
 #[test]
+fn simulation_runner_nested_local_dirs_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Create root on remote and sync
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create nested dirs locally: root -> photos -> vacation
+    let photos_id = LocalFileId::new(1, 20_000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: photos_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "photos".to_string(),
+        })
+        .unwrap();
+
+    let vacation_id = LocalFileId::new(1, 20_001);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: vacation_id,
+            parent_local_id: Some(photos_id),
+            name: "vacation".to_string(),
+        })
+        .unwrap();
+
+    // Sync should upload both dirs to remote
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+}
+
+#[test]
 fn simulation_runner_bidirectional_sync() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
@@ -1167,7 +1216,7 @@ fn generate_valid_action_sequence(
         let has_local_files = !state.local_file_ids.is_empty();
         let has_remote_dirs = !state.remote_dir_ids.is_empty();
 
-        let action = match action_type % 10 {
+        let action = match action_type % 12 {
             0 if has_remote_dirs => {
                 let id = state.next_remote_id();
                 let parent = pick(&state.remote_dir_ids, read(&mut cursor));
@@ -1243,6 +1292,32 @@ fn generate_valid_action_sequence(
             9 if state.stopped => {
                 state.stopped = false;
                 SimAction::RestartClient
+            }
+            10 if has_remote_dirs => {
+                let id = state.next_remote_id();
+                let parent = pick(&state.remote_dir_ids, read(&mut cursor));
+                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                state.remote_dir_ids.push(id.clone());
+                SimAction::RemoteCreateDir {
+                    id,
+                    parent_id: Some(parent),
+                    name,
+                }
+            }
+            11 => {
+                let local_id = state.next_local_file_id();
+                let parent = if state.local_dir_ids.is_empty() {
+                    None
+                } else {
+                    Some(pick(&state.local_dir_ids, read(&mut cursor)))
+                };
+                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                state.local_dir_ids.push(local_id.clone());
+                SimAction::LocalCreateDir {
+                    local_id,
+                    parent_local_id: parent,
+                    name,
+                }
             }
             _ => SimAction::Sync,
         };

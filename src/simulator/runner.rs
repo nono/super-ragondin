@@ -351,13 +351,30 @@ impl SimulationRunner {
         }
         self.last_seq = self.remote.current_seq();
 
-        // Step 2: Plan
-        let planner = Planner::new(&self.store, self.sync_root.clone());
-        let results = planner.plan().map_err(|e| e.to_string())?;
+        // Step 2+3: Plan and execute in a loop until no more ops are generated.
+        // This handles cases like nested local directories where a child's parent
+        // must be synced before the child can be planned.
+        let max_rounds = 10;
+        for _ in 0..max_rounds {
+            let planner = Planner::new(&self.store, self.sync_root.clone());
+            let results = planner.plan().map_err(|e| e.to_string())?;
 
-        // Step 3: Execute operations
-        for result in results {
-            if let crate::model::PlanResult::Op(op) = result {
+            let ops: Vec<_> = results
+                .into_iter()
+                .filter_map(|r| {
+                    if let crate::model::PlanResult::Op(op) = r {
+                        Some(op)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if ops.is_empty() {
+                break;
+            }
+
+            for op in ops {
                 self.execute_op(op)?;
             }
         }
