@@ -1090,7 +1090,169 @@ proptest! {
         // After sync, local and remote must converge and be idempotent
         runner.check_convergence().unwrap();
         runner.check_idempotency().unwrap();
+        runner.check_store_consistency().unwrap();
     }
+}
+
+// ==================== Store Consistency Tests ====================
+
+#[test]
+fn check_store_consistency_passes_after_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_store_consistency().unwrap();
+}
+
+#[test]
+fn check_store_consistency_detects_orphaned_synced_record() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Delete the remote node from the store directly, leaving an orphaned synced record
+    runner.store.delete_remote_node(&file_id).unwrap();
+
+    let result = runner.check_store_consistency();
+    assert!(result.is_err(), "Expected error for orphaned synced record");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("remote node missing"),
+        "Error should mention missing remote node, got: {err}"
+    );
+}
+
+#[test]
+fn check_store_consistency_detects_missing_local_node() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id of the synced file and delete it from the store
+    let synced_records = runner.store.list_all_synced().unwrap();
+    let file_synced = synced_records
+        .iter()
+        .find(|s| s.rel_path == "test.txt")
+        .unwrap();
+    runner
+        .store
+        .delete_local_node(&file_synced.local_id)
+        .unwrap();
+
+    let result = runner.check_store_consistency();
+    assert!(result.is_err(), "Expected error for missing local node");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("local node missing"),
+        "Error should mention missing local node, got: {err}"
+    );
+}
+
+#[test]
+fn check_store_consistency_detects_remote_to_local_mismatch() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Corrupt remote_to_local by inserting a wrong mapping
+    runner
+        .remote_to_local
+        .insert(file_id, LocalFileId::new(999, 999));
+
+    let result = runner.check_store_consistency();
+    assert!(
+        result.is_err(),
+        "Expected error for remote_to_local mismatch"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("remote_to_local"),
+        "Error should mention remote_to_local mismatch, got: {err}"
+    );
 }
 
 #[test]

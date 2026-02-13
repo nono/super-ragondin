@@ -36,6 +36,8 @@ cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 
 ## Findings
 
+- Proptest regression files (`*.proptest-regressions`) must be kept and checked into source control — they ensure known failure cases are always re-tested
+
 - reqwest requires `rustls-tls` feature instead of default (native-tls) to avoid OpenSSL system dependency
 - Clippy pedantic warns about "CouchDB" needing backticks in doc comments
 

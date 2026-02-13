@@ -30,7 +30,7 @@ pub struct SimulationRunner {
     pub sync_root: PathBuf,
     pub last_seq: u64,
     /// Maps `RemoteId` -> `LocalFileId` for synced files
-    remote_to_local: std::collections::HashMap<RemoteId, LocalFileId>,
+    pub remote_to_local: std::collections::HashMap<RemoteId, LocalFileId>,
     stopped: bool,
 }
 
@@ -585,6 +585,9 @@ impl SimulationRunner {
                 local_path: _,
                 expected_md5: _,
             } => {
+                if let Some(synced) = self.store.get_synced_by_local(&local_id).ok().flatten() {
+                    self.remote_to_local.remove(&synced.remote_id);
+                }
                 self.local_fs.delete(&local_id);
                 self.store
                     .delete_local_node(&local_id)
@@ -865,6 +868,96 @@ impl SimulationRunner {
         }
 
         Ok(())
+    }
+
+    /// Check invariant: after sync, the `TreeStore` is internally consistent.
+    /// Every synced record references a valid local node and remote node in
+    /// the store, and `remote_to_local` matches the synced table.
+    ///
+    /// # Errors
+    /// Returns an error describing the consistency violation
+    pub fn check_store_consistency(&self) -> Result<(), String> {
+        let synced_records = self.store.list_all_synced().map_err(|e| e.to_string())?;
+
+        let mut errors = Vec::new();
+
+        for record in &synced_records {
+            // Every synced record must have a corresponding local node in the store
+            match self.store.get_local_node(&record.local_id) {
+                Ok(None) => errors.push(format!(
+                    "synced record '{}' (remote={}) has local node missing in store",
+                    record.rel_path,
+                    record.remote_id.as_str()
+                )),
+                Err(e) => errors.push(format!(
+                    "synced record '{}': error reading local node: {e}",
+                    record.rel_path
+                )),
+                Ok(Some(_)) => {}
+            }
+
+            // Every synced record must have a corresponding remote node in the store
+            match self.store.get_remote_node(&record.remote_id) {
+                Ok(None) => errors.push(format!(
+                    "synced record '{}' (local={:?}) has remote node missing in store",
+                    record.rel_path, record.local_id
+                )),
+                Err(e) => errors.push(format!(
+                    "synced record '{}': error reading remote node: {e}",
+                    record.rel_path
+                )),
+                Ok(Some(_)) => {}
+            }
+
+            // remote_to_local must map this record's remote_id to the correct local_id
+            match self.remote_to_local.get(&record.remote_id) {
+                None => errors.push(format!(
+                    "synced record '{}': remote_to_local missing entry for remote={}",
+                    record.rel_path,
+                    record.remote_id.as_str()
+                )),
+                Some(local_id) if *local_id != record.local_id => errors.push(format!(
+                    "synced record '{}': remote_to_local maps remote={} to {:?} but synced has {:?}",
+                    record.rel_path,
+                    record.remote_id.as_str(),
+                    local_id,
+                    record.local_id
+                )),
+                Some(_) => {}
+            }
+        }
+
+        // Check reverse: every remote_to_local entry should have a synced record
+        for (remote_id, local_id) in &self.remote_to_local {
+            match self.store.get_synced_by_remote(remote_id) {
+                Ok(None) => errors.push(format!(
+                    "remote_to_local has entry remote={} -> {:?} but no synced record exists",
+                    remote_id.as_str(),
+                    local_id
+                )),
+                Ok(Some(synced)) if synced.local_id != *local_id => errors.push(format!(
+                    "remote_to_local maps remote={} to {:?} but synced record has {:?}",
+                    remote_id.as_str(),
+                    local_id,
+                    synced.local_id
+                )),
+                Err(e) => errors.push(format!(
+                    "remote_to_local remote={}: error reading synced record: {e}",
+                    remote_id.as_str()
+                )),
+                Ok(Some(_)) => {}
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Store consistency check failed ({} errors):\n  {}",
+                errors.len(),
+                errors.join("\n  ")
+            ))
+        }
     }
 
     /// Check invariant: after sync, planning again should produce zero
