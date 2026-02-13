@@ -61,6 +61,34 @@ pub enum NodeType {
     Directory,
 }
 
+/// Common interface for node-like types across all three trees
+pub trait NodeInfo {
+    fn name(&self) -> &str;
+    fn node_type(&self) -> NodeType;
+    fn md5sum(&self) -> Option<&str>;
+    fn size(&self) -> Option<u64>;
+
+    fn is_file(&self) -> bool {
+        self.node_type() == NodeType::File
+    }
+
+    fn is_dir(&self) -> bool {
+        self.node_type() == NodeType::Directory
+    }
+}
+
+/// Check whether two nodes have matching content (type + md5 for files)
+pub fn content_matches(a: &impl NodeInfo, b: &impl NodeInfo) -> bool {
+    if a.node_type() != b.node_type() {
+        return false;
+    }
+    if a.node_type() == NodeType::File {
+        a.md5sum() == b.md5sum()
+    } else {
+        true
+    }
+}
+
 /// A node in the local filesystem tree, keyed by `LocalFileId`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalNode {
@@ -80,15 +108,21 @@ pub struct LocalNode {
     pub mtime: i64,
 }
 
-impl LocalNode {
-    #[must_use]
-    pub const fn is_file(&self) -> bool {
-        matches!(self.node_type, NodeType::File)
+impl NodeInfo for LocalNode {
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    #[must_use]
-    pub const fn is_dir(&self) -> bool {
-        matches!(self.node_type, NodeType::Directory)
+    fn node_type(&self) -> NodeType {
+        self.node_type
+    }
+
+    fn md5sum(&self) -> Option<&str> {
+        self.md5sum.as_deref()
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.size
     }
 }
 
@@ -113,15 +147,21 @@ pub struct RemoteNode {
     pub rev: String,
 }
 
-impl RemoteNode {
-    #[must_use]
-    pub const fn is_file(&self) -> bool {
-        matches!(self.node_type, NodeType::File)
+impl NodeInfo for RemoteNode {
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    #[must_use]
-    pub const fn is_dir(&self) -> bool {
-        matches!(self.node_type, NodeType::Directory)
+    fn node_type(&self) -> NodeType {
+        self.node_type
+    }
+
+    fn md5sum(&self) -> Option<&str> {
+        self.md5sum.as_deref()
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.size
     }
 }
 
@@ -154,6 +194,24 @@ pub struct SyncedRecord {
     /// Remote parent ID at last sync (for move detection)
     #[serde(default)]
     pub remote_parent_id: Option<RemoteId>,
+}
+
+impl NodeInfo for SyncedRecord {
+    fn name(&self) -> &str {
+        &self.rel_path
+    }
+
+    fn node_type(&self) -> NodeType {
+        self.node_type
+    }
+
+    fn md5sum(&self) -> Option<&str> {
+        self.md5sum.as_deref()
+    }
+
+    fn size(&self) -> Option<u64> {
+        self.size
+    }
 }
 
 /// Which tree a node belongs to
@@ -286,6 +344,124 @@ pub enum PlanResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_trait_local_node() {
+        let node = LocalNode {
+            id: LocalFileId::new(1, 100),
+            parent_id: None,
+            name: "test.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("abc123".to_string()),
+            size: Some(1024),
+            mtime: 1000,
+        };
+
+        assert_eq!(node.name(), "test.txt");
+        assert_eq!(node.node_type(), NodeType::File);
+        assert_eq!(node.md5sum(), Some("abc123"));
+        assert_eq!(node.size(), Some(1024));
+        assert!(node.is_file());
+        assert!(!node.is_dir());
+    }
+
+    #[test]
+    fn node_trait_remote_node() {
+        let node = RemoteNode {
+            id: RemoteId::new("r1"),
+            parent_id: None,
+            name: "photo.jpg".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("def456".to_string()),
+            size: Some(2048),
+            updated_at: 1000,
+            rev: "1-abc".to_string(),
+        };
+
+        assert_eq!(node.name(), "photo.jpg");
+        assert_eq!(node.node_type(), NodeType::File);
+        assert_eq!(node.md5sum(), Some("def456"));
+        assert_eq!(node.size(), Some(2048));
+        assert!(node.is_file());
+    }
+
+    #[test]
+    fn node_trait_synced_record() {
+        let record = SyncedRecord {
+            local_id: LocalFileId::new(1, 100),
+            remote_id: RemoteId::new("r1"),
+            rel_path: "file.txt".to_string(),
+            md5sum: Some("abc".to_string()),
+            size: Some(100),
+            rev: "1-x".to_string(),
+            node_type: NodeType::File,
+            local_name: None,
+            local_parent_id: None,
+            remote_name: None,
+            remote_parent_id: None,
+        };
+
+        assert_eq!(record.node_type(), NodeType::File);
+        assert_eq!(record.md5sum(), Some("abc"));
+        assert_eq!(record.size(), Some(100));
+        assert!(record.is_file());
+    }
+
+    #[test]
+    fn node_trait_content_matches() {
+        let local = LocalNode {
+            id: LocalFileId::new(1, 100),
+            parent_id: None,
+            name: "test.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("abc".to_string()),
+            size: Some(100),
+            mtime: 1000,
+        };
+        let remote = RemoteNode {
+            id: RemoteId::new("r1"),
+            parent_id: None,
+            name: "test.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("abc".to_string()),
+            size: Some(100),
+            updated_at: 1000,
+            rev: "1-x".to_string(),
+        };
+        let different = RemoteNode {
+            id: RemoteId::new("r2"),
+            parent_id: None,
+            name: "test.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("xyz".to_string()),
+            size: Some(200),
+            updated_at: 1000,
+            rev: "1-x".to_string(),
+        };
+        let dir = LocalNode {
+            id: LocalFileId::new(1, 200),
+            parent_id: None,
+            name: "docs".to_string(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: 1000,
+        };
+        let dir2 = RemoteNode {
+            id: RemoteId::new("r3"),
+            parent_id: None,
+            name: "docs".to_string(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 1000,
+            rev: "1-x".to_string(),
+        };
+
+        assert!(content_matches(&local, &remote));
+        assert!(!content_matches(&local, &different));
+        assert!(content_matches(&dir, &dir2));
+    }
 
     #[test]
     fn local_file_id_creation() {

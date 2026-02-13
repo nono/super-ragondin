@@ -1,6 +1,8 @@
 use super::mock_fs::MockFs;
 use super::mock_remote::MockRemote;
-use crate::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, SyncedRecord};
+use crate::model::{
+    LocalFileId, LocalNode, NodeInfo, NodeType, RemoteId, RemoteNode, SyncedRecord,
+};
 use crate::planner::Planner;
 use crate::store::TreeStore;
 use crate::util::compute_md5_from_bytes;
@@ -813,7 +815,7 @@ impl SimulationRunner {
             .local_fs
             .list_all()
             .iter()
-            .filter(|n| n.node_type == NodeType::File)
+            .filter(|n| n.is_file())
             .filter_map(|n| {
                 n.md5sum
                     .as_ref()
@@ -825,7 +827,7 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.node_type == NodeType::File)
+            .filter(|n| n.is_file())
             .filter_map(|n| {
                 n.md5sum
                     .as_ref()
@@ -845,7 +847,7 @@ impl SimulationRunner {
             .local_fs
             .list_all()
             .iter()
-            .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+            .filter(|n| n.is_dir() && !n.name.is_empty())
             .map(|n| self.local_path(n))
             .collect();
 
@@ -853,7 +855,7 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+            .filter(|n| n.is_dir() && !n.name.is_empty())
             .map(|n| self.remote_path(n))
             .collect();
 

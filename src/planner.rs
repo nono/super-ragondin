@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::model::{
-    Conflict, ConflictKind, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode,
-    SyncOp, SyncedRecord,
+    Conflict, ConflictKind, LocalFileId, LocalNode, NodeInfo, PlanResult, RemoteId, RemoteNode,
+    SyncOp, SyncedRecord, content_matches,
 };
 use crate::store::TreeStore;
 use std::collections::HashMap;
@@ -130,8 +130,8 @@ impl<'a> Planner<'a> {
     ) -> Vec<PlanResult> {
         let mut ops = Vec::new();
 
-        let remote_content_changed = !Self::remote_matches_synced(remote, synced);
-        let local_content_changed = !Self::local_matches_synced(local, synced);
+        let remote_content_changed = !content_matches(remote, synced);
+        let local_content_changed = !content_matches(local, synced);
 
         let remote_loc_changed = Self::remote_location_changed(remote, synced);
         let local_loc_changed = Self::local_location_changed(local, synced);
@@ -262,7 +262,7 @@ impl<'a> Planner<'a> {
 
         let local_path = self.compute_local_path(remote);
 
-        if remote.node_type == NodeType::Directory {
+        if remote.is_dir() {
             vec![PlanResult::Op(SyncOp::CreateLocalDir {
                 remote_id: remote.id.clone(),
                 local_path,
@@ -295,7 +295,7 @@ impl<'a> Planner<'a> {
             tracing::debug!(name = &local.name, node_type = ?local.node_type, "📋 New local node, planning upload");
             match self.find_parent_remote_id(local.parent_id.as_ref()) {
                 Some(parent_remote_id) => {
-                    if local.node_type == NodeType::Directory {
+                    if local.is_dir() {
                         vec![PlanResult::Op(SyncOp::CreateRemoteDir {
                             local_id: local.id.clone(),
                             local_path,
@@ -325,7 +325,7 @@ impl<'a> Planner<'a> {
     }
 
     fn plan_remote_deleted(&self, synced: &SyncedRecord, local: &LocalNode) -> PlanResult {
-        let local_changed = !Self::local_matches_synced(local, synced);
+        let local_changed = !content_matches(local, synced);
 
         if local_changed {
             tracing::debug!(
@@ -348,7 +348,7 @@ impl<'a> Planner<'a> {
     }
 
     fn plan_local_deleted(synced: &SyncedRecord, remote: &RemoteNode) -> PlanResult {
-        let remote_changed = !Self::remote_matches_synced(remote, synced);
+        let remote_changed = !content_matches(remote, synced);
 
         if remote_changed {
             tracing::debug!(
@@ -470,40 +470,8 @@ impl<'a> Planner<'a> {
         components.iter().collect()
     }
 
-    fn remote_matches_synced(remote: &RemoteNode, synced: &SyncedRecord) -> bool {
-        if remote.node_type != synced.node_type {
-            return false;
-        }
-        if remote.node_type == NodeType::File {
-            remote.md5sum == synced.md5sum
-        } else {
-            true
-        }
-    }
-
-    fn local_matches_synced(local: &LocalNode, synced: &SyncedRecord) -> bool {
-        if local.node_type != synced.node_type {
-            return false;
-        }
-        if local.node_type == NodeType::File {
-            local.md5sum == synced.md5sum
-        } else {
-            true
-        }
-    }
-
     fn remote_equals_local(remote: &RemoteNode, local: &LocalNode) -> bool {
-        if remote.node_type != local.node_type {
-            return false;
-        }
-        if remote.name != local.name {
-            return false;
-        }
-        if remote.node_type == NodeType::File {
-            remote.md5sum == local.md5sum
-        } else {
-            true
-        }
+        remote.name() == local.name() && content_matches(remote, local)
     }
 
     fn is_safe_name(name: &str) -> bool {
