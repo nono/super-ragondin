@@ -1216,7 +1216,9 @@ fn generate_valid_action_sequence(
         let has_local_files = !state.local_file_ids.is_empty();
         let has_remote_dirs = !state.remote_dir_ids.is_empty();
 
-        let action = match action_type % 12 {
+        let has_local_dirs = !state.local_dir_ids.is_empty();
+
+        let action = match action_type % 13 {
             0 if has_remote_dirs => {
                 let id = state.next_remote_id();
                 let parent = pick(&state.remote_dir_ids, read(&mut cursor));
@@ -1317,6 +1319,16 @@ fn generate_valid_action_sequence(
                     local_id,
                     parent_local_id: parent,
                     name,
+                }
+            }
+            12 if has_local_files && has_local_dirs => {
+                let id = pick(&state.local_file_ids, read(&mut cursor));
+                let new_parent = Some(pick(&state.local_dir_ids, read(&mut cursor)));
+                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                SimAction::LocalMove {
+                    local_id: id,
+                    new_parent_local_id: new_parent,
+                    new_name,
                 }
             }
             _ => SimAction::Sync,
