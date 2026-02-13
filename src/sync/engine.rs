@@ -3,9 +3,8 @@ use crate::local::scanner::Scanner;
 use crate::model::{LocalFileId, NodeType, PlanResult, SyncOp, SyncedRecord};
 use crate::planner::Planner;
 use crate::store::TreeStore;
-use md5::{Digest, Md5};
+use crate::util::compute_md5_from_path;
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -185,7 +184,7 @@ impl SyncEngine {
 
         if local_path.is_file() {
             if let Some(expected) = expected_md5 {
-                let actual = Self::compute_md5(local_path)?;
+                let actual = compute_md5_from_path(local_path)?;
                 if actual != expected {
                     return Err(Error::Conflict(format!(
                         "File {} was modified (expected md5 {expected}, got {actual})",
@@ -260,22 +259,6 @@ impl SyncEngine {
 
         self.store.flush()?;
         Ok(())
-    }
-
-    fn compute_md5(path: &Path) -> Result<String> {
-        let mut file = fs::File::open(path)?;
-        let mut hasher = Md5::new();
-        let mut buffer = [0u8; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
-        Ok(hex::encode(hasher.finalize()))
     }
 
     fn execute_delete_remote(&self, remote_id: &crate::model::RemoteId) -> Result<()> {

@@ -3,7 +3,7 @@ use super::mock_remote::MockRemote;
 use crate::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, SyncedRecord};
 use crate::planner::Planner;
 use crate::store::TreeStore;
-use md5::{Digest, Md5};
+use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -17,9 +17,7 @@ fn next_local_id() -> LocalFileId {
 }
 
 fn compute_md5(content: &[u8]) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(content);
-    format!("{:x}", hasher.finalize())
+    compute_md5_from_bytes(content)
 }
 
 /// Simulation runner that orchestrates mock local fs, mock remote, and the real planner/store

@@ -1,9 +1,8 @@
 use crate::error::Result;
 use crate::model::{LocalFileId, LocalNode, NodeType};
-use md5::{Digest, Md5};
+use crate::util::compute_md5_from_path;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -69,7 +68,7 @@ impl Scanner {
             } else {
                 let size = metadata.len();
                 let mtime = metadata.mtime();
-                let md5sum = Self::compute_md5(&entry_path)?;
+                let md5sum = compute_md5_from_path(&entry_path)?;
 
                 // TOCTOU protection: re-stat and verify unchanged
                 let Ok(metadata_after) = fs::symlink_metadata(&entry_path) else {
@@ -107,22 +106,6 @@ impl Scanner {
         Ok(())
     }
 
-    fn compute_md5(path: &Path) -> Result<String> {
-        let mut file = fs::File::open(path)?;
-        let mut hasher = Md5::new();
-        let mut buffer = [0u8; 8192];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-
-        Ok(hex::encode(hasher.finalize()))
-    }
-
     /// Scan a single file or directory.
     ///
     /// # Errors
@@ -156,7 +139,7 @@ impl Scanner {
         } else {
             let size = metadata.len();
             let mtime = metadata.mtime();
-            let md5sum = Self::compute_md5(path)?;
+            let md5sum = compute_md5_from_path(path)?;
 
             // TOCTOU protection: re-stat and verify unchanged
             let metadata_after = fs::symlink_metadata(path)?;
