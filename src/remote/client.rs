@@ -1,7 +1,7 @@
 use base64::Engine;
 
 use crate::error::{Error, Result};
-use crate::model::{Node, NodeId, NodeType};
+use crate::model::{NodeType, RemoteId, RemoteNode};
 use serde::Deserialize;
 
 pub struct CozyClient {
@@ -21,7 +21,7 @@ pub struct ChangeResult {
     pub id: String,
     pub seq: String,
     pub deleted: bool,
-    pub node: Node,
+    pub node: RemoteNode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,15 +124,15 @@ impl CozyClient {
                     id: r.id.clone(),
                     seq: r.seq,
                     deleted: true,
-                    node: Node {
-                        id: NodeId::new(r.id),
+                    node: RemoteNode {
+                        id: RemoteId::new(r.id),
                         parent_id: None,
                         name: String::new(),
                         node_type: NodeType::File,
                         md5sum: None,
                         size: None,
                         updated_at: 0,
-                        rev: None,
+                        rev: String::new(),
                     },
                 }
             } else {
@@ -146,15 +146,15 @@ impl CozyClient {
                     id: r.id,
                     seq: r.seq,
                     deleted: false,
-                    node: Node {
-                        id: NodeId::new(&doc.id),
-                        parent_id: doc.dir_id.map(NodeId::new),
+                    node: RemoteNode {
+                        id: RemoteId::new(&doc.id),
+                        parent_id: doc.dir_id.map(RemoteId::new),
                         name: doc.name,
                         node_type,
                         md5sum: doc.md5sum,
                         size: doc.size,
                         updated_at: parse_timestamp(&doc.updated_at)?,
-                        rev: Some(doc.rev),
+                        rev: doc.rev,
                     },
                 }
             };
@@ -177,7 +177,7 @@ impl CozyClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
-    pub async fn download_file(&self, file_id: &NodeId) -> Result<bytes::Bytes> {
+    pub async fn download_file(&self, file_id: &RemoteId) -> Result<bytes::Bytes> {
         tracing::info!(file_id = file_id.as_str(), "📥 Downloading file");
         let url = format!("{}/files/download/{}", self.instance_url, file_id.as_str());
         let bytes = self
@@ -205,11 +205,11 @@ impl CozyClient {
     /// or the MD5 hash is invalid.
     pub async fn upload_file(
         &self,
-        parent_id: &NodeId,
+        parent_id: &RemoteId,
         name: &str,
         content: Vec<u8>,
         md5sum: &str,
-    ) -> Result<Node> {
+    ) -> Result<RemoteNode> {
         tracing::info!(
             parent_id = parent_id.as_str(),
             name,
@@ -249,7 +249,7 @@ impl CozyClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
-    pub async fn create_directory(&self, parent_id: &NodeId, name: &str) -> Result<Node> {
+    pub async fn create_directory(&self, parent_id: &RemoteId, name: &str) -> Result<RemoteNode> {
         tracing::info!(
             parent_id = parent_id.as_str(),
             name,
@@ -282,7 +282,7 @@ impl CozyClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP request fails or the server returns an error.
-    pub async fn trash(&self, id: &NodeId) -> Result<()> {
+    pub async fn trash(&self, id: &RemoteId) -> Result<()> {
         tracing::info!(id = id.as_str(), "🗑️ Trashing remote document");
         let url = format!("{}/files/{}", self.instance_url, id.as_str());
 
@@ -303,10 +303,10 @@ impl CozyClient {
     /// Returns an error if the HTTP request fails or the server returns an error.
     pub async fn move_node(
         &self,
-        id: &NodeId,
-        new_parent_id: &NodeId,
+        id: &RemoteId,
+        new_parent_id: &RemoteId,
         new_name: &str,
-    ) -> Result<Node> {
+    ) -> Result<RemoteNode> {
         tracing::info!(
             id = id.as_str(),
             new_parent_id = new_parent_id.as_str(),
@@ -345,7 +345,7 @@ fn parse_timestamp(s: &str) -> Result<i64> {
         .map_err(|_| Error::InvalidTimestamp(s.to_string()))
 }
 
-fn parse_file_response(resp: FileResponse) -> Result<Node> {
+fn parse_file_response(resp: FileResponse) -> Result<RemoteNode> {
     let data = resp.data;
     let attrs = data.attributes;
 
@@ -360,14 +360,14 @@ fn parse_file_response(resp: FileResponse) -> Result<Node> {
         None => 0,
     };
 
-    Ok(Node {
-        id: NodeId::new(data.id),
-        parent_id: attrs.dir_id.map(NodeId::new),
+    Ok(RemoteNode {
+        id: RemoteId::new(data.id),
+        parent_id: attrs.dir_id.map(RemoteId::new),
         name: attrs.name,
         node_type,
         md5sum: attrs.md5sum,
         size: attrs.size,
         updated_at,
-        rev: data.meta.and_then(|m| m.rev),
+        rev: data.meta.and_then(|m| m.rev).unwrap_or_default(),
     })
 }

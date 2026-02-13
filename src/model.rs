@@ -53,74 +53,12 @@ impl RemoteId {
     }
 }
 
-/// Unique identifier for a node (file or directory)
-/// Kept for backward compatibility with existing code
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NodeId(pub String);
-
-impl NodeId {
-    #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<RemoteId> for NodeId {
-    fn from(remote_id: RemoteId) -> Self {
-        Self(remote_id.0)
-    }
-}
-
-impl From<&RemoteId> for NodeId {
-    fn from(remote_id: &RemoteId) -> Self {
-        Self(remote_id.0.clone())
-    }
-}
-
 /// Type of filesystem node
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeType {
     File,
     Directory,
-}
-
-/// A node in the filesystem tree (either local or remote)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Node {
-    /// Unique identifier
-    pub id: NodeId,
-    /// Parent directory ID (None for root)
-    pub parent_id: Option<NodeId>,
-    /// Name of the file or directory
-    pub name: String,
-    /// Type: file or directory
-    pub node_type: NodeType,
-    /// MD5 checksum (files only)
-    pub md5sum: Option<String>,
-    /// Size in bytes (files only)
-    pub size: Option<u64>,
-    /// Last modification timestamp (Unix epoch seconds)
-    pub updated_at: i64,
-    /// `CouchDB` revision (remote only)
-    pub rev: Option<String>,
-}
-
-impl Node {
-    #[must_use]
-    pub const fn is_file(&self) -> bool {
-        matches!(self.node_type, NodeType::File)
-    }
-
-    #[must_use]
-    pub const fn is_dir(&self) -> bool {
-        matches!(self.node_type, NodeType::Directory)
-    }
 }
 
 /// A node in the local filesystem tree, keyed by `LocalFileId`
@@ -350,61 +288,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_id_creation() {
-        let id = NodeId::new("test-123");
-        assert_eq!(id.as_str(), "test-123");
-    }
-
-    #[test]
-    fn node_type_detection() {
-        let file_node = Node {
-            id: NodeId::new("1"),
-            parent_id: None,
-            name: "test.txt".to_string(),
-            node_type: NodeType::File,
-            md5sum: Some("abc123".to_string()),
-            size: Some(100),
-            updated_at: 1234567890,
-            rev: None,
-        };
-
-        let dir_node = Node {
-            id: NodeId::new("2"),
-            parent_id: None,
-            name: "docs".to_string(),
-            node_type: NodeType::Directory,
-            md5sum: None,
-            size: None,
-            updated_at: 1234567890,
-            rev: None,
-        };
-
-        assert!(file_node.is_file());
-        assert!(!file_node.is_dir());
-        assert!(dir_node.is_dir());
-        assert!(!dir_node.is_file());
-    }
-
-    #[test]
-    fn node_serialization() {
-        let node = Node {
-            id: NodeId::new("file-1"),
-            parent_id: Some(NodeId::new("dir-1")),
-            name: "document.pdf".to_string(),
-            node_type: NodeType::File,
-            md5sum: Some("d41d8cd98f00b204e9800998ecf8427e".to_string()),
-            size: Some(1024),
-            updated_at: 1706886400,
-            rev: Some("1-abc".to_string()),
-        };
-
-        let json = serde_json::to_string(&node).unwrap();
-        let deserialized: Node = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(node, deserialized);
-    }
-
-    #[test]
     fn local_file_id_creation() {
         let id = LocalFileId::new(12345, 67890);
         assert_eq!(id.device_id, 12345);
@@ -425,16 +308,6 @@ mod tests {
     fn remote_id_creation() {
         let id = RemoteId::new("abc-123-def");
         assert_eq!(id.as_str(), "abc-123-def");
-    }
-
-    #[test]
-    fn remote_id_to_node_id_conversion() {
-        let remote = RemoteId::new("remote-123");
-        let node_id: NodeId = remote.clone().into();
-        assert_eq!(node_id.as_str(), "remote-123");
-
-        let node_id_ref: NodeId = (&remote).into();
-        assert_eq!(node_id_ref.as_str(), "remote-123");
     }
 
     #[test]
