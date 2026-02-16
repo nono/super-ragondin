@@ -1054,7 +1054,7 @@ proptest! {
 
     #[test]
     fn prop_arbitrary_action_sequence_converges(
-        seed in prop::collection::vec(any::<u8>(), 50..200)
+        seed in prop::collection::vec(any::<u8>(), 150..500)
     ) {
         let dir = tempdir().unwrap();
         let store = TreeStore::open(dir.path()).unwrap();
@@ -1076,7 +1076,7 @@ proptest! {
             .map(|n| n.id.clone())
             .unwrap();
 
-        let actions = generate_valid_action_sequence(&seed, 20, root_local_id);
+        let actions = generate_valid_action_sequence(&seed, 50, root_local_id);
 
         // Apply the generated action sequence
         for action in &actions {
@@ -1089,6 +1089,54 @@ proptest! {
 
         // After sync, local and remote must converge and be idempotent
         runner.check_convergence().unwrap();
+        runner.check_idempotency().unwrap();
+        runner.check_store_consistency().unwrap();
+    }
+
+    #[test]
+    fn prop_multi_sync_round_converges(
+        seeds in prop::collection::vec(
+            prop::collection::vec(any::<u8>(), 30..100),
+            3..8
+        )
+    ) {
+        let dir = tempdir().unwrap();
+        let store = TreeStore::open(dir.path()).unwrap();
+        let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+        // Setup: create root on remote and sync it
+        let root_id = RemoteId::new("root");
+        runner.apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        }).unwrap();
+        runner.apply(SimAction::Sync).unwrap();
+
+        // Get the root local ID assigned by sync
+        let root_local_id = runner.local_fs.list_all()
+            .into_iter()
+            .find(|n| n.name.is_empty())
+            .map(|n| n.id.clone())
+            .unwrap();
+
+        // Run multiple rounds: generate actions, apply them, then sync
+        for round_seed in &seeds {
+            let actions = generate_valid_action_sequence(round_seed, 15, root_local_id.clone());
+
+            for action in &actions {
+                runner.apply(action.clone()).unwrap();
+            }
+
+            // Ensure client is running, then sync at the end of each round
+            runner.apply(SimAction::RestartClient).unwrap();
+            runner.apply(SimAction::Sync).unwrap();
+
+            // Check convergence after every round to catch state accumulation bugs
+            runner.check_convergence().unwrap();
+        }
+
+        // Final invariant checks
         runner.check_idempotency().unwrap();
         runner.check_store_consistency().unwrap();
     }
