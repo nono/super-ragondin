@@ -156,9 +156,7 @@ impl SimulationRunner {
             SimAction::LocalDeleteFile { local_id } => {
                 self.local_fs.delete(&local_id);
                 if !self.stopped {
-                    self.store
-                        .delete_local_node(&local_id)
-                        .map_err(|e| e.to_string())?;
+                    self.delete_local_recursive(&local_id)?;
                 }
             }
             SimAction::LocalModifyFile { local_id, content } => {
@@ -274,6 +272,20 @@ impl SimulationRunner {
                 self.reconcile_local()?;
             }
         }
+        Ok(())
+    }
+
+    fn delete_local_recursive(&self, id: &LocalFileId) -> Result<(), String> {
+        let children = self
+            .store
+            .list_local_children(id)
+            .map_err(|e| e.to_string())?;
+        for child in &children {
+            self.delete_local_recursive(&child.id)?;
+        }
+        self.store
+            .delete_local_node(id)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -772,7 +784,11 @@ impl SimulationRunner {
     fn local_path(&self, node: &LocalNode) -> String {
         let mut parts = vec![node.name.clone()];
         let mut current = node.parent_id.clone();
+        let mut visited = HashSet::new();
         while let Some(ref pid) = current {
+            if !visited.insert(pid.clone()) {
+                break;
+            }
             if let Some(parent) = self.local_fs.get_node(pid) {
                 if parent.name.is_empty() {
                     break;
@@ -790,7 +806,11 @@ impl SimulationRunner {
     fn remote_path(&self, node: &RemoteNode) -> String {
         let mut parts = vec![node.name.clone()];
         let mut current = node.parent_id.clone();
+        let mut visited = HashSet::new();
         while let Some(ref pid) = current {
+            if !visited.insert(pid.clone()) {
+                break;
+            }
             if let Some(parent) = self.remote.get_node(pid) {
                 if parent.name.is_empty() {
                     break;

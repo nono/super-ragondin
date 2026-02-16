@@ -38,6 +38,17 @@ impl MockRemote {
     }
 
     pub fn delete_node(&mut self, id: &RemoteId) {
+        // Recursively collect and delete all descendants first
+        let children: Vec<RemoteId> = self
+            .nodes
+            .values()
+            .filter(|n| n.parent_id.as_ref() == Some(id))
+            .map(|n| n.id.clone())
+            .collect();
+        for child in children {
+            self.delete_node(&child);
+        }
+
         self.seq += 1;
         self.changes.push(ChangeRecord {
             seq: self.seq,

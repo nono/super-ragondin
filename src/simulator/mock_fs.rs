@@ -40,6 +40,17 @@ impl MockFs {
     }
 
     pub fn delete(&mut self, id: &LocalFileId) {
+        // Recursively collect all descendants
+        let children: Vec<LocalFileId> = self
+            .nodes
+            .values()
+            .filter(|n| n.parent_id.as_ref() == Some(id))
+            .map(|n| n.id.clone())
+            .collect();
+        for child in children {
+            self.delete(&child);
+        }
+
         self.files.remove(id);
         self.dirs.remove(id);
         self.nodes.remove(id);

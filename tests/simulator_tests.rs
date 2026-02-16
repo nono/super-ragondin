@@ -1094,6 +1094,125 @@ proptest! {
     }
 }
 
+// ==================== Regression: directory delete must cascade ====================
+
+#[test]
+fn local_delete_dir_removes_children() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("root");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create a local dir, then a file inside it
+    let dir_id = LocalFileId::new(1, 50000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+
+    let file_id = LocalFileId::new(1, 50001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_id.clone(),
+            parent_local_id: Some(dir_id.clone()),
+            name: "child.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    assert!(runner.local_fs.exists(&dir_id));
+    assert!(runner.local_fs.exists(&file_id));
+
+    // Delete the directory — child should also be removed
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: dir_id.clone(),
+        })
+        .unwrap();
+
+    assert!(!runner.local_fs.exists(&dir_id));
+    assert!(
+        !runner.local_fs.exists(&file_id),
+        "Child file should be removed when parent dir is deleted"
+    );
+}
+
+#[test]
+fn remote_delete_dir_removes_children() {
+    let mut remote = MockRemote::new();
+
+    let root_id = RemoteId::new("root");
+    let root_node = RemoteNode {
+        id: root_id.clone(),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 1000,
+        rev: "1-root".to_string(),
+    };
+    remote.add_node(root_node, None);
+
+    let dir_id = RemoteId::new("dir-1");
+    let dir_node = RemoteNode {
+        id: dir_id.clone(),
+        parent_id: Some(root_id),
+        name: "subdir".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 1000,
+        rev: "1-dir".to_string(),
+    };
+    remote.add_node(dir_node, None);
+
+    let file_id = RemoteId::new("file-1");
+    let file_node = RemoteNode {
+        id: file_id.clone(),
+        parent_id: Some(dir_id.clone()),
+        name: "child.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("abc".to_string()),
+        size: Some(5),
+        updated_at: 1000,
+        rev: "1-file".to_string(),
+    };
+    remote.add_node(file_node, Some(b"hello".to_vec()));
+
+    assert!(remote.get_node(&dir_id).is_some());
+    assert!(remote.get_node(&file_id).is_some());
+
+    // Delete the directory — child should also be removed
+    remote.delete_node(&dir_id);
+
+    assert!(remote.get_node(&dir_id).is_none());
+    assert!(
+        remote.get_node(&file_id).is_none(),
+        "Child file should be removed when parent dir is deleted"
+    );
+}
+
 // ==================== Store Consistency Tests ====================
 
 #[test]
@@ -1380,7 +1499,10 @@ fn generate_valid_action_sequence(
 
         let has_local_dirs = !state.local_dir_ids.is_empty();
 
-        let action = match action_type % 13 {
+        let has_non_root_remote_dirs = state.remote_dir_ids.len() > 1;
+        let has_non_root_local_dirs = state.local_dir_ids.len() > 1;
+
+        let action = match action_type % 16 {
             0 if has_remote_dirs => {
                 let id = state.next_remote_id();
                 let parent = pick(&state.remote_dir_ids, read(&mut cursor));
@@ -1492,6 +1614,32 @@ fn generate_valid_action_sequence(
                     new_parent_local_id: new_parent,
                     new_name,
                 }
+            }
+            13 if has_non_root_remote_dirs => {
+                // RemoteMove for directories (pick non-root dir, move to root to avoid cycles)
+                let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
+                let id = pick(&non_root, read(&mut cursor));
+                let new_parent = state.remote_dir_ids[0].clone();
+                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                SimAction::RemoteMove {
+                    id,
+                    new_parent_id: new_parent,
+                    new_name,
+                }
+            }
+            14 if has_non_root_local_dirs => {
+                // LocalDeleteDir (non-root only)
+                let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
+                let id = pick(&non_root, read(&mut cursor));
+                state.local_dir_ids.retain(|x| x != &id);
+                SimAction::LocalDeleteFile { local_id: id }
+            }
+            15 if has_non_root_remote_dirs => {
+                // RemoteDeleteDir (non-root only)
+                let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
+                let id = pick(&non_root, read(&mut cursor));
+                state.remote_dir_ids.retain(|x| x != &id);
+                SimAction::RemoteDeleteFile { id }
             }
             _ => SimAction::Sync,
         };
