@@ -1076,7 +1076,8 @@ proptest! {
             .map(|n| n.id.clone())
             .unwrap();
 
-        let actions = generate_valid_action_sequence(&seed, 50, root_local_id);
+        let mut sim_state = SimState::new(root_local_id);
+        let actions = generate_valid_action_sequence(&seed, 50, &mut sim_state);
 
         // Apply the generated action sequence
         for action in &actions {
@@ -1121,8 +1122,9 @@ proptest! {
             .unwrap();
 
         // Run multiple rounds: generate actions, apply them, then sync
+        let mut sim_state = SimState::new(root_local_id);
         for round_seed in &seeds {
-            let actions = generate_valid_action_sequence(round_seed, 15, root_local_id.clone());
+            let actions = generate_valid_action_sequence(round_seed, 15, &mut sim_state);
 
             for action in &actions {
                 runner.apply(action.clone()).unwrap();
@@ -1469,6 +1471,10 @@ struct SimState {
     remote_dir_ids: Vec<RemoteId>,
     local_file_ids: Vec<LocalFileId>,
     local_dir_ids: Vec<LocalFileId>,
+    /// Tracks parent for each remote file/dir (for cascade deletes)
+    remote_parents: std::collections::HashMap<RemoteId, RemoteId>,
+    /// Tracks parent for each local file/dir (for cascade deletes)
+    local_parents: std::collections::HashMap<LocalFileId, LocalFileId>,
     next_remote_counter: usize,
     next_local_inode: u64,
     stopped: bool,
@@ -1481,10 +1487,70 @@ impl SimState {
             remote_dir_ids: vec![RemoteId::new("root")],
             local_file_ids: Vec::new(),
             local_dir_ids: vec![root_local_id],
+            remote_parents: std::collections::HashMap::new(),
+            local_parents: std::collections::HashMap::new(),
             next_remote_counter: 0,
             next_local_inode: 50_000,
             stopped: false,
         }
+    }
+
+    /// Remove a remote directory and all its descendants from tracking
+    fn remove_remote_tree(&mut self, dir_id: &RemoteId) {
+        let children_files: Vec<RemoteId> = self
+            .remote_file_ids
+            .iter()
+            .filter(|id| self.remote_parents.get(*id) == Some(dir_id))
+            .cloned()
+            .collect();
+        let children_dirs: Vec<RemoteId> = self
+            .remote_dir_ids
+            .iter()
+            .filter(|id| self.remote_parents.get(*id) == Some(dir_id))
+            .cloned()
+            .collect();
+        for child in &children_dirs {
+            self.remove_remote_tree(child);
+        }
+        for child in &children_files {
+            self.remote_file_ids.retain(|x| x != child);
+            self.remote_parents.remove(child);
+        }
+        for child in &children_dirs {
+            self.remote_dir_ids.retain(|x| x != child);
+            self.remote_parents.remove(child);
+        }
+        self.remote_dir_ids.retain(|x| x != dir_id);
+        self.remote_parents.remove(dir_id);
+    }
+
+    /// Remove a local directory and all its descendants from tracking
+    fn remove_local_tree(&mut self, dir_id: &LocalFileId) {
+        let children_files: Vec<LocalFileId> = self
+            .local_file_ids
+            .iter()
+            .filter(|id| self.local_parents.get(*id) == Some(dir_id))
+            .cloned()
+            .collect();
+        let children_dirs: Vec<LocalFileId> = self
+            .local_dir_ids
+            .iter()
+            .filter(|id| self.local_parents.get(*id) == Some(dir_id))
+            .cloned()
+            .collect();
+        for child in &children_dirs {
+            self.remove_local_tree(child);
+        }
+        for child in &children_files {
+            self.local_file_ids.retain(|x| x != child);
+            self.local_parents.remove(child);
+        }
+        for child in &children_dirs {
+            self.local_dir_ids.retain(|x| x != child);
+            self.local_parents.remove(child);
+        }
+        self.local_dir_ids.retain(|x| x != dir_id);
+        self.local_parents.remove(dir_id);
     }
 
     fn next_remote_id(&mut self) -> RemoteId {
@@ -1518,9 +1584,8 @@ fn name_from_bytes(b1: u8, b2: u8) -> String {
 fn generate_valid_action_sequence(
     seed: &[u8],
     max_actions: usize,
-    root_local_id: LocalFileId,
+    state: &mut SimState,
 ) -> Vec<SimAction> {
-    let mut state = SimState::new(root_local_id);
     let mut actions = Vec::new();
     let mut cursor = 0;
 
@@ -1558,6 +1623,7 @@ fn generate_valid_action_sequence(
                 let content_len = (read(&mut cursor) % 20) as usize + 1;
                 let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
                 state.remote_file_ids.push(id.clone());
+                state.remote_parents.insert(id.clone(), parent.clone());
                 SimAction::RemoteCreateFile {
                     id,
                     parent_id: parent,
@@ -1580,6 +1646,7 @@ fn generate_valid_action_sequence(
                 let id = pick(&state.remote_file_ids, read(&mut cursor));
                 let new_parent = pick(&state.remote_dir_ids, read(&mut cursor));
                 let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                state.remote_parents.insert(id.clone(), new_parent.clone());
                 SimAction::RemoteMove {
                     id,
                     new_parent_id: new_parent,
@@ -1597,6 +1664,9 @@ fn generate_valid_action_sequence(
                 let content_len = (read(&mut cursor) % 20) as usize + 1;
                 let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
                 state.local_file_ids.push(local_id.clone());
+                if let Some(ref p) = parent {
+                    state.local_parents.insert(local_id.clone(), p.clone());
+                }
                 SimAction::LocalCreateFile {
                     local_id,
                     parent_local_id: parent,
@@ -1632,6 +1702,7 @@ fn generate_valid_action_sequence(
                 let parent = pick(&state.remote_dir_ids, read(&mut cursor));
                 let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
                 state.remote_dir_ids.push(id.clone());
+                state.remote_parents.insert(id.clone(), parent.clone());
                 SimAction::RemoteCreateDir {
                     id,
                     parent_id: Some(parent),
@@ -1647,6 +1718,9 @@ fn generate_valid_action_sequence(
                 };
                 let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
                 state.local_dir_ids.push(local_id.clone());
+                if let Some(ref p) = parent {
+                    state.local_parents.insert(local_id.clone(), p.clone());
+                }
                 SimAction::LocalCreateDir {
                     local_id,
                     parent_local_id: parent,
@@ -1655,11 +1729,12 @@ fn generate_valid_action_sequence(
             }
             12 if has_local_files && has_local_dirs => {
                 let id = pick(&state.local_file_ids, read(&mut cursor));
-                let new_parent = Some(pick(&state.local_dir_ids, read(&mut cursor)));
+                let new_parent = pick(&state.local_dir_ids, read(&mut cursor));
                 let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                state.local_parents.insert(id.clone(), new_parent.clone());
                 SimAction::LocalMove {
                     local_id: id,
-                    new_parent_local_id: new_parent,
+                    new_parent_local_id: Some(new_parent),
                     new_name,
                 }
             }
@@ -1669,6 +1744,7 @@ fn generate_valid_action_sequence(
                 let id = pick(&non_root, read(&mut cursor));
                 let new_parent = state.remote_dir_ids[0].clone();
                 let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
+                state.remote_parents.insert(id.clone(), new_parent.clone());
                 SimAction::RemoteMove {
                     id,
                     new_parent_id: new_parent,
@@ -1676,17 +1752,17 @@ fn generate_valid_action_sequence(
                 }
             }
             14 if has_non_root_local_dirs => {
-                // LocalDeleteDir (non-root only)
+                // LocalDeleteDir (non-root only) — cascade remove children
                 let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
                 let id = pick(&non_root, read(&mut cursor));
-                state.local_dir_ids.retain(|x| x != &id);
+                state.remove_local_tree(&id);
                 SimAction::LocalDeleteFile { local_id: id }
             }
             15 if has_non_root_remote_dirs => {
-                // RemoteDeleteDir (non-root only)
+                // RemoteDeleteDir (non-root only) — cascade remove children
                 let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
                 let id = pick(&non_root, read(&mut cursor));
-                state.remote_dir_ids.retain(|x| x != &id);
+                state.remove_remote_tree(&id);
                 SimAction::RemoteDeleteFile { id }
             }
             _ => SimAction::Sync,
