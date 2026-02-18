@@ -71,6 +71,40 @@ impl SyncEngine {
         planner.plan()
     }
 
+    /// Run a full sync cycle: scan, plan, and execute all operations.
+    ///
+    /// Returns the plan results for inspection/logging.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning, planning, or execution fails.
+    pub fn run_cycle(&mut self) -> Result<Vec<PlanResult>> {
+        tracing::info!("🔄 Starting sync cycle");
+        self.initial_scan()?;
+
+        let results = self.plan()?;
+        let op_count = results
+            .iter()
+            .filter(|r| matches!(r, PlanResult::Op(_)))
+            .count();
+        tracing::info!(operations = op_count, "📋 Planned operations");
+
+        for result in &results {
+            match result {
+                PlanResult::Op(sync_op) => {
+                    self.execute_op(sync_op)?;
+                }
+                PlanResult::Conflict(conflict) => {
+                    tracing::warn!(conflict = ?conflict, "⚠️ Conflict");
+                }
+                PlanResult::NoOp => {}
+            }
+        }
+
+        tracing::info!("🔄 Sync cycle complete");
+        Ok(results)
+    }
+
     /// Execute a single sync operation.
     ///
     /// # Errors

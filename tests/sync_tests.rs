@@ -590,3 +590,54 @@ fn test_move_local_refuses_when_inode_mismatches() {
     assert!(from_path.exists(), "Original file must still exist");
     assert!(!to_path.exists(), "Destination must not be created");
 }
+
+#[test]
+fn test_sync_engine_run_cycle() {
+    use cozy_desktop::model::{PlanResult, RemoteNode, SyncOp};
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    insert_root_synced(&store);
+
+    // Add a remote directory that should be created locally
+    let remote_dir = RemoteNode {
+        id: RemoteId::new("dir-1"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "photos".to_string(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 1000,
+        rev: "1-abc".to_string(),
+    };
+    store.insert_remote_node(&remote_dir).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+    );
+
+    // First cycle: should create the directory
+    let results = engine.run_cycle().unwrap();
+    let create_ops: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Op(SyncOp::CreateLocalDir { .. })))
+        .collect();
+    assert_eq!(create_ops.len(), 1, "First cycle should create one dir");
+    assert!(
+        sync_dir.path().join("photos").is_dir(),
+        "Directory should exist after first cycle"
+    );
+
+    // Second cycle: no new ops since everything is synced
+    let results = engine.run_cycle().unwrap();
+    let ops: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Op(_)))
+        .collect();
+    assert!(ops.is_empty(), "Second cycle should have no ops");
+}

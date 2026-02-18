@@ -123,50 +123,26 @@ fn cmd_sync() -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
-    let oauth = config
-        .oauth_client
-        .as_ref()
-        .ok_or_else(|| Error::NotFound("Not authenticated".to_string()))?;
-
-    let access_token = oauth
-        .access_token()
-        .ok_or_else(|| Error::NotFound("No access token".to_string()))?;
-
-    let store = TreeStore::open(&config.store_dir())?;
-    let _client = cozy_desktop::remote::client::CozyClient::new(&config.instance_url, access_token);
-
-    let mut engine = SyncEngine::new(store, config.sync_dir.clone(), config.staging_dir());
-
-    tracing::info!("🔄 Starting sync cycle");
-    engine.initial_scan()?;
-
-    let ops = engine.plan()?;
-    tracing::info!(count = ops.len(), "📋 Planned operations");
-
-    for op in &ops {
-        match op {
-            PlanResult::Op(sync_op) => tracing::info!(op = ?sync_op, "🔄 Sync operation"),
-            PlanResult::Conflict(conflict) => tracing::warn!(conflict = ?conflict, "⚠️ Conflict"),
-            PlanResult::NoOp => {}
-        }
-    }
-
-    for op in &ops {
-        if let PlanResult::Op(sync_op) = op {
-            engine.execute_op(sync_op)?;
-        }
-    }
-
-    config.save(&config_path())?;
-
-    tracing::info!("🔄 Sync complete");
+    let mut engine = open_engine(&config)?;
+    engine.run_cycle()?;
 
     Ok(())
+}
+
+fn open_engine(config: &Config) -> Result<SyncEngine> {
+    let store = TreeStore::open(&config.store_dir())?;
+    Ok(SyncEngine::new(
+        store,
+        config.sync_dir.clone(),
+        config.staging_dir(),
+    ))
 }
 
 fn cmd_watch() -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+
+    let mut engine = open_engine(&config)?;
 
     let (tx, rx) = mpsc::channel::<WatchEvent>();
 
@@ -187,7 +163,7 @@ fn cmd_watch() -> Result<()> {
                 tracing::debug!(event = ?event, "👁️ Watch event received");
                 if last_sync.elapsed() > debounce {
                     tracing::info!("🔄 Changes detected, syncing");
-                    if let Err(e) = cmd_sync() {
+                    if let Err(e) = engine.run_cycle() {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
@@ -196,7 +172,7 @@ fn cmd_watch() -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_sync.elapsed() > Duration::from_secs(30) {
                     tracing::info!("🔄 Periodic sync");
-                    if let Err(e) = cmd_sync() {
+                    if let Err(e) = engine.run_cycle() {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
