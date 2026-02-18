@@ -150,7 +150,11 @@ impl<'a> Planner<'a> {
                 return ops;
             }
         } else if remote_loc_changed {
-            ops.push(self.plan_move_local(remote, local, synced));
+            if let Some(move_op) = self.plan_move_local(remote, local, synced) {
+                ops.push(move_op);
+            } else {
+                return ops;
+            }
         } else if local_loc_changed {
             if let Some(move_op) = self.plan_move_remote(remote, local, synced) {
                 ops.push(move_op);
@@ -207,17 +211,22 @@ impl<'a> Planner<'a> {
         remote: &RemoteNode,
         local: &LocalNode,
         _synced: &SyncedRecord,
-    ) -> PlanResult {
+    ) -> Option<PlanResult> {
+        // Defer if the new remote parent hasn't been synced yet
+        if let Some(parent_id) = &remote.parent_id {
+            self.store.get_synced_by_remote(parent_id).ok().flatten()?;
+        }
+
         let from_path = self.compute_local_path_from_local(local);
         let to_path = self.compute_local_path(remote);
 
-        PlanResult::Op(SyncOp::MoveLocal {
+        Some(PlanResult::Op(SyncOp::MoveLocal {
             local_id: local.id.clone(),
             from_path,
             to_path,
             expected_parent_id: local.parent_id.clone(),
             expected_name: local.name.clone(),
-        })
+        }))
     }
 
     fn plan_move_remote(
@@ -254,9 +263,21 @@ impl<'a> Planner<'a> {
     }
 
     fn plan_remote_only(&self, remote: &RemoteNode) -> Vec<PlanResult> {
-        let Some(_) = remote.parent_id.as_ref() else {
+        let Some(parent_id) = remote.parent_id.as_ref() else {
             return vec![];
         };
+
+        // Defer if parent directory hasn't been synced yet — it will be
+        // handled in a subsequent planning round once the parent is synced.
+        if self
+            .store
+            .get_synced_by_remote(parent_id)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return vec![];
+        }
 
         tracing::debug!(remote_id = remote.id.as_str(), name = &remote.name, node_type = ?remote.node_type, "📋 New remote node, planning download");
 

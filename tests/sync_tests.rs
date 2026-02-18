@@ -1,8 +1,25 @@
-use cozy_desktop::model::{NodeType, RemoteId, RemoteNode};
+use cozy_desktop::model::{LocalFileId, NodeType, RemoteId, RemoteNode, SyncedRecord};
 use cozy_desktop::planner::Planner;
 use cozy_desktop::store::TreeStore;
 use cozy_desktop::sync::engine::SyncEngine;
 use tempfile::tempdir;
+
+fn insert_root_synced(store: &TreeStore) {
+    let synced = SyncedRecord {
+        local_id: LocalFileId::new(1, 1),
+        remote_id: RemoteId::new("io.cozy.files.root-dir"),
+        rel_path: String::new(),
+        md5sum: None,
+        size: None,
+        rev: "1-root".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some(String::new()),
+        local_parent_id: None,
+        remote_name: Some(String::new()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&synced).unwrap();
+}
 
 #[test]
 fn test_sync_engine_plans_download_for_new_remote_file() {
@@ -36,6 +53,7 @@ fn test_sync_engine_plans_download_for_new_remote_file() {
         rev: "1-root".to_string(),
     };
     store.insert_remote_node(&root).unwrap();
+    insert_root_synced(&store);
 
     store.flush().unwrap();
 
@@ -120,6 +138,7 @@ fn test_sync_engine_plan() {
         rev: "1-abc".to_string(),
     };
     store.insert_remote_node(&remote_file).unwrap();
+    insert_root_synced(&store);
     store.flush().unwrap();
 
     let engine = SyncEngine::new(
@@ -275,6 +294,7 @@ fn test_planner_computes_nested_paths() {
         rev: "1-root".to_string(),
     };
     store.insert_remote_node(&root).unwrap();
+    insert_root_synced(&store);
 
     let docs_dir = RemoteNode {
         id: RemoteId::new("docs-dir"),
@@ -287,6 +307,22 @@ fn test_planner_computes_nested_paths() {
         rev: "1-docs".to_string(),
     };
     store.insert_remote_node(&docs_dir).unwrap();
+
+    // Synced record for docs dir so planner can plan file.txt download
+    let docs_synced = SyncedRecord {
+        local_id: LocalFileId::new(1, 2),
+        remote_id: RemoteId::new("docs-dir"),
+        rel_path: "docs".to_string(),
+        md5sum: None,
+        size: None,
+        rev: "1-docs".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some("docs".to_string()),
+        local_parent_id: Some(LocalFileId::new(1, 1)),
+        remote_name: Some("docs".to_string()),
+        remote_parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+    };
+    store.insert_synced(&docs_synced).unwrap();
 
     let file = RemoteNode {
         id: RemoteId::new("file-1"),

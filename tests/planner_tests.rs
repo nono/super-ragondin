@@ -123,6 +123,16 @@ fn test_new_remote_file_generates_download() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
 
+    // Root directory must be synced so the planner can resolve the parent
+    let synced_root = make_synced(
+        local_id(1, 1),
+        remote_id("root"),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+
     let remote_file = make_remote_file(
         remote_id("f1"),
         Some(remote_id("root")),
@@ -426,6 +436,16 @@ fn test_local_deleted_generates_remote_delete() {
 fn test_new_remote_directory_generates_create_local_dir() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
+
+    // Root directory must be synced so the planner can resolve the parent
+    let synced_root = make_synced(
+        local_id(1, 1),
+        remote_id("root"),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
 
     let remote_dir = make_remote_dir(remote_id("d1"), Some(remote_id("root")), "docs");
     store.insert_remote_node(&remote_dir).unwrap();
