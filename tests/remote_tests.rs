@@ -61,3 +61,46 @@ async fn test_fetch_changes() {
     assert_eq!(changes.results[0].node.name, "test.txt");
     assert_eq!(changes.results[0].node.node_type, NodeType::File);
 }
+
+#[tokio::test]
+async fn test_refresh_token() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/auth/access_token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut client = OAuthClient {
+        instance_url: mock_server.uri(),
+        client_id: "test-client-id".to_string(),
+        client_secret: "test-client-secret".to_string(),
+        registration_access_token: "test-reg-token".to_string(),
+        access_token: Some("old-access-token".to_string()),
+        refresh_token: Some("old-refresh-token".to_string()),
+    };
+
+    client.refresh().await.unwrap();
+
+    assert_eq!(client.access_token(), Some("new-access-token"));
+    assert_eq!(client.refresh_token, Some("new-refresh-token".to_string()));
+}
+
+#[tokio::test]
+async fn test_refresh_token_without_refresh_token() {
+    let mut client = OAuthClient {
+        instance_url: "https://test.mycozy.cloud".to_string(),
+        client_id: "test-client-id".to_string(),
+        client_secret: "test-client-secret".to_string(),
+        registration_access_token: "test-reg-token".to_string(),
+        access_token: Some("old-access-token".to_string()),
+        refresh_token: None,
+    };
+
+    let err = client.refresh().await.unwrap_err();
+    assert!(err.to_string().contains("No refresh token"));
+}

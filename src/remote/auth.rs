@@ -29,6 +29,14 @@ struct TokenRequest<'a> {
     redirect_uri: &'a str,
 }
 
+#[derive(Serialize)]
+struct RefreshRequest<'a> {
+    grant_type: &'a str,
+    refresh_token: &'a str,
+    client_id: &'a str,
+    client_secret: &'a str,
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -150,6 +158,40 @@ impl OAuthClient {
         self.access_token = Some(resp.access_token);
         self.refresh_token = Some(resp.refresh_token);
         tracing::info!("🔑 Token exchange successful");
+        Ok(())
+    }
+
+    /// Refresh the access token using the stored refresh token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no refresh token, or if the HTTP request fails.
+    pub async fn refresh(&mut self) -> Result<()> {
+        let refresh_token = self
+            .refresh_token
+            .as_deref()
+            .ok_or_else(|| crate::error::Error::NotFound("No refresh token".to_string()))?;
+
+        tracing::info!("🔑 Refreshing access token");
+        let http = reqwest::Client::new();
+
+        let resp: TokenResponse = http
+            .post(format!("{}/auth/access_token", self.instance_url))
+            .form(&RefreshRequest {
+                grant_type: "refresh_token",
+                refresh_token,
+                client_id: &self.client_id,
+                client_secret: &self.client_secret,
+            })
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        self.access_token = Some(resp.access_token);
+        self.refresh_token = Some(resp.refresh_token);
+        tracing::info!("🔑 Token refresh successful");
         Ok(())
     }
 
