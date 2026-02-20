@@ -106,7 +106,6 @@ impl SimulationRunner {
     ///
     /// # Errors
     /// Returns an error if the action fails
-    #[allow(clippy::too_many_lines)]
     pub fn apply(&mut self, action: SimAction) -> Result<(), String> {
         match action {
             SimAction::LocalCreateFile {
@@ -114,69 +113,15 @@ impl SimulationRunner {
                 parent_local_id,
                 name,
                 content,
-            } => {
-                let md5sum = compute_md5(&content);
-                let node = LocalNode {
-                    id: local_id.clone(),
-                    parent_id: parent_local_id,
-                    name,
-                    node_type: NodeType::File,
-                    md5sum: Some(md5sum),
-                    size: Some(content.len() as u64),
-                    mtime: 1000,
-                };
-                self.local_fs.create_file(local_id, node.clone(), content);
-                if !self.stopped {
-                    self.store
-                        .insert_local_node(&node)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
+            } => self.apply_local_create_file(local_id, parent_local_id, name, content),
             SimAction::LocalCreateDir {
                 local_id,
                 parent_local_id,
                 name,
-            } => {
-                let node = LocalNode {
-                    id: local_id.clone(),
-                    parent_id: parent_local_id,
-                    name,
-                    node_type: NodeType::Directory,
-                    md5sum: None,
-                    size: None,
-                    mtime: 1000,
-                };
-                self.local_fs.create_dir(local_id, node.clone());
-                if !self.stopped {
-                    self.store
-                        .insert_local_node(&node)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
-            SimAction::LocalDeleteFile { local_id } => {
-                self.local_fs.delete(&local_id);
-                if !self.stopped {
-                    self.delete_local_recursive(&local_id)?;
-                }
-            }
+            } => self.apply_local_create_dir(local_id, parent_local_id, name),
+            SimAction::LocalDeleteFile { local_id } => self.apply_local_delete(&local_id),
             SimAction::LocalModifyFile { local_id, content } => {
-                let node = self
-                    .local_fs
-                    .get_node(&local_id)
-                    .cloned()
-                    .ok_or_else(|| format!("LocalModifyFile: node {local_id:?} not found"))?;
-                let md5sum = compute_md5(&content);
-                let mut updated = node;
-                updated.md5sum = Some(md5sum);
-                updated.size = Some(content.len() as u64);
-                updated.mtime += 1;
-                self.local_fs
-                    .create_file(local_id, updated.clone(), content);
-                if !self.stopped {
-                    self.store
-                        .insert_local_node(&updated)
-                        .map_err(|e| e.to_string())?;
-                }
+                self.apply_local_modify(local_id, content)
             }
             SimAction::RemoteCreateFile {
                 id,
@@ -184,93 +129,211 @@ impl SimulationRunner {
                 name,
                 content,
             } => {
-                let md5sum = compute_md5(&content);
-                let node = RemoteNode {
-                    id: id.clone(),
-                    parent_id: Some(parent_id),
-                    name,
-                    node_type: NodeType::File,
-                    md5sum: Some(md5sum),
-                    size: Some(content.len() as u64),
-                    updated_at: 1000,
-                    rev: format!("1-{}", id.as_str()),
-                };
-                self.remote.add_node(node, Some(content));
+                self.apply_remote_create_file(&id, &parent_id, name, content);
+                Ok(())
             }
             SimAction::RemoteCreateDir {
                 id,
                 parent_id,
                 name,
             } => {
-                let node = RemoteNode {
-                    id: id.clone(),
-                    parent_id,
-                    name,
-                    node_type: NodeType::Directory,
-                    md5sum: None,
-                    size: None,
-                    updated_at: 1000,
-                    rev: format!("1-{}", id.as_str()),
-                };
-                self.remote.add_node(node, None);
+                self.apply_remote_create_dir(&id, parent_id.as_ref(), name);
+                Ok(())
             }
             SimAction::RemoteDeleteFile { id } => {
                 self.remote.delete_node(&id);
+                Ok(())
             }
-            SimAction::RemoteModifyFile { id, content } => {
-                let node =
-                    self.remote.get_node(&id).cloned().ok_or_else(|| {
-                        format!("RemoteModifyFile: node {} not found", id.as_str())
-                    })?;
-                let md5sum = compute_md5(&content);
-                let mut updated = node;
-                updated.md5sum = Some(md5sum);
-                updated.size = Some(content.len() as u64);
-                updated.updated_at += 1;
-                // Increment revision
-                let rev_num: u32 = updated
-                    .rev
-                    .split('-')
-                    .next()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1);
-                updated.rev = format!("{}-{}", rev_num + 1, id.as_str());
-                self.remote.add_node(updated, Some(content));
-            }
+            SimAction::RemoteModifyFile { id, content } => self.apply_remote_modify(&id, content),
             SimAction::LocalMove {
                 local_id,
                 new_parent_local_id,
                 new_name,
-            } => {
-                self.local_fs
-                    .move_node(&local_id, new_parent_local_id, new_name);
-                if !self.stopped
-                    && let Some(node) = self.local_fs.get_node(&local_id).cloned()
-                {
-                    self.store
-                        .insert_local_node(&node)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
+            } => self.apply_local_move(&local_id, new_parent_local_id, new_name),
             SimAction::RemoteMove {
                 id,
                 new_parent_id,
                 new_name,
             } => {
                 self.remote.move_node(&id, new_parent_id, new_name);
+                Ok(())
             }
             SimAction::Sync => {
                 if !self.stopped {
                     self.sync()?;
                 }
+                Ok(())
             }
             SimAction::StopClient => {
                 self.stopped = true;
+                Ok(())
             }
             SimAction::RestartClient => {
                 self.stopped = false;
-                self.reconcile_local()?;
+                self.reconcile_local()
             }
+        }
+    }
+
+    fn apply_local_create_file(
+        &mut self,
+        local_id: LocalFileId,
+        parent_local_id: Option<LocalFileId>,
+        name: String,
+        content: Vec<u8>,
+    ) -> Result<(), String> {
+        let md5sum = compute_md5(&content);
+        let node = LocalNode {
+            id: local_id.clone(),
+            parent_id: parent_local_id,
+            name,
+            node_type: NodeType::File,
+            md5sum: Some(md5sum),
+            size: Some(content.len() as u64),
+            mtime: 1000,
+        };
+        self.local_fs.create_file(local_id, node.clone(), content);
+        if !self.stopped {
+            self.store
+                .insert_local_node(&node)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn apply_local_create_dir(
+        &mut self,
+        local_id: LocalFileId,
+        parent_local_id: Option<LocalFileId>,
+        name: String,
+    ) -> Result<(), String> {
+        let node = LocalNode {
+            id: local_id.clone(),
+            parent_id: parent_local_id,
+            name,
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: 1000,
+        };
+        self.local_fs.create_dir(local_id, node.clone());
+        if !self.stopped {
+            self.store
+                .insert_local_node(&node)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn apply_local_delete(&mut self, local_id: &LocalFileId) -> Result<(), String> {
+        self.local_fs.delete(local_id);
+        if !self.stopped {
+            self.delete_local_recursive(local_id)?;
+        }
+        Ok(())
+    }
+
+    fn apply_local_modify(
+        &mut self,
+        local_id: LocalFileId,
+        content: Vec<u8>,
+    ) -> Result<(), String> {
+        let node = self
+            .local_fs
+            .get_node(&local_id)
+            .cloned()
+            .ok_or_else(|| format!("LocalModifyFile: node {local_id:?} not found"))?;
+        let md5sum = compute_md5(&content);
+        let mut updated = node;
+        updated.md5sum = Some(md5sum);
+        updated.size = Some(content.len() as u64);
+        updated.mtime += 1;
+        self.local_fs
+            .create_file(local_id, updated.clone(), content);
+        if !self.stopped {
+            self.store
+                .insert_local_node(&updated)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn apply_remote_create_file(
+        &mut self,
+        id: &RemoteId,
+        parent_id: &RemoteId,
+        name: String,
+        content: Vec<u8>,
+    ) {
+        let md5sum = compute_md5(&content);
+        let node = RemoteNode {
+            id: id.clone(),
+            parent_id: Some(parent_id.clone()),
+            name,
+            node_type: NodeType::File,
+            md5sum: Some(md5sum),
+            size: Some(content.len() as u64),
+            updated_at: 1000,
+            rev: format!("1-{}", id.as_str()),
+        };
+        self.remote.add_node(node, Some(content));
+    }
+
+    fn apply_remote_create_dir(
+        &mut self,
+        id: &RemoteId,
+        parent_id: Option<&RemoteId>,
+        name: String,
+    ) {
+        let node = RemoteNode {
+            id: id.clone(),
+            parent_id: parent_id.cloned(),
+            name,
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 1000,
+            rev: format!("1-{}", id.as_str()),
+        };
+        self.remote.add_node(node, None);
+    }
+
+    fn apply_remote_modify(&mut self, id: &RemoteId, content: Vec<u8>) -> Result<(), String> {
+        let node = self
+            .remote
+            .get_node(id)
+            .cloned()
+            .ok_or_else(|| format!("RemoteModifyFile: node {} not found", id.as_str()))?;
+        let md5sum = compute_md5(&content);
+        let mut updated = node;
+        updated.md5sum = Some(md5sum);
+        updated.size = Some(content.len() as u64);
+        updated.updated_at += 1;
+        let rev_num: u32 = updated
+            .rev
+            .split('-')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        updated.rev = format!("{}-{}", rev_num + 1, id.as_str());
+        self.remote.add_node(updated, Some(content));
+        Ok(())
+    }
+
+    fn apply_local_move(
+        &mut self,
+        local_id: &LocalFileId,
+        new_parent_local_id: Option<LocalFileId>,
+        new_name: String,
+    ) -> Result<(), String> {
+        self.local_fs
+            .move_node(local_id, new_parent_local_id, new_name);
+        if !self.stopped
+            && let Some(node) = self.local_fs.get_node(local_id).cloned()
+        {
+            self.store
+                .insert_local_node(&node)
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -310,93 +373,84 @@ impl SimulationRunner {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
     fn sync(&mut self) -> Result<(), String> {
-        // Step 1: Fetch remote changes into store (including deletions)
+        self.fetch_remote_changes()?;
+        self.plan_and_execute_loop()
+    }
+
+    fn fetch_remote_changes(&mut self) -> Result<(), String> {
         for change in self.remote.get_all_changes_since(self.last_seq) {
             if change.deleted {
-                // Handle remote deletion
                 self.store
                     .delete_remote_node(&change.remote_id)
                     .map_err(|e| e.to_string())?;
-            } else if let Some(node) = self.remote.get_node(&change.remote_id) {
+            } else if let Some(node) = self.remote.get_node(&change.remote_id).cloned() {
                 self.store
-                    .insert_remote_node(node)
+                    .insert_remote_node(&node)
                     .map_err(|e| e.to_string())?;
 
-                // Handle root directory specially - create binding immediately
                 if node.parent_id.is_none() && !self.remote_to_local.contains_key(&node.id) {
-                    let local_id = next_local_id();
-                    let local_node = LocalNode {
-                        id: local_id.clone(),
-                        parent_id: None,
-                        name: node.name.clone(),
-                        node_type: NodeType::Directory,
-                        md5sum: None,
-                        size: None,
-                        mtime: node.updated_at,
-                    };
-                    self.local_fs
-                        .create_dir(local_id.clone(), local_node.clone());
-                    self.store
-                        .insert_local_node(&local_node)
-                        .map_err(|e| e.to_string())?;
-
-                    let synced = SyncedRecord {
-                        local_id: local_id.clone(),
-                        remote_id: node.id.clone(),
-                        rel_path: String::new(),
-                        md5sum: None,
-                        size: None,
-                        rev: node.rev.clone(),
-                        node_type: NodeType::Directory,
-                        local_name: Some(node.name.clone()),
-                        local_parent_id: None,
-                        remote_name: Some(node.name.clone()),
-                        remote_parent_id: node.parent_id.clone(),
-                    };
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                    self.remote_to_local.insert(node.id.clone(), local_id);
+                    self.bind_root_directory(&node)?;
                 }
             }
         }
         self.last_seq = self.remote.current_seq();
+        Ok(())
+    }
 
-        // Step 2+3: Plan and execute in a loop until no more ops are generated.
-        // We split each pass into two phases:
-        //   Phase A: execute creates, moves, downloads, and uploads (non-delete ops)
-        //   Phase B: re-plan, then execute deletes
-        // This ensures moves are executed before cascade deletes can orphan files
-        // (e.g., a file moved out of a directory that is then deleted).
+    fn bind_root_directory(&mut self, node: &RemoteNode) -> Result<(), String> {
+        let local_id = next_local_id();
+        let local_node = LocalNode {
+            id: local_id.clone(),
+            parent_id: None,
+            name: node.name.clone(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: node.updated_at,
+        };
+        self.local_fs
+            .create_dir(local_id.clone(), local_node.clone());
+        self.store
+            .insert_local_node(&local_node)
+            .map_err(|e| e.to_string())?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: node.id.clone(),
+            rel_path: String::new(),
+            md5sum: None,
+            size: None,
+            rev: node.rev.clone(),
+            node_type: NodeType::Directory,
+            local_name: Some(node.name.clone()),
+            local_parent_id: None,
+            remote_name: Some(node.name.clone()),
+            remote_parent_id: node.parent_id.clone(),
+        };
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
+        self.remote_to_local.insert(node.id.clone(), local_id);
+        Ok(())
+    }
+
+    /// Plan and execute sync operations in a loop until convergence.
+    ///
+    /// Each pass is split into two phases:
+    ///   Phase A: execute creates, moves, downloads, and uploads (non-delete ops)
+    ///   Phase B: re-plan, then execute deletes
+    /// This ensures moves are executed before cascade deletes can orphan files
+    /// (e.g., a file moved out of a directory that is then deleted).
+    fn plan_and_execute_loop(&mut self) -> Result<(), String> {
         let max_rounds = 10;
         for _ in 0..max_rounds {
-            let planner = Planner::new(&self.store, self.sync_root.clone());
-            let results = planner.plan().map_err(|e| e.to_string())?;
-
-            let ops: Vec<_> = results
-                .into_iter()
-                .filter_map(|r| {
-                    if let crate::model::PlanResult::Op(op) = r {
-                        Some(op)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
+            let ops = self.plan_sync_ops()?;
             if ops.is_empty() {
                 break;
             }
 
-            let (non_delete_ops, delete_ops): (Vec<_>, Vec<_>) = ops.into_iter().partition(|op| {
-                !matches!(
-                    op,
-                    crate::model::SyncOp::DeleteLocal { .. }
-                        | crate::model::SyncOp::DeleteRemote { .. }
-                )
-            });
+            let (non_delete_ops, delete_ops) = Self::partition_ops(ops);
 
             for op in non_delete_ops {
                 self.execute_op(op)?;
@@ -405,31 +459,12 @@ impl SimulationRunner {
             if !delete_ops.is_empty() {
                 // Re-plan before deletes: moves that were blocked (ParentMissing)
                 // in the initial plan may now be possible after creates executed.
-                let planner = Planner::new(&self.store, self.sync_root.clone());
-                let results = planner.plan().map_err(|e| e.to_string())?;
-                // Execute any newly-unblocked non-delete ops first
-                let (new_non_delete, new_delete): (Vec<_>, Vec<_>) = results
-                    .into_iter()
-                    .filter_map(|r| {
-                        if let crate::model::PlanResult::Op(op) = r {
-                            Some(op)
-                        } else {
-                            None
-                        }
-                    })
-                    .partition(|op| {
-                        !matches!(
-                            op,
-                            crate::model::SyncOp::DeleteLocal { .. }
-                                | crate::model::SyncOp::DeleteRemote { .. }
-                        )
-                    });
+                let fresh_ops = self.plan_sync_ops()?;
+                let (new_non_delete, new_delete) = Self::partition_ops(fresh_ops);
 
                 for op in new_non_delete {
                     self.execute_op(op)?;
                 }
-
-                // Now execute the deletes from the fresh plan
                 for op in new_delete {
                     self.execute_op(op)?;
                 }
@@ -439,389 +474,437 @@ impl SimulationRunner {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
+    fn plan_sync_ops(&self) -> Result<Vec<crate::model::SyncOp>, String> {
+        let planner = Planner::new(&self.store, self.sync_root.clone());
+        let results = planner.plan().map_err(|e| e.to_string())?;
+        Ok(results
+            .into_iter()
+            .filter_map(|r| {
+                if let crate::model::PlanResult::Op(op) = r {
+                    Some(op)
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
+    fn partition_ops(
+        ops: Vec<crate::model::SyncOp>,
+    ) -> (Vec<crate::model::SyncOp>, Vec<crate::model::SyncOp>) {
+        ops.into_iter().partition(|op| {
+            !matches!(
+                op,
+                crate::model::SyncOp::DeleteLocal { .. }
+                    | crate::model::SyncOp::DeleteRemote { .. }
+            )
+        })
+    }
+
     fn execute_op(&mut self, op: crate::model::SyncOp) -> Result<(), String> {
         use crate::model::SyncOp;
 
         match op {
-            SyncOp::DownloadNew {
-                remote_id,
-                local_path: _,
-                expected_rev: _,
-                expected_md5: _,
-            } => {
-                if let Some(remote_node) = self.remote.get_node(&remote_id).cloned() {
-                    let local_id = next_local_id();
-                    let content = self
-                        .remote
-                        .get_content(&remote_id)
-                        .cloned()
-                        .unwrap_or_default();
-
-                    let local_node = LocalNode {
-                        id: local_id.clone(),
-                        parent_id: remote_node
-                            .parent_id
-                            .as_ref()
-                            .and_then(|pid| self.remote_to_local.get(pid).cloned()),
-                        name: remote_node.name.clone(),
-                        node_type: remote_node.node_type,
-                        md5sum: remote_node.md5sum.clone(),
-                        size: remote_node.size,
-                        mtime: remote_node.updated_at,
-                    };
-
-                    self.local_fs
-                        .create_file(local_id.clone(), local_node.clone(), content);
-                    self.store
-                        .insert_local_node(&local_node)
-                        .map_err(|e| e.to_string())?;
-
-                    let synced = SyncedRecord {
-                        local_id: local_id.clone(),
-                        remote_id: remote_id.clone(),
-                        rel_path: remote_node.name.clone(),
-                        md5sum: remote_node.md5sum.clone(),
-                        size: remote_node.size,
-                        rev: remote_node.rev.clone(),
-                        node_type: remote_node.node_type,
-                        local_name: Some(local_node.name.clone()),
-                        local_parent_id: local_node.parent_id,
-                        remote_name: Some(remote_node.name.clone()),
-                        remote_parent_id: remote_node.parent_id,
-                    };
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                    self.remote_to_local.insert(remote_id, local_id);
-                }
-            }
-            SyncOp::CreateLocalDir {
-                remote_id,
-                local_path: _,
-            } => {
-                if let Some(remote_node) = self.remote.get_node(&remote_id).cloned() {
-                    let local_id = next_local_id();
-
-                    let local_node = LocalNode {
-                        id: local_id.clone(),
-                        parent_id: remote_node
-                            .parent_id
-                            .as_ref()
-                            .and_then(|pid| self.remote_to_local.get(pid).cloned()),
-                        name: remote_node.name.clone(),
-                        node_type: NodeType::Directory,
-                        md5sum: None,
-                        size: None,
-                        mtime: remote_node.updated_at,
-                    };
-
-                    self.local_fs
-                        .create_dir(local_id.clone(), local_node.clone());
-                    self.store
-                        .insert_local_node(&local_node)
-                        .map_err(|e| e.to_string())?;
-
-                    let synced = SyncedRecord {
-                        local_id: local_id.clone(),
-                        remote_id: remote_id.clone(),
-                        rel_path: remote_node.name.clone(),
-                        md5sum: None,
-                        size: None,
-                        rev: remote_node.rev,
-                        node_type: NodeType::Directory,
-                        local_name: Some(local_node.name.clone()),
-                        local_parent_id: local_node.parent_id,
-                        remote_name: Some(remote_node.name),
-                        remote_parent_id: remote_node.parent_id,
-                    };
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                    self.remote_to_local.insert(remote_id, local_id);
-                }
-            }
+            SyncOp::DownloadNew { remote_id, .. } => self.execute_download_new(&remote_id),
+            SyncOp::CreateLocalDir { remote_id, .. } => self.execute_create_local_dir(&remote_id),
             SyncOp::UploadNew {
                 local_id,
-                local_path: _,
                 parent_remote_id,
                 name,
                 expected_md5,
-            } => {
-                if let Some(local_node) = self.local_fs.get_node(&local_id).cloned() {
-                    let content = self
-                        .local_fs
-                        .read_file(&local_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    let remote_id =
-                        RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
-
-                    let remote_node = RemoteNode {
-                        id: remote_id.clone(),
-                        parent_id: Some(parent_remote_id),
-                        name,
-                        node_type: local_node.node_type,
-                        md5sum: Some(expected_md5.clone()),
-                        size: local_node.size,
-                        updated_at: local_node.mtime,
-                        rev: format!("1-{}", remote_id.as_str()),
-                    };
-
-                    self.remote.add_node(remote_node.clone(), Some(content));
-                    self.store
-                        .insert_remote_node(&remote_node)
-                        .map_err(|e| e.to_string())?;
-
-                    let synced = SyncedRecord {
-                        local_id: local_id.clone(),
-                        remote_id: remote_id.clone(),
-                        rel_path: local_node.name.clone(),
-                        md5sum: Some(expected_md5),
-                        size: local_node.size,
-                        rev: remote_node.rev,
-                        node_type: local_node.node_type,
-                        local_name: Some(local_node.name),
-                        local_parent_id: local_node.parent_id,
-                        remote_name: Some(remote_node.name),
-                        remote_parent_id: remote_node.parent_id,
-                    };
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                    self.remote_to_local.insert(remote_id, local_id);
-                }
-            }
+                ..
+            } => self.execute_upload_new(&local_id, &parent_remote_id, &name, &expected_md5),
             SyncOp::CreateRemoteDir {
                 local_id,
-                local_path: _,
                 parent_remote_id,
                 name,
-            } => {
-                if let Some(local_node) = self.local_fs.get_node(&local_id).cloned() {
-                    let remote_id =
-                        RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
-
-                    let remote_node = RemoteNode {
-                        id: remote_id.clone(),
-                        parent_id: Some(parent_remote_id),
-                        name,
-                        node_type: NodeType::Directory,
-                        md5sum: None,
-                        size: None,
-                        updated_at: local_node.mtime,
-                        rev: format!("1-{}", remote_id.as_str()),
-                    };
-
-                    self.remote.add_node(remote_node.clone(), None);
-                    self.store
-                        .insert_remote_node(&remote_node)
-                        .map_err(|e| e.to_string())?;
-
-                    let synced = SyncedRecord {
-                        local_id: local_id.clone(),
-                        remote_id: remote_id.clone(),
-                        rel_path: local_node.name.clone(),
-                        md5sum: None,
-                        size: None,
-                        rev: remote_node.rev,
-                        node_type: NodeType::Directory,
-                        local_name: Some(local_node.name),
-                        local_parent_id: local_node.parent_id,
-                        remote_name: Some(remote_node.name),
-                        remote_parent_id: remote_node.parent_id,
-                    };
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                    self.remote_to_local.insert(remote_id, local_id);
-                }
-            }
-            SyncOp::DeleteLocal {
-                local_id,
-                local_path: _,
-                expected_md5: _,
-            } => {
-                if let Some(synced) = self.store.get_synced_by_local(&local_id).ok().flatten() {
-                    self.remote_to_local.remove(&synced.remote_id);
-                }
-                self.local_fs.delete(&local_id);
-                self.store
-                    .delete_local_node(&local_id)
-                    .map_err(|e| e.to_string())?;
-                self.store
-                    .delete_synced(&local_id)
-                    .map_err(|e| e.to_string())?;
-            }
-            SyncOp::DeleteRemote {
-                remote_id,
-                expected_rev: _,
-            } => {
-                self.remote.delete_node(&remote_id);
-                self.store
-                    .delete_remote_node(&remote_id)
-                    .map_err(|e| e.to_string())?;
-                if let Some(local_id) = self.remote_to_local.remove(&remote_id) {
-                    self.store
-                        .delete_synced(&local_id)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
-            SyncOp::MoveLocal {
-                local_id,
-                from_path: _,
-                to_path: _,
-                expected_parent_id: _,
-                expected_name: _,
-            } => {
-                if let Some(remote_node) = self
-                    .store
-                    .get_synced_by_local(&local_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| self.remote.get_node(&s.remote_id).cloned())
-                {
-                    let new_parent_local = remote_node
-                        .parent_id
-                        .as_ref()
-                        .and_then(|pid| self.remote_to_local.get(pid).cloned());
-                    self.local_fs.move_node(
-                        &local_id,
-                        new_parent_local.clone(),
-                        remote_node.name.clone(),
-                    );
-                    if let Some(node) = self.local_fs.get_node(&local_id).cloned() {
-                        self.store
-                            .insert_local_node(&node)
-                            .map_err(|e| e.to_string())?;
-                    }
-                    if let Some(mut synced) =
-                        self.store.get_synced_by_local(&local_id).ok().flatten()
-                    {
-                        synced.local_name = Some(remote_node.name.clone());
-                        synced.local_parent_id = new_parent_local;
-                        synced.remote_name = Some(remote_node.name);
-                        synced.remote_parent_id = remote_node.parent_id;
-                        synced.rel_path = self
-                            .local_fs
-                            .get_node(&local_id)
-                            .map(|n| n.name.clone())
-                            .unwrap_or_default();
-                        self.store
-                            .insert_synced(&synced)
-                            .map_err(|e| e.to_string())?;
-                    }
-                }
-            }
+                ..
+            } => self.execute_create_remote_dir(&local_id, &parent_remote_id, &name),
+            SyncOp::DeleteLocal { local_id, .. } => self.execute_delete_local(&local_id),
+            SyncOp::DeleteRemote { remote_id, .. } => self.execute_delete_remote(&remote_id),
+            SyncOp::MoveLocal { local_id, .. } => self.execute_move_local(&local_id),
             SyncOp::MoveRemote {
                 remote_id,
                 new_parent_id,
                 new_name,
-                expected_rev: _,
-            } => {
-                self.remote
-                    .move_node(&remote_id, new_parent_id.clone(), new_name.clone());
-                if let Some(node) = self.remote.get_node(&remote_id).cloned() {
-                    self.store
-                        .insert_remote_node(&node)
-                        .map_err(|e| e.to_string())?;
-                }
-                if let Some(mut synced) = self.store.get_synced_by_remote(&remote_id).ok().flatten()
-                {
-                    synced.remote_name = Some(new_name);
-                    synced.remote_parent_id = Some(new_parent_id);
-                    if let Some(local_node) = self.local_fs.get_node(&synced.local_id) {
-                        synced.local_name = Some(local_node.name.clone());
-                        synced.local_parent_id = local_node.parent_id.clone();
-                    }
-                    synced.rel_path = self
-                        .local_fs
-                        .get_node(&synced.local_id)
-                        .map(|n| n.name.clone())
-                        .unwrap_or_default();
-                    self.store
-                        .insert_synced(&synced)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
+                ..
+            } => self.execute_move_remote(&remote_id, &new_parent_id, &new_name),
             SyncOp::DownloadUpdate {
                 remote_id,
                 local_id,
-                local_path: _,
-                expected_rev: _,
-                expected_remote_md5: _,
-                expected_local_md5: _,
-            } => {
-                if let Some(remote_node) = self.remote.get_node(&remote_id).cloned() {
-                    let content = self
-                        .remote
-                        .get_content(&remote_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    if let Some(mut local_node) = self.local_fs.get_node(&local_id).cloned() {
-                        local_node.md5sum.clone_from(&remote_node.md5sum);
-                        local_node.size = remote_node.size;
-                        local_node.mtime = remote_node.updated_at;
-                        self.local_fs
-                            .create_file(local_id.clone(), local_node, content);
-                        if let Some(node) = self.local_fs.get_node(&local_id).cloned() {
-                            self.store
-                                .insert_local_node(&node)
-                                .map_err(|e| e.to_string())?;
-                        }
-                    }
-                    if let Some(mut synced) =
-                        self.store.get_synced_by_local(&local_id).ok().flatten()
-                    {
-                        synced.md5sum = remote_node.md5sum;
-                        synced.size = remote_node.size;
-                        synced.rev = remote_node.rev;
-                        self.store
-                            .insert_synced(&synced)
-                            .map_err(|e| e.to_string())?;
-                    }
-                }
-            }
+                ..
+            } => self.execute_download_update(&remote_id, &local_id),
             SyncOp::UploadUpdate {
                 local_id,
                 remote_id,
-                local_path: _,
-                expected_local_md5: _,
-                expected_rev: _,
-            } => {
-                if let Some(local_node) = self.local_fs.get_node(&local_id).cloned() {
-                    let content = self
-                        .local_fs
-                        .read_file(&local_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    if let Some(mut remote_node) = self.remote.get_node(&remote_id).cloned() {
-                        remote_node.md5sum.clone_from(&local_node.md5sum);
-                        remote_node.size = local_node.size;
-                        remote_node.updated_at = local_node.mtime;
-                        let rev_num: u32 = remote_node
-                            .rev
-                            .split('-')
-                            .next()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(1);
-                        remote_node.rev = format!("{}-{}", rev_num + 1, remote_id.as_str());
-                        self.remote.add_node(remote_node.clone(), Some(content));
-                        self.store
-                            .insert_remote_node(&remote_node)
-                            .map_err(|e| e.to_string())?;
-                    }
-                    if let Some(mut synced) =
-                        self.store.get_synced_by_local(&local_id).ok().flatten()
-                    {
-                        synced.md5sum = local_node.md5sum;
-                        synced.size = local_node.size;
-                        self.store
-                            .insert_synced(&synced)
-                            .map_err(|e| e.to_string())?;
-                    }
-                }
+                ..
+            } => self.execute_upload_update(&local_id, &remote_id),
+        }
+    }
+
+    fn execute_download_new(&mut self, remote_id: &RemoteId) -> Result<(), String> {
+        let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
+            return Ok(());
+        };
+        let local_id = next_local_id();
+        let content = self
+            .remote
+            .get_content(remote_id)
+            .cloned()
+            .unwrap_or_default();
+
+        let local_node = LocalNode {
+            id: local_id.clone(),
+            parent_id: remote_node
+                .parent_id
+                .as_ref()
+                .and_then(|pid| self.remote_to_local.get(pid).cloned()),
+            name: remote_node.name.clone(),
+            node_type: remote_node.node_type,
+            md5sum: remote_node.md5sum.clone(),
+            size: remote_node.size,
+            mtime: remote_node.updated_at,
+        };
+
+        self.local_fs
+            .create_file(local_id.clone(), local_node.clone(), content);
+        self.store
+            .insert_local_node(&local_node)
+            .map_err(|e| e.to_string())?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path: remote_node.name.clone(),
+            md5sum: remote_node.md5sum.clone(),
+            size: remote_node.size,
+            rev: remote_node.rev.clone(),
+            node_type: remote_node.node_type,
+            local_name: Some(local_node.name.clone()),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name.clone()),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
+        self.remote_to_local.insert(remote_id.clone(), local_id);
+        Ok(())
+    }
+
+    fn execute_create_local_dir(&mut self, remote_id: &RemoteId) -> Result<(), String> {
+        let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
+            return Ok(());
+        };
+        let local_id = next_local_id();
+
+        let local_node = LocalNode {
+            id: local_id.clone(),
+            parent_id: remote_node
+                .parent_id
+                .as_ref()
+                .and_then(|pid| self.remote_to_local.get(pid).cloned()),
+            name: remote_node.name.clone(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: remote_node.updated_at,
+        };
+
+        self.local_fs
+            .create_dir(local_id.clone(), local_node.clone());
+        self.store
+            .insert_local_node(&local_node)
+            .map_err(|e| e.to_string())?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path: remote_node.name.clone(),
+            md5sum: None,
+            size: None,
+            rev: remote_node.rev,
+            node_type: NodeType::Directory,
+            local_name: Some(local_node.name.clone()),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
+        self.remote_to_local.insert(remote_id.clone(), local_id);
+        Ok(())
+    }
+
+    fn execute_upload_new(
+        &mut self,
+        local_id: &LocalFileId,
+        parent_remote_id: &RemoteId,
+        name: &str,
+        expected_md5: &str,
+    ) -> Result<(), String> {
+        let Some(local_node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        let content = self
+            .local_fs
+            .read_file(local_id)
+            .cloned()
+            .unwrap_or_default();
+        let remote_id = RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
+
+        let remote_node = RemoteNode {
+            id: remote_id.clone(),
+            parent_id: Some(parent_remote_id.clone()),
+            name: name.to_string(),
+            node_type: local_node.node_type,
+            md5sum: Some(expected_md5.to_string()),
+            size: local_node.size,
+            updated_at: local_node.mtime,
+            rev: format!("1-{}", remote_id.as_str()),
+        };
+
+        self.remote.add_node(remote_node.clone(), Some(content));
+        self.store
+            .insert_remote_node(&remote_node)
+            .map_err(|e| e.to_string())?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path: local_node.name.clone(),
+            md5sum: Some(expected_md5.to_string()),
+            size: local_node.size,
+            rev: remote_node.rev,
+            node_type: local_node.node_type,
+            local_name: Some(local_node.name),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
+        self.remote_to_local.insert(remote_id, local_id.clone());
+        Ok(())
+    }
+
+    fn execute_create_remote_dir(
+        &mut self,
+        local_id: &LocalFileId,
+        parent_remote_id: &RemoteId,
+        name: &str,
+    ) -> Result<(), String> {
+        let Some(local_node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        let remote_id = RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
+
+        let remote_node = RemoteNode {
+            id: remote_id.clone(),
+            parent_id: Some(parent_remote_id.clone()),
+            name: name.to_string(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: local_node.mtime,
+            rev: format!("1-{}", remote_id.as_str()),
+        };
+
+        self.remote.add_node(remote_node.clone(), None);
+        self.store
+            .insert_remote_node(&remote_node)
+            .map_err(|e| e.to_string())?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path: local_node.name.clone(),
+            md5sum: None,
+            size: None,
+            rev: remote_node.rev,
+            node_type: NodeType::Directory,
+            local_name: Some(local_node.name),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
+        self.remote_to_local.insert(remote_id, local_id.clone());
+        Ok(())
+    }
+
+    fn execute_delete_local(&mut self, local_id: &LocalFileId) -> Result<(), String> {
+        if let Some(synced) = self.store.get_synced_by_local(local_id).ok().flatten() {
+            self.remote_to_local.remove(&synced.remote_id);
+        }
+        self.local_fs.delete(local_id);
+        self.store
+            .delete_local_node(local_id)
+            .map_err(|e| e.to_string())?;
+        self.store
+            .delete_synced(local_id)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn execute_delete_remote(&mut self, remote_id: &RemoteId) -> Result<(), String> {
+        self.remote.delete_node(remote_id);
+        self.store
+            .delete_remote_node(remote_id)
+            .map_err(|e| e.to_string())?;
+        if let Some(local_id) = self.remote_to_local.remove(remote_id) {
+            self.store
+                .delete_synced(&local_id)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn execute_move_local(&mut self, local_id: &LocalFileId) -> Result<(), String> {
+        let Some(remote_node) = self
+            .store
+            .get_synced_by_local(local_id)
+            .ok()
+            .flatten()
+            .and_then(|s| self.remote.get_node(&s.remote_id).cloned())
+        else {
+            return Ok(());
+        };
+        let new_parent_local = remote_node
+            .parent_id
+            .as_ref()
+            .and_then(|pid| self.remote_to_local.get(pid).cloned());
+        self.local_fs
+            .move_node(local_id, new_parent_local.clone(), remote_node.name.clone());
+        if let Some(node) = self.local_fs.get_node(local_id).cloned() {
+            self.store
+                .insert_local_node(&node)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(mut synced) = self.store.get_synced_by_local(local_id).ok().flatten() {
+            synced.local_name = Some(remote_node.name.clone());
+            synced.local_parent_id = new_parent_local;
+            synced.remote_name = Some(remote_node.name);
+            synced.remote_parent_id = remote_node.parent_id;
+            synced.rel_path = self
+                .local_fs
+                .get_node(local_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            self.store
+                .insert_synced(&synced)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn execute_move_remote(
+        &mut self,
+        remote_id: &RemoteId,
+        new_parent_id: &RemoteId,
+        new_name: &str,
+    ) -> Result<(), String> {
+        self.remote
+            .move_node(remote_id, new_parent_id.clone(), new_name.to_string());
+        if let Some(node) = self.remote.get_node(remote_id).cloned() {
+            self.store
+                .insert_remote_node(&node)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(mut synced) = self.store.get_synced_by_remote(remote_id).ok().flatten() {
+            synced.remote_name = Some(new_name.to_string());
+            synced.remote_parent_id = Some(new_parent_id.clone());
+            if let Some(local_node) = self.local_fs.get_node(&synced.local_id) {
+                synced.local_name = Some(local_node.name.clone());
+                synced.local_parent_id = local_node.parent_id.clone();
             }
+            synced.rel_path = self
+                .local_fs
+                .get_node(&synced.local_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            self.store
+                .insert_synced(&synced)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn execute_download_update(
+        &mut self,
+        remote_id: &RemoteId,
+        local_id: &LocalFileId,
+    ) -> Result<(), String> {
+        let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
+            return Ok(());
+        };
+        let content = self
+            .remote
+            .get_content(remote_id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(mut local_node) = self.local_fs.get_node(local_id).cloned() {
+            local_node.md5sum.clone_from(&remote_node.md5sum);
+            local_node.size = remote_node.size;
+            local_node.mtime = remote_node.updated_at;
+            self.local_fs
+                .create_file(local_id.clone(), local_node, content);
+            if let Some(node) = self.local_fs.get_node(local_id).cloned() {
+                self.store
+                    .insert_local_node(&node)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(mut synced) = self.store.get_synced_by_local(local_id).ok().flatten() {
+            synced.md5sum = remote_node.md5sum;
+            synced.size = remote_node.size;
+            synced.rev = remote_node.rev;
+            self.store
+                .insert_synced(&synced)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn execute_upload_update(
+        &mut self,
+        local_id: &LocalFileId,
+        remote_id: &RemoteId,
+    ) -> Result<(), String> {
+        let Some(local_node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        let content = self
+            .local_fs
+            .read_file(local_id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(mut remote_node) = self.remote.get_node(remote_id).cloned() {
+            remote_node.md5sum.clone_from(&local_node.md5sum);
+            remote_node.size = local_node.size;
+            remote_node.updated_at = local_node.mtime;
+            let rev_num: u32 = remote_node
+                .rev
+                .split('-')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+            remote_node.rev = format!("{}-{}", rev_num + 1, remote_id.as_str());
+            self.remote.add_node(remote_node.clone(), Some(content));
+            self.store
+                .insert_remote_node(&remote_node)
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(mut synced) = self.store.get_synced_by_local(local_id).ok().flatten() {
+            synced.md5sum = local_node.md5sum;
+            synced.size = local_node.size;
+            self.store
+                .insert_synced(&synced)
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }

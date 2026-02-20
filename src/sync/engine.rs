@@ -142,41 +142,22 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    #[allow(clippy::too_many_lines)]
     pub async fn execute_op_async(&mut self, client: &CozyClient, op: &SyncOp) -> Result<()> {
         match op {
-            SyncOp::CreateLocalDir {
-                remote_id,
-                local_path,
-            } => self.execute_create_local_dir(remote_id, local_path),
+            SyncOp::CreateLocalDir { .. }
+            | SyncOp::DeleteLocal { .. }
+            | SyncOp::MoveLocal { .. } => self.execute_op(op),
 
-            SyncOp::DeleteLocal {
-                local_id,
-                local_path,
-                expected_md5,
-            } => self.execute_delete_local(local_id, local_path, expected_md5.as_deref()),
-
-            SyncOp::DeleteRemote {
-                remote_id,
-                expected_rev: _,
-            } => {
+            SyncOp::DeleteRemote { remote_id, .. } => {
                 client.trash(remote_id).await?;
                 self.execute_delete_remote(remote_id)
             }
 
-            SyncOp::MoveLocal {
-                local_id,
-                from_path,
-                to_path,
-                expected_parent_id: _,
-                expected_name: _,
-            } => self.execute_move_local(local_id, from_path, to_path),
-
             SyncOp::DownloadNew {
                 remote_id,
                 local_path,
-                expected_rev: _,
                 expected_md5,
+                ..
             } => {
                 self.execute_download_new(client, remote_id, local_path, expected_md5)
                     .await
@@ -186,9 +167,9 @@ impl SyncEngine {
                 remote_id,
                 local_id,
                 local_path,
-                expected_rev: _,
                 expected_remote_md5,
                 expected_local_md5,
+                ..
             } => {
                 self.execute_download_update(
                     client,
@@ -251,18 +232,10 @@ impl SyncEngine {
                 remote_id,
                 new_parent_id,
                 new_name,
-                expected_rev: _,
+                ..
             } => {
-                let updated = client.move_node(remote_id, new_parent_id, new_name).await?;
-                self.store.insert_remote_node(&updated)?;
-                if let Some(mut synced) = self.store.get_synced_by_remote(remote_id)? {
-                    synced.remote_name = Some(updated.name);
-                    synced.remote_parent_id = updated.parent_id;
-                    synced.rev = updated.rev;
-                    self.store.insert_synced(&synced)?;
-                }
-                self.store.flush()?;
-                Ok(())
+                self.execute_move_remote(client, remote_id, new_parent_id, new_name)
+                    .await
             }
         }
     }
@@ -465,6 +438,30 @@ impl SyncEngine {
             self.store.delete_synced(&synced.local_id)?;
         }
 
+        self.store.flush()?;
+        Ok(())
+    }
+
+    async fn execute_move_remote(
+        &self,
+        client: &CozyClient,
+        remote_id: &RemoteId,
+        new_parent_id: &RemoteId,
+        new_name: &str,
+    ) -> Result<()> {
+        tracing::info!(
+            remote_id = remote_id.as_str(),
+            new_name,
+            "📦 Moving remote node"
+        );
+        let updated = client.move_node(remote_id, new_parent_id, new_name).await?;
+        self.store.insert_remote_node(&updated)?;
+        if let Some(mut synced) = self.store.get_synced_by_remote(remote_id)? {
+            synced.remote_name = Some(updated.name);
+            synced.remote_parent_id = updated.parent_id;
+            synced.rev = updated.rev;
+            self.store.insert_synced(&synced)?;
+        }
         self.store.flush()?;
         Ok(())
     }
