@@ -897,6 +897,97 @@ fn simulation_runner_remote_rename_then_sync() {
     runner.check_convergence().unwrap();
 }
 
+#[test]
+fn simulation_runner_local_move_dir_then_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Create root on remote and sync
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create two dirs locally: root -> docs, root -> archive
+    let docs_id = LocalFileId::new(1, 30_000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: docs_id.clone(),
+            parent_local_id: Some(root_local_id.clone()),
+            name: "docs".to_string(),
+        })
+        .unwrap();
+
+    let archive_id = LocalFileId::new(1, 30_001);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: archive_id.clone(),
+            parent_local_id: Some(root_local_id.clone()),
+            name: "archive".to_string(),
+        })
+        .unwrap();
+
+    // Create a file inside docs
+    let file_id = LocalFileId::new(1, 30_002);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_id,
+            parent_local_id: Some(docs_id.clone()),
+            name: "readme.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    // Sync everything
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move docs dir into archive (rename to "old-docs")
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: docs_id,
+            new_parent_local_id: Some(archive_id),
+            new_name: "old-docs".to_string(),
+        })
+        .unwrap();
+
+    // Sync the move
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Remote should reflect the moved directory
+    let remote_dirs: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "old-docs")
+        .collect();
+    assert_eq!(remote_dirs.len(), 1, "Moved dir should exist on remote");
+
+    let old_dirs: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "docs")
+        .collect();
+    assert_eq!(old_dirs.len(), 0, "Old dir name should be gone on remote");
+
+    runner.check_convergence().unwrap();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(50))]
 
@@ -1834,6 +1925,10 @@ enum ActionChoice {
         idx: usize,
         new_name: String,
     },
+    LocalMoveDir {
+        idx: usize,
+        new_name: String,
+    },
     LocalDeleteDir {
         idx: usize,
     },
@@ -1887,6 +1982,8 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
         ),
         (any::<usize>(), arbitrary_file_name())
             .prop_map(|(idx, new_name)| ActionChoice::RemoteMoveDir { idx, new_name }),
+        (any::<usize>(), arbitrary_file_name())
+            .prop_map(|(idx, new_name)| ActionChoice::LocalMoveDir { idx, new_name }),
         any::<usize>().prop_map(|idx| ActionChoice::LocalDeleteDir { idx }),
         any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteDir { idx }),
     ]
@@ -2069,6 +2166,20 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             SimAction::RemoteMove {
                 id,
                 new_parent_id: new_parent,
+                new_name: new_name.clone(),
+            }
+        }
+        ActionChoice::LocalMoveDir { idx, new_name } => {
+            if state.local_dir_ids.len() <= 1 {
+                return SimAction::Sync;
+            }
+            let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
+            let id = non_root[idx % non_root.len()].clone();
+            let new_parent = state.local_dir_ids[0].clone();
+            state.local_parents.insert(id.clone(), new_parent.clone());
+            SimAction::LocalMove {
+                local_id: id,
+                new_parent_local_id: Some(new_parent),
                 new_name: new_name.clone(),
             }
         }
