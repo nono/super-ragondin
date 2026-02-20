@@ -9,15 +9,6 @@ use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Atomic counter for generating unique local file IDs in simulation
-static INODE_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-fn next_local_id() -> LocalFileId {
-    LocalFileId::new(1, INODE_COUNTER.fetch_add(1, Ordering::SeqCst))
-}
-
 fn compute_md5(content: &[u8]) -> String {
     compute_md5_from_bytes(content)
 }
@@ -32,6 +23,8 @@ pub struct SimulationRunner {
     /// Maps `RemoteId` -> `LocalFileId` for synced files
     pub remote_to_local: std::collections::HashMap<RemoteId, LocalFileId>,
     stopped: bool,
+    /// Per-instance counter for generating unique local file IDs
+    inode_counter: u64,
 }
 
 /// Actions that can be simulated
@@ -99,7 +92,13 @@ impl SimulationRunner {
             last_seq: 0,
             remote_to_local: std::collections::HashMap::new(),
             stopped: false,
+            inode_counter: 0,
         }
+    }
+
+    const fn next_local_id(&mut self) -> LocalFileId {
+        self.inode_counter += 1;
+        LocalFileId::new(1, self.inode_counter)
     }
 
     /// Apply a simulation action
@@ -399,7 +398,7 @@ impl SimulationRunner {
     }
 
     fn bind_root_directory(&mut self, node: &RemoteNode) -> Result<(), String> {
-        let local_id = next_local_id();
+        let local_id = self.next_local_id();
         let local_node = LocalNode {
             id: local_id.clone(),
             parent_id: None,
@@ -546,7 +545,7 @@ impl SimulationRunner {
         let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
             return Ok(());
         };
-        let local_id = next_local_id();
+        let local_id = self.next_local_id();
         let content = self
             .remote
             .get_content(remote_id)
@@ -596,7 +595,7 @@ impl SimulationRunner {
         let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
             return Ok(());
         };
-        let local_id = next_local_id();
+        let local_id = self.next_local_id();
 
         let local_node = LocalNode {
             id: local_id.clone(),
