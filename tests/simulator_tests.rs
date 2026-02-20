@@ -1054,7 +1054,7 @@ proptest! {
 
     #[test]
     fn prop_arbitrary_action_sequence_converges(
-        seed in prop::collection::vec(any::<u8>(), 150..500)
+        choices in prop::collection::vec(arbitrary_action_choice(), 5..50)
     ) {
         let dir = tempdir().unwrap();
         let store = TreeStore::open(dir.path()).unwrap();
@@ -1077,7 +1077,7 @@ proptest! {
             .unwrap();
 
         let mut sim_state = SimState::new(root_local_id);
-        let actions = generate_valid_action_sequence(&seed, 50, &mut sim_state);
+        let actions = resolve_action_choices(&choices, &mut sim_state);
 
         // Apply the generated action sequence
         for action in &actions {
@@ -1096,8 +1096,8 @@ proptest! {
 
     #[test]
     fn prop_multi_sync_round_converges(
-        seeds in prop::collection::vec(
-            prop::collection::vec(any::<u8>(), 30..100),
+        rounds in prop::collection::vec(
+            prop::collection::vec(arbitrary_action_choice(), 2..15),
             3..8
         )
     ) {
@@ -1121,10 +1121,10 @@ proptest! {
             .map(|n| n.id.clone())
             .unwrap();
 
-        // Run multiple rounds: generate actions, apply them, then sync
+        // Run multiple rounds: resolve actions, apply them, then sync
         let mut sim_state = SimState::new(root_local_id);
-        for round_seed in &seeds {
-            let actions = generate_valid_action_sequence(round_seed, 15, &mut sim_state);
+        for round_choices in &rounds {
+            let actions = resolve_action_choices(round_choices, &mut sim_state);
 
             for action in &actions {
                 runner.apply(action.clone()).unwrap();
@@ -1783,210 +1783,312 @@ impl SimState {
     }
 }
 
-fn pick<T: Clone>(items: &[T], byte: u8) -> T {
-    items[byte as usize % items.len()].clone()
+#[derive(Debug, Clone)]
+enum ActionChoice {
+    RemoteCreateFile {
+        parent_idx: usize,
+        name: String,
+        content: Vec<u8>,
+    },
+    RemoteDeleteFile {
+        idx: usize,
+    },
+    RemoteModifyFile {
+        idx: usize,
+        content: Vec<u8>,
+    },
+    RemoteMoveFile {
+        idx: usize,
+        parent_idx: usize,
+        new_name: String,
+    },
+    LocalCreateFile {
+        parent_idx: usize,
+        name: String,
+        content: Vec<u8>,
+    },
+    LocalDeleteFile {
+        idx: usize,
+    },
+    LocalModifyFile {
+        idx: usize,
+        content: Vec<u8>,
+    },
+    Sync,
+    StopClient,
+    RestartClient,
+    RemoteCreateDir {
+        parent_idx: usize,
+        name: String,
+    },
+    LocalCreateDir {
+        parent_idx: usize,
+        name: String,
+    },
+    LocalMoveFile {
+        idx: usize,
+        parent_idx: usize,
+        new_name: String,
+    },
+    RemoteMoveDir {
+        idx: usize,
+        new_name: String,
+    },
+    LocalDeleteDir {
+        idx: usize,
+    },
+    RemoteDeleteDir {
+        idx: usize,
+    },
 }
 
-fn name_from_bytes(b1: u8, b2: u8) -> String {
-    let len = (b1 % 6) as usize + 1;
-    let chars: String = (0..len)
-        .map(|i| {
-            let v = b2.wrapping_add(i as u8) % 26;
-            (b'a' + v) as char
-        })
-        .collect();
-    format!("{chars}.txt")
+fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
+    prop_oneof![
+        (any::<usize>(), arbitrary_file_name(), arbitrary_content()).prop_map(
+            |(parent_idx, name, content)| ActionChoice::RemoteCreateFile {
+                parent_idx,
+                name,
+                content,
+            }
+        ),
+        any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteFile { idx }),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::RemoteModifyFile { idx, content }),
+        (any::<usize>(), any::<usize>(), arbitrary_file_name()).prop_map(
+            |(idx, parent_idx, new_name)| ActionChoice::RemoteMoveFile {
+                idx,
+                parent_idx,
+                new_name,
+            }
+        ),
+        (any::<usize>(), arbitrary_file_name(), arbitrary_content()).prop_map(
+            |(parent_idx, name, content)| ActionChoice::LocalCreateFile {
+                parent_idx,
+                name,
+                content,
+            }
+        ),
+        any::<usize>().prop_map(|idx| ActionChoice::LocalDeleteFile { idx }),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::LocalModifyFile { idx, content }),
+        Just(ActionChoice::Sync),
+        Just(ActionChoice::StopClient),
+        Just(ActionChoice::RestartClient),
+        (any::<usize>(), arbitrary_file_name())
+            .prop_map(|(parent_idx, name)| ActionChoice::RemoteCreateDir { parent_idx, name }),
+        (any::<usize>(), arbitrary_file_name())
+            .prop_map(|(parent_idx, name)| ActionChoice::LocalCreateDir { parent_idx, name }),
+        (any::<usize>(), any::<usize>(), arbitrary_file_name()).prop_map(
+            |(idx, parent_idx, new_name)| ActionChoice::LocalMoveFile {
+                idx,
+                parent_idx,
+                new_name,
+            }
+        ),
+        (any::<usize>(), arbitrary_file_name())
+            .prop_map(|(idx, new_name)| ActionChoice::RemoteMoveDir { idx, new_name }),
+        any::<usize>().prop_map(|idx| ActionChoice::LocalDeleteDir { idx }),
+        any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteDir { idx }),
+    ]
 }
 
-fn generate_valid_action_sequence(
-    seed: &[u8],
-    max_actions: usize,
-    state: &mut SimState,
-) -> Vec<SimAction> {
-    let mut actions = Vec::new();
-    let mut cursor = 0;
+fn resolve_action_choices(choices: &[ActionChoice], state: &mut SimState) -> Vec<SimAction> {
+    choices
+        .iter()
+        .map(|c| resolve_single_action(c, state))
+        .collect()
+}
 
-    let read = |cursor: &mut usize| -> u8 {
-        if *cursor < seed.len() {
-            let v = seed[*cursor];
-            *cursor += 1;
-            v
-        } else {
-            0
+fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimAction {
+    match choice {
+        ActionChoice::RemoteCreateFile {
+            parent_idx,
+            name,
+            content,
+        } => {
+            if state.remote_dir_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.next_remote_id();
+            let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
+            state.remote_file_ids.push(id.clone());
+            state.remote_parents.insert(id.clone(), parent.clone());
+            SimAction::RemoteCreateFile {
+                id,
+                parent_id: parent,
+                name: name.clone(),
+                content: content.clone(),
+            }
         }
-    };
-
-    for _ in 0..max_actions {
-        if cursor >= seed.len() {
-            break;
+        ActionChoice::RemoteDeleteFile { idx } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            state.remote_file_ids.retain(|x| x != &id);
+            SimAction::RemoteDeleteFile { id }
         }
-
-        let action_type = read(&mut cursor);
-
-        let has_remote_files = !state.remote_file_ids.is_empty();
-        let has_local_files = !state.local_file_ids.is_empty();
-        let has_remote_dirs = !state.remote_dir_ids.is_empty();
-
-        let has_local_dirs = !state.local_dir_ids.is_empty();
-
-        let has_non_root_remote_dirs = state.remote_dir_ids.len() > 1;
-        let has_non_root_local_dirs = state.local_dir_ids.len() > 1;
-
-        let action = match action_type % 16 {
-            0 if has_remote_dirs => {
-                let id = state.next_remote_id();
-                let parent = pick(&state.remote_dir_ids, read(&mut cursor));
-                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                let content_len = (read(&mut cursor) % 20) as usize + 1;
-                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
-                state.remote_file_ids.push(id.clone());
-                state.remote_parents.insert(id.clone(), parent.clone());
-                SimAction::RemoteCreateFile {
-                    id,
-                    parent_id: parent,
-                    name,
-                    content,
-                }
+        ActionChoice::RemoteModifyFile { idx, content } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
             }
-            1 if has_remote_files => {
-                let id = pick(&state.remote_file_ids, read(&mut cursor));
-                state.remote_file_ids.retain(|x| x != &id);
-                SimAction::RemoteDeleteFile { id }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            SimAction::RemoteModifyFile {
+                id,
+                content: content.clone(),
             }
-            2 if has_remote_files => {
-                let id = pick(&state.remote_file_ids, read(&mut cursor));
-                let content_len = (read(&mut cursor) % 20) as usize + 1;
-                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
-                SimAction::RemoteModifyFile { id, content }
+        }
+        ActionChoice::RemoteMoveFile {
+            idx,
+            parent_idx,
+            new_name,
+        } => {
+            if state.remote_file_ids.is_empty() || state.remote_dir_ids.is_empty() {
+                return SimAction::Sync;
             }
-            3 if has_remote_files && has_remote_dirs => {
-                let id = pick(&state.remote_file_ids, read(&mut cursor));
-                let new_parent = pick(&state.remote_dir_ids, read(&mut cursor));
-                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                state.remote_parents.insert(id.clone(), new_parent.clone());
-                SimAction::RemoteMove {
-                    id,
-                    new_parent_id: new_parent,
-                    new_name,
-                }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            let new_parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
+            state.remote_parents.insert(id.clone(), new_parent.clone());
+            SimAction::RemoteMove {
+                id,
+                new_parent_id: new_parent,
+                new_name: new_name.clone(),
             }
-            4 => {
-                let local_id = state.next_local_file_id();
-                let parent = if state.local_dir_ids.is_empty() {
-                    None
-                } else {
-                    Some(pick(&state.local_dir_ids, read(&mut cursor)))
-                };
-                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                let content_len = (read(&mut cursor) % 20) as usize + 1;
-                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
-                state.local_file_ids.push(local_id.clone());
-                if let Some(ref p) = parent {
-                    state.local_parents.insert(local_id.clone(), p.clone());
-                }
-                SimAction::LocalCreateFile {
-                    local_id,
-                    parent_local_id: parent,
-                    name,
-                    content,
-                }
+        }
+        ActionChoice::LocalCreateFile {
+            parent_idx,
+            name,
+            content,
+        } => {
+            let local_id = state.next_local_file_id();
+            let parent = if state.local_dir_ids.is_empty() {
+                None
+            } else {
+                Some(state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone())
+            };
+            state.local_file_ids.push(local_id.clone());
+            if let Some(ref p) = parent {
+                state.local_parents.insert(local_id.clone(), p.clone());
             }
-            5 if has_local_files => {
-                let id = pick(&state.local_file_ids, read(&mut cursor));
-                state.local_file_ids.retain(|x| x != &id);
-                SimAction::LocalDeleteFile { local_id: id }
+            SimAction::LocalCreateFile {
+                local_id,
+                parent_local_id: parent,
+                name: name.clone(),
+                content: content.clone(),
             }
-            6 if has_local_files => {
-                let id = pick(&state.local_file_ids, read(&mut cursor));
-                let content_len = (read(&mut cursor) % 20) as usize + 1;
-                let content: Vec<u8> = (0..content_len).map(|_| read(&mut cursor)).collect();
-                SimAction::LocalModifyFile {
-                    local_id: id,
-                    content,
-                }
+        }
+        ActionChoice::LocalDeleteFile { idx } => {
+            if state.local_file_ids.is_empty() {
+                return SimAction::Sync;
             }
-            7 => SimAction::Sync,
-            8 if !state.stopped => {
-                state.stopped = true;
-                SimAction::StopClient
+            let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
+            state.local_file_ids.retain(|x| x != &id);
+            SimAction::LocalDeleteFile { local_id: id }
+        }
+        ActionChoice::LocalModifyFile { idx, content } => {
+            if state.local_file_ids.is_empty() {
+                return SimAction::Sync;
             }
-            9 if state.stopped => {
-                state.stopped = false;
-                SimAction::RestartClient
+            let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
+            SimAction::LocalModifyFile {
+                local_id: id,
+                content: content.clone(),
             }
-            10 if has_remote_dirs => {
-                let id = state.next_remote_id();
-                let parent = pick(&state.remote_dir_ids, read(&mut cursor));
-                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                state.remote_dir_ids.push(id.clone());
-                state.remote_parents.insert(id.clone(), parent.clone());
-                SimAction::RemoteCreateDir {
-                    id,
-                    parent_id: Some(parent),
-                    name,
-                }
+        }
+        ActionChoice::Sync => SimAction::Sync,
+        ActionChoice::StopClient => {
+            if state.stopped {
+                return SimAction::Sync;
             }
-            11 => {
-                let local_id = state.next_local_file_id();
-                let parent = if state.local_dir_ids.is_empty() {
-                    None
-                } else {
-                    Some(pick(&state.local_dir_ids, read(&mut cursor)))
-                };
-                let name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                state.local_dir_ids.push(local_id.clone());
-                if let Some(ref p) = parent {
-                    state.local_parents.insert(local_id.clone(), p.clone());
-                }
-                SimAction::LocalCreateDir {
-                    local_id,
-                    parent_local_id: parent,
-                    name,
-                }
+            state.stopped = true;
+            SimAction::StopClient
+        }
+        ActionChoice::RestartClient => {
+            if !state.stopped {
+                return SimAction::Sync;
             }
-            12 if has_local_files && has_local_dirs => {
-                let id = pick(&state.local_file_ids, read(&mut cursor));
-                let new_parent = pick(&state.local_dir_ids, read(&mut cursor));
-                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                state.local_parents.insert(id.clone(), new_parent.clone());
-                SimAction::LocalMove {
-                    local_id: id,
-                    new_parent_local_id: Some(new_parent),
-                    new_name,
-                }
+            state.stopped = false;
+            SimAction::RestartClient
+        }
+        ActionChoice::RemoteCreateDir { parent_idx, name } => {
+            if state.remote_dir_ids.is_empty() {
+                return SimAction::Sync;
             }
-            13 if has_non_root_remote_dirs => {
-                // RemoteMove for directories (pick non-root dir, move to root to avoid cycles)
-                let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
-                let id = pick(&non_root, read(&mut cursor));
-                let new_parent = state.remote_dir_ids[0].clone();
-                let new_name = name_from_bytes(read(&mut cursor), read(&mut cursor));
-                state.remote_parents.insert(id.clone(), new_parent.clone());
-                SimAction::RemoteMove {
-                    id,
-                    new_parent_id: new_parent,
-                    new_name,
-                }
+            let id = state.next_remote_id();
+            let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
+            state.remote_dir_ids.push(id.clone());
+            state.remote_parents.insert(id.clone(), parent.clone());
+            SimAction::RemoteCreateDir {
+                id,
+                parent_id: Some(parent),
+                name: name.clone(),
             }
-            14 if has_non_root_local_dirs => {
-                // LocalDeleteDir (non-root only) — cascade remove children
-                let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
-                let id = pick(&non_root, read(&mut cursor));
-                state.remove_local_tree(&id);
-                SimAction::LocalDeleteFile { local_id: id }
+        }
+        ActionChoice::LocalCreateDir { parent_idx, name } => {
+            let local_id = state.next_local_file_id();
+            let parent = if state.local_dir_ids.is_empty() {
+                None
+            } else {
+                Some(state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone())
+            };
+            state.local_dir_ids.push(local_id.clone());
+            if let Some(ref p) = parent {
+                state.local_parents.insert(local_id.clone(), p.clone());
             }
-            15 if has_non_root_remote_dirs => {
-                // RemoteDeleteDir (non-root only) — cascade remove children
-                let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
-                let id = pick(&non_root, read(&mut cursor));
-                state.remove_remote_tree(&id);
-                SimAction::RemoteDeleteFile { id }
+            SimAction::LocalCreateDir {
+                local_id,
+                parent_local_id: parent,
+                name: name.clone(),
             }
-            _ => SimAction::Sync,
-        };
-
-        actions.push(action);
+        }
+        ActionChoice::LocalMoveFile {
+            idx,
+            parent_idx,
+            new_name,
+        } => {
+            if state.local_file_ids.is_empty() || state.local_dir_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
+            let new_parent = state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone();
+            state.local_parents.insert(id.clone(), new_parent.clone());
+            SimAction::LocalMove {
+                local_id: id,
+                new_parent_local_id: Some(new_parent),
+                new_name: new_name.clone(),
+            }
+        }
+        ActionChoice::RemoteMoveDir { idx, new_name } => {
+            if state.remote_dir_ids.len() <= 1 {
+                return SimAction::Sync;
+            }
+            let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
+            let id = non_root[idx % non_root.len()].clone();
+            let new_parent = state.remote_dir_ids[0].clone();
+            state.remote_parents.insert(id.clone(), new_parent.clone());
+            SimAction::RemoteMove {
+                id,
+                new_parent_id: new_parent,
+                new_name: new_name.clone(),
+            }
+        }
+        ActionChoice::LocalDeleteDir { idx } => {
+            if state.local_dir_ids.len() <= 1 {
+                return SimAction::Sync;
+            }
+            let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
+            let id = non_root[idx % non_root.len()].clone();
+            state.remove_local_tree(&id);
+            SimAction::LocalDeleteFile { local_id: id }
+        }
+        ActionChoice::RemoteDeleteDir { idx } => {
+            if state.remote_dir_ids.len() <= 1 {
+                return SimAction::Sync;
+            }
+            let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
+            let id = non_root[idx % non_root.len()].clone();
+            state.remove_remote_tree(&id);
+            SimAction::RemoteDeleteFile { id }
+        }
     }
-
-    actions
 }
