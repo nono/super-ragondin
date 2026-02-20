@@ -30,7 +30,6 @@ fn test_scan_directory() {
 }
 
 #[test]
-#[ignore] // May be flaky in CI due to timing
 fn test_watcher_detects_file_create() {
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
@@ -41,9 +40,6 @@ fn test_watcher_detects_file_create() {
     thread::spawn(move || {
         let _ = watcher.run();
     });
-
-    // Give watcher time to start
-    thread::sleep(Duration::from_millis(100));
 
     // Create a file
     fs::write(root.join("new_file.txt"), b"test").unwrap();
@@ -57,7 +53,6 @@ fn test_watcher_detects_file_create() {
 }
 
 #[test]
-#[ignore] // May be flaky in CI due to timing
 fn test_watcher_detects_file_delete() {
     let dir = tempdir().unwrap();
     let root = dir.path().to_path_buf();
@@ -71,9 +66,6 @@ fn test_watcher_detects_file_delete() {
     thread::spawn(move || {
         let _ = watcher.run();
     });
-
-    // Give watcher time to start
-    thread::sleep(Duration::from_millis(100));
 
     // Delete the file
     fs::remove_file(root.join("to_delete.txt")).unwrap();
