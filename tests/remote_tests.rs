@@ -104,3 +104,43 @@ async fn test_refresh_token_without_refresh_token() {
     let err = client.refresh().await.unwrap_err();
     assert!(err.to_string().contains("No refresh token"));
 }
+
+#[tokio::test]
+async fn test_update_file() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/files/file-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "id": "file-123",
+                "attributes": {
+                    "type": "file",
+                    "name": "hello.txt",
+                    "dir_id": "parent-1",
+                    "md5sum": "hvsmnRkNLIX24EaM7KQqIA==",
+                    "size": 12,
+                    "updated_at": "2026-01-01T00:00:00Z"
+                },
+                "meta": {
+                    "rev": "2-newrev"
+                }
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+    let content = b"HELLO WORLD!".to_vec();
+    let md5sum = "86fb269d190d2c85f6e0468ceca42a20";
+    let remote_id = cozy_desktop::model::RemoteId::new("file-123");
+
+    let node = client
+        .update_file(&remote_id, content, md5sum, "1-oldrev")
+        .await
+        .unwrap();
+
+    assert_eq!(node.id.as_str(), "file-123");
+    assert_eq!(node.name, "hello.txt");
+    assert_eq!(node.rev, "2-newrev");
+}

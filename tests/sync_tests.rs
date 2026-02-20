@@ -641,3 +641,224 @@ fn test_sync_engine_run_cycle() {
         .collect();
     assert!(ops.is_empty(), "Second cycle should have no ops");
 }
+
+#[tokio::test]
+async fn test_sync_engine_download_new_via_async() {
+    use cozy_desktop::model::{PlanResult, SyncOp};
+    use cozy_desktop::remote::client::CozyClient;
+    use std::os::unix::fs::MetadataExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    // Mock the download endpoint
+    Mock::given(method("GET"))
+        .and(path("/files/download/file-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello world"))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Set up root with actual sync dir inode so initial_scan matches
+    let sync_meta = std::fs::metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(sync_meta.dev(), sync_meta.ino());
+    let root_synced = SyncedRecord {
+        local_id: root_local_id.clone(),
+        remote_id: RemoteId::new("io.cozy.files.root-dir"),
+        rel_path: String::new(),
+        md5sum: None,
+        size: None,
+        rev: "1-root".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some(String::new()),
+        local_parent_id: None,
+        remote_name: Some(String::new()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&root_synced).unwrap();
+
+    // Add root remote node
+    let root = RemoteNode {
+        id: RemoteId::new("io.cozy.files.root-dir"),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-root".to_string(),
+    };
+    store.insert_remote_node(&root).unwrap();
+
+    // Also insert root local node so planner doesn't think it was deleted
+    let root_local = cozy_desktop::model::LocalNode {
+        id: root_local_id,
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        mtime: 0,
+    };
+    store.insert_local_node(&root_local).unwrap();
+
+    // Add a remote file to download
+    let md5sum = "5eb63bbbe01eeed093cb22bb8f5acdc3"; // md5 of "hello world"
+    let remote_file = RemoteNode {
+        id: RemoteId::new("file-1"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "hello.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some(md5sum.to_string()),
+        size: Some(11),
+        updated_at: 1000,
+        rev: "1-abc".to_string(),
+    };
+    store.insert_remote_node(&remote_file).unwrap();
+    store.flush().unwrap();
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let results = engine.run_cycle_async(&client).await.unwrap();
+
+    // Should have planned and executed a DownloadNew
+    let has_download = results.iter().any(|r| {
+        matches!(
+            r,
+            PlanResult::Op(SyncOp::DownloadNew { remote_id, .. })
+            if remote_id.as_str() == "file-1"
+        )
+    });
+    assert!(has_download, "Should have planned DownloadNew");
+
+    // File should now exist on disk
+    let file_path = sync_dir.path().join("hello.txt");
+    assert!(file_path.exists(), "Downloaded file should exist");
+    assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "hello world");
+
+    // Synced record should exist
+    let synced = engine
+        .store()
+        .get_synced_by_remote(&RemoteId::new("file-1"))
+        .unwrap();
+    assert!(synced.is_some(), "SyncedRecord should exist after download");
+    let synced = synced.unwrap();
+    assert_eq!(synced.md5sum.as_deref(), Some(md5sum));
+}
+
+#[tokio::test]
+async fn test_sync_engine_upload_new_via_async() {
+    use cozy_desktop::model::{PlanResult, SyncOp};
+    use cozy_desktop::remote::client::CozyClient;
+    use std::os::unix::fs::MetadataExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    // Mock the upload endpoint (POST /files/:parent-id?Type=file&Name=...)
+    Mock::given(method("POST"))
+        .and(path("/files/io.cozy.files.root-dir"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "data": {
+                "id": "new-remote-file-1",
+                "attributes": {
+                    "type": "file",
+                    "name": "local.txt",
+                    "dir_id": "io.cozy.files.root-dir",
+                    "md5sum": "fc3ff98e8c6a0d3087d515c0473f8677",
+                    "size": 12,
+                    "updated_at": "2026-01-01T00:00:00Z"
+                },
+                "meta": {
+                    "rev": "1-newrev"
+                }
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    // Create a local file to upload
+    std::fs::write(sync_dir.path().join("local.txt"), "hello world!").unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Set up root
+    let sync_meta = std::fs::metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(sync_meta.dev(), sync_meta.ino());
+    let root_synced = SyncedRecord {
+        local_id: root_local_id.clone(),
+        remote_id: RemoteId::new("io.cozy.files.root-dir"),
+        rel_path: String::new(),
+        md5sum: None,
+        size: None,
+        rev: "1-root".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some(String::new()),
+        local_parent_id: None,
+        remote_name: Some(String::new()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&root_synced).unwrap();
+
+    let root = RemoteNode {
+        id: RemoteId::new("io.cozy.files.root-dir"),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-root".to_string(),
+    };
+    store.insert_remote_node(&root).unwrap();
+
+    let root_local = cozy_desktop::model::LocalNode {
+        id: root_local_id,
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        mtime: 0,
+    };
+    store.insert_local_node(&root_local).unwrap();
+    store.flush().unwrap();
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let results = engine.run_cycle_async(&client).await.unwrap();
+
+    // Should have planned and executed an UploadNew
+    let has_upload = results.iter().any(
+        |r| matches!(r, PlanResult::Op(SyncOp::UploadNew { name, .. }) if name == "local.txt"),
+    );
+    assert!(has_upload, "Should have planned UploadNew");
+
+    // Synced record should exist linking to the new remote id
+    let synced = engine
+        .store()
+        .get_synced_by_remote(&RemoteId::new("new-remote-file-1"))
+        .unwrap();
+    assert!(synced.is_some(), "SyncedRecord should exist after upload");
+}

@@ -27,7 +27,10 @@ impl Scanner {
         let mut nodes = Vec::new();
         let mut inode_to_id: HashMap<(u64, u64), LocalFileId> = HashMap::new();
 
-        Self::scan_recursive(&self.root, None, &mut nodes, &mut inode_to_id)?;
+        let root_meta = fs::symlink_metadata(&self.root)?;
+        let root_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+
+        Self::scan_recursive(&self.root, Some(&root_id), &mut nodes, &mut inode_to_id)?;
         tracing::info!(root = %self.root.display(), count = nodes.len(), "🔍 Scan complete");
         Ok(nodes)
     }

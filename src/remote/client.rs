@@ -277,6 +277,46 @@ impl CozyClient {
         parse_file_response(resp)
     }
 
+    /// Overwrite an existing file on Cozy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails, the server returns an error,
+    /// or the MD5 hash is invalid.
+    pub async fn update_file(
+        &self,
+        file_id: &RemoteId,
+        content: Vec<u8>,
+        md5sum: &str,
+        expected_rev: &str,
+    ) -> Result<RemoteNode> {
+        tracing::info!(
+            file_id = file_id.as_str(),
+            size = content.len(),
+            "📤 Updating file"
+        );
+        let url = format!("{}/files/{}", self.instance_url, file_id.as_str());
+
+        let md5_bytes = hex::decode(md5sum).map_err(|_| Error::InvalidMd5(md5sum.to_string()))?;
+        let md5_base64 = base64::engine::general_purpose::STANDARD.encode(&md5_bytes);
+
+        let resp: FileResponse = self
+            .http
+            .put(&url)
+            .bearer_auth(&self.access_token)
+            .header("Content-MD5", md5_base64)
+            .header("Content-Type", "application/octet-stream")
+            .header("If-Match", expected_rev)
+            .body(content)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        parse_file_response(resp)
+    }
+
     /// Trash a file or directory on Cozy.
     ///
     /// # Errors

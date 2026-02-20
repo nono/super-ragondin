@@ -1,9 +1,10 @@
 use crate::error::{Error, Result};
 use crate::local::scanner::Scanner;
-use crate::model::{LocalFileId, NodeType, PlanResult, SyncOp, SyncedRecord};
+use crate::model::{LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, SyncOp, SyncedRecord};
 use crate::planner::Planner;
+use crate::remote::client::CozyClient;
 use crate::store::TreeStore;
-use crate::util::compute_md5_from_path;
+use crate::util::{compute_md5_from_bytes, compute_md5_from_path};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,6 @@ use std::path::{Path, PathBuf};
 pub struct SyncEngine {
     store: TreeStore,
     sync_dir: PathBuf,
-    #[allow(dead_code)]
     staging_dir: PathBuf,
 }
 
@@ -105,7 +105,169 @@ impl SyncEngine {
         Ok(results)
     }
 
-    /// Execute a single sync operation.
+    /// Run a full sync cycle with async network support: scan, plan, and execute all operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning, planning, or execution fails.
+    pub async fn run_cycle_async(&mut self, client: &CozyClient) -> Result<Vec<PlanResult>> {
+        tracing::info!("🔄 Starting async sync cycle");
+        self.initial_scan()?;
+
+        let results = self.plan()?;
+        let op_count = results
+            .iter()
+            .filter(|r| matches!(r, PlanResult::Op(_)))
+            .count();
+        tracing::info!(operations = op_count, "📋 Planned operations");
+
+        for result in &results {
+            match result {
+                PlanResult::Op(sync_op) => {
+                    self.execute_op_async(client, sync_op).await?;
+                }
+                PlanResult::Conflict(conflict) => {
+                    tracing::warn!(conflict = ?conflict, "⚠️ Conflict");
+                }
+                PlanResult::NoOp => {}
+            }
+        }
+
+        tracing::info!("🔄 Async sync cycle complete");
+        Ok(results)
+    }
+
+    /// Execute a single sync operation, using the client for network ops.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation fails.
+    #[allow(clippy::too_many_lines)]
+    pub async fn execute_op_async(&mut self, client: &CozyClient, op: &SyncOp) -> Result<()> {
+        match op {
+            SyncOp::CreateLocalDir {
+                remote_id,
+                local_path,
+            } => self.execute_create_local_dir(remote_id, local_path),
+
+            SyncOp::DeleteLocal {
+                local_id,
+                local_path,
+                expected_md5,
+            } => self.execute_delete_local(local_id, local_path, expected_md5.as_deref()),
+
+            SyncOp::DeleteRemote {
+                remote_id,
+                expected_rev: _,
+            } => {
+                client.trash(remote_id).await?;
+                self.execute_delete_remote(remote_id)
+            }
+
+            SyncOp::MoveLocal {
+                local_id,
+                from_path,
+                to_path,
+                expected_parent_id: _,
+                expected_name: _,
+            } => self.execute_move_local(local_id, from_path, to_path),
+
+            SyncOp::DownloadNew {
+                remote_id,
+                local_path,
+                expected_rev: _,
+                expected_md5,
+            } => {
+                self.execute_download_new(client, remote_id, local_path, expected_md5)
+                    .await
+            }
+
+            SyncOp::DownloadUpdate {
+                remote_id,
+                local_id,
+                local_path,
+                expected_rev: _,
+                expected_remote_md5,
+                expected_local_md5,
+            } => {
+                self.execute_download_update(
+                    client,
+                    remote_id,
+                    local_id,
+                    local_path,
+                    expected_remote_md5,
+                    expected_local_md5,
+                )
+                .await
+            }
+
+            SyncOp::UploadNew {
+                local_id,
+                local_path,
+                parent_remote_id,
+                name,
+                expected_md5,
+            } => {
+                self.execute_upload_new(
+                    client,
+                    local_id,
+                    local_path,
+                    parent_remote_id,
+                    name,
+                    expected_md5,
+                )
+                .await
+            }
+
+            SyncOp::UploadUpdate {
+                local_id,
+                remote_id,
+                local_path,
+                expected_local_md5,
+                expected_rev,
+            } => {
+                self.execute_upload_update(
+                    client,
+                    local_id,
+                    remote_id,
+                    local_path,
+                    expected_local_md5,
+                    expected_rev,
+                )
+                .await
+            }
+
+            SyncOp::CreateRemoteDir {
+                local_id,
+                local_path,
+                parent_remote_id,
+                name,
+            } => {
+                self.execute_create_remote_dir(client, local_id, local_path, parent_remote_id, name)
+                    .await
+            }
+
+            SyncOp::MoveRemote {
+                remote_id,
+                new_parent_id,
+                new_name,
+                expected_rev: _,
+            } => {
+                let updated = client.move_node(remote_id, new_parent_id, new_name).await?;
+                self.store.insert_remote_node(&updated)?;
+                if let Some(mut synced) = self.store.get_synced_by_remote(remote_id)? {
+                    synced.remote_name = Some(updated.name);
+                    synced.remote_parent_id = updated.parent_id;
+                    synced.rev = updated.rev;
+                    self.store.insert_synced(&synced)?;
+                }
+                self.store.flush()?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Execute a single sync operation (local-only; network ops are skipped).
     ///
     /// # Errors
     ///
@@ -295,16 +457,276 @@ impl SyncEngine {
         Ok(())
     }
 
-    fn execute_delete_remote(&self, remote_id: &crate::model::RemoteId) -> Result<()> {
+    fn execute_delete_remote(&self, remote_id: &RemoteId) -> Result<()> {
         tracing::info!(remote_id = remote_id.as_str(), "🗑️ Deleting remote entry");
         self.store.delete_remote_node(remote_id)?;
 
-        // Also remove synced record if it exists
         if let Some(synced) = self.store.get_synced_by_remote(remote_id)? {
             self.store.delete_synced(&synced.local_id)?;
         }
 
         self.store.flush()?;
+        Ok(())
+    }
+
+    // ==================== Async network operations ====================
+
+    async fn execute_download_new(
+        &self,
+        client: &CozyClient,
+        remote_id: &RemoteId,
+        local_path: &Path,
+        expected_md5: &str,
+    ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), remote_id = remote_id.as_str(), "📥 Downloading new file");
+
+        let bytes = client.download_file(remote_id).await?;
+        let actual_md5 = compute_md5_from_bytes(&bytes);
+        if !expected_md5.is_empty() && actual_md5 != expected_md5 {
+            return Err(Error::Conflict(format!(
+                "Downloaded file md5 mismatch: expected {expected_md5}, got {actual_md5}"
+            )));
+        }
+
+        self.write_via_staging(local_path, &bytes)?;
+
+        let metadata = fs::metadata(local_path)?;
+        let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+        let remote_node = self
+            .store
+            .get_remote_node(remote_id)?
+            .ok_or_else(|| Error::NotFound(remote_id.as_str().to_string()))?;
+
+        let local_parent_id = remote_node.parent_id.as_ref().and_then(|rpid| {
+            self.store
+                .get_synced_by_remote(rpid)
+                .ok()
+                .flatten()
+                .map(|s| s.local_id)
+        });
+
+        let local_node = LocalNode {
+            id: local_id.clone(),
+            parent_id: local_parent_id.clone(),
+            name: remote_node.name.clone(),
+            node_type: NodeType::File,
+            md5sum: Some(actual_md5.clone()),
+            size: Some(bytes.len() as u64),
+            mtime: metadata.mtime(),
+        };
+        self.store.insert_local_node(&local_node)?;
+
+        let synced = SyncedRecord {
+            local_id,
+            remote_id: remote_id.clone(),
+            rel_path: local_path
+                .strip_prefix(&self.sync_dir)
+                .unwrap_or(local_path)
+                .to_string_lossy()
+                .to_string(),
+            md5sum: Some(actual_md5),
+            size: Some(bytes.len() as u64),
+            rev: remote_node.rev.clone(),
+            node_type: NodeType::File,
+            local_name: Some(remote_node.name.clone()),
+            local_parent_id,
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store.insert_synced(&synced)?;
+        self.store.flush()?;
+        Ok(())
+    }
+
+    async fn execute_download_update(
+        &self,
+        client: &CozyClient,
+        remote_id: &RemoteId,
+        local_id: &LocalFileId,
+        local_path: &Path,
+        expected_remote_md5: &str,
+        expected_local_md5: &str,
+    ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), "📥 Updating local file from remote");
+
+        // Check local file hasn't changed since planning
+        if local_path.is_file() && !expected_local_md5.is_empty() {
+            let actual = compute_md5_from_path(local_path)?;
+            if actual != expected_local_md5 {
+                return Err(Error::Conflict(format!(
+                    "Local file {} was modified (expected md5 {expected_local_md5}, got {actual})",
+                    local_path.display()
+                )));
+            }
+        }
+
+        let bytes = client.download_file(remote_id).await?;
+        let actual_md5 = compute_md5_from_bytes(&bytes);
+        if !expected_remote_md5.is_empty() && actual_md5 != expected_remote_md5 {
+            return Err(Error::Conflict(format!(
+                "Downloaded file md5 mismatch: expected {expected_remote_md5}, got {actual_md5}"
+            )));
+        }
+
+        self.write_via_staging(local_path, &bytes)?;
+
+        if let Some(mut node) = self.store.get_local_node(local_id)? {
+            node.md5sum = Some(actual_md5.clone());
+            node.size = Some(bytes.len() as u64);
+            node.mtime = fs::metadata(local_path)?.mtime();
+            self.store.insert_local_node(&node)?;
+        }
+
+        if let Some(mut synced) = self.store.get_synced_by_local(local_id)? {
+            synced.md5sum = Some(actual_md5);
+            synced.size = Some(bytes.len() as u64);
+            if let Some(remote) = self.store.get_remote_node(remote_id)? {
+                synced.rev = remote.rev;
+            }
+            self.store.insert_synced(&synced)?;
+        }
+
+        self.store.flush()?;
+        Ok(())
+    }
+
+    async fn execute_upload_new(
+        &self,
+        client: &CozyClient,
+        local_id: &LocalFileId,
+        local_path: &Path,
+        parent_remote_id: &RemoteId,
+        name: &str,
+        expected_md5: &str,
+    ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), name, "📤 Uploading new file");
+
+        let content = fs::read(local_path)?;
+        let actual_md5 = compute_md5_from_bytes(&content);
+        if !expected_md5.is_empty() && actual_md5 != expected_md5 {
+            return Err(Error::Conflict(format!(
+                "Local file {} was modified (expected md5 {expected_md5}, got {actual_md5})",
+                local_path.display()
+            )));
+        }
+
+        let remote_node = client
+            .upload_file(parent_remote_id, name, content.clone(), &actual_md5)
+            .await?;
+
+        self.store.insert_remote_node(&remote_node)?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_node.id.clone(),
+            rel_path: local_path
+                .strip_prefix(&self.sync_dir)
+                .unwrap_or(local_path)
+                .to_string_lossy()
+                .to_string(),
+            md5sum: Some(actual_md5),
+            size: Some(content.len() as u64),
+            rev: remote_node.rev,
+            node_type: NodeType::File,
+            local_name: Some(name.to_string()),
+            local_parent_id: self
+                .store
+                .get_local_node(local_id)?
+                .and_then(|n| n.parent_id),
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store.insert_synced(&synced)?;
+        self.store.flush()?;
+        Ok(())
+    }
+
+    async fn execute_upload_update(
+        &self,
+        client: &CozyClient,
+        local_id: &LocalFileId,
+        remote_id: &RemoteId,
+        local_path: &Path,
+        expected_local_md5: &str,
+        expected_rev: &str,
+    ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), "📤 Updating remote file");
+
+        let content = fs::read(local_path)?;
+        let actual_md5 = compute_md5_from_bytes(&content);
+        if !expected_local_md5.is_empty() && actual_md5 != expected_local_md5 {
+            return Err(Error::Conflict(format!(
+                "Local file {} was modified (expected md5 {expected_local_md5}, got {actual_md5})",
+                local_path.display()
+            )));
+        }
+
+        let updated = client
+            .update_file(remote_id, content.clone(), &actual_md5, expected_rev)
+            .await?;
+
+        self.store.insert_remote_node(&updated)?;
+
+        if let Some(mut synced) = self.store.get_synced_by_local(local_id)? {
+            synced.md5sum = Some(actual_md5);
+            synced.size = Some(content.len() as u64);
+            synced.rev = updated.rev;
+            self.store.insert_synced(&synced)?;
+        }
+
+        self.store.flush()?;
+        Ok(())
+    }
+
+    async fn execute_create_remote_dir(
+        &self,
+        client: &CozyClient,
+        local_id: &LocalFileId,
+        local_path: &Path,
+        parent_remote_id: &RemoteId,
+        name: &str,
+    ) -> Result<()> {
+        tracing::info!(path = %local_path.display(), name, "📁 Creating remote directory");
+
+        let remote_node = client.create_directory(parent_remote_id, name).await?;
+        self.store.insert_remote_node(&remote_node)?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_node.id.clone(),
+            rel_path: local_path
+                .strip_prefix(&self.sync_dir)
+                .unwrap_or(local_path)
+                .to_string_lossy()
+                .to_string(),
+            md5sum: None,
+            size: None,
+            rev: remote_node.rev,
+            node_type: NodeType::Directory,
+            local_name: Some(name.to_string()),
+            local_parent_id: self
+                .store
+                .get_local_node(local_id)?
+                .and_then(|n| n.parent_id),
+            remote_name: Some(remote_node.name),
+            remote_parent_id: remote_node.parent_id,
+        };
+        self.store.insert_synced(&synced)?;
+        self.store.flush()?;
+        Ok(())
+    }
+
+    // ==================== Helpers ====================
+
+    fn write_via_staging(&self, target: &Path, content: &[u8]) -> Result<()> {
+        let staging_path = self.staging_dir.join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&self.staging_dir)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&staging_path, content)?;
+        fs::rename(&staging_path, target)?;
         Ok(())
     }
 }

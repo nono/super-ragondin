@@ -310,6 +310,7 @@ impl SimulationRunner {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn sync(&mut self) -> Result<(), String> {
         // Step 1: Fetch remote changes into store (including deletions)
         for change in self.remote.get_all_changes_since(self.last_seq) {
@@ -364,8 +365,11 @@ impl SimulationRunner {
         self.last_seq = self.remote.current_seq();
 
         // Step 2+3: Plan and execute in a loop until no more ops are generated.
-        // This handles cases like nested local directories where a child's parent
-        // must be synced before the child can be planned.
+        // We split each pass into two phases:
+        //   Phase A: execute creates, moves, downloads, and uploads (non-delete ops)
+        //   Phase B: re-plan, then execute deletes
+        // This ensures moves are executed before cascade deletes can orphan files
+        // (e.g., a file moved out of a directory that is then deleted).
         let max_rounds = 10;
         for _ in 0..max_rounds {
             let planner = Planner::new(&self.store, self.sync_root.clone());
@@ -386,8 +390,49 @@ impl SimulationRunner {
                 break;
             }
 
-            for op in ops {
+            let (non_delete_ops, delete_ops): (Vec<_>, Vec<_>) = ops.into_iter().partition(|op| {
+                !matches!(
+                    op,
+                    crate::model::SyncOp::DeleteLocal { .. }
+                        | crate::model::SyncOp::DeleteRemote { .. }
+                )
+            });
+
+            for op in non_delete_ops {
                 self.execute_op(op)?;
+            }
+
+            if !delete_ops.is_empty() {
+                // Re-plan before deletes: moves that were blocked (ParentMissing)
+                // in the initial plan may now be possible after creates executed.
+                let planner = Planner::new(&self.store, self.sync_root.clone());
+                let results = planner.plan().map_err(|e| e.to_string())?;
+                // Execute any newly-unblocked non-delete ops first
+                let (new_non_delete, new_delete): (Vec<_>, Vec<_>) = results
+                    .into_iter()
+                    .filter_map(|r| {
+                        if let crate::model::PlanResult::Op(op) = r {
+                            Some(op)
+                        } else {
+                            None
+                        }
+                    })
+                    .partition(|op| {
+                        !matches!(
+                            op,
+                            crate::model::SyncOp::DeleteLocal { .. }
+                                | crate::model::SyncOp::DeleteRemote { .. }
+                        )
+                    });
+
+                for op in new_non_delete {
+                    self.execute_op(op)?;
+                }
+
+                // Now execute the deletes from the fresh plan
+                for op in new_delete {
+                    self.execute_op(op)?;
+                }
             }
         }
 

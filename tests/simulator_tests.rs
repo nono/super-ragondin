@@ -1465,6 +1465,223 @@ fn check_convergence_detects_directory_mismatch() {
     );
 }
 
+// ==================== Regression: deeply nested local dirs must sync ====================
+
+#[test]
+fn nested_local_dirs_with_file_converge() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup: create root on remote and sync
+    let root_id = RemoteId::new("root");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create: root -> dir_a ("n.txt") -> dir_b ("uv.txt") -> file ("lmnop.txt")
+    let dir_a = LocalFileId::new(1, 60000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_a.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "n.txt".to_string(),
+        })
+        .unwrap();
+
+    let dir_b = LocalFileId::new(1, 60001);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_b.clone(),
+            parent_local_id: Some(dir_a),
+            name: "uv.txt".to_string(),
+        })
+        .unwrap();
+
+    let file_c = LocalFileId::new(1, 60002);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_c,
+            parent_local_id: Some(dir_b),
+            name: "lmnop.txt".to_string(),
+            content: b"some content here".to_vec(),
+        })
+        .unwrap();
+
+    // Sync should upload the entire tree
+    runner.apply(SimAction::Sync).unwrap();
+
+    // After sync, local and remote must converge
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn nested_local_dirs_created_while_stopped_converge() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup: create root on remote and sync
+    let root_id = RemoteId::new("root");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop the client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Create nested dirs while stopped
+    let dir_a = LocalFileId::new(1, 60000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_a.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "n.txt".to_string(),
+        })
+        .unwrap();
+
+    let dir_b = LocalFileId::new(1, 60001);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_b.clone(),
+            parent_local_id: Some(dir_a),
+            name: "uv.txt".to_string(),
+        })
+        .unwrap();
+
+    let file_c = LocalFileId::new(1, 60002);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_c,
+            parent_local_id: Some(dir_b),
+            name: "lmnop.txt".to_string(),
+            content: b"some content here".to_vec(),
+        })
+        .unwrap();
+
+    // Restart and sync
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// ==================== Regression: file moved out of directory before directory deleted ====================
+
+#[test]
+fn file_moved_out_of_dir_then_dir_deleted_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup: root dir synced
+    let root_id = RemoteId::new("root");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create a dir with a file, sync them
+    let dir_a = LocalFileId::new(1, 70000);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_a.clone(),
+            parent_local_id: Some(root_local_id.clone()),
+            name: "parent-dir".to_string(),
+        })
+        .unwrap();
+
+    let file_a = LocalFileId::new(1, 70001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_a.clone(),
+            parent_local_id: Some(dir_a.clone()),
+            name: "child.txt".to_string(),
+            content: b"original".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Stop client, move file to a new dir, delete old dir, modify file
+    runner.apply(SimAction::StopClient).unwrap();
+
+    let dir_b = LocalFileId::new(1, 70002);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_b.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "new-parent".to_string(),
+        })
+        .unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a.clone(),
+            new_parent_local_id: Some(dir_b),
+            new_name: "moved.txt".to_string(),
+        })
+        .unwrap();
+
+    runner
+        .apply(SimAction::LocalDeleteFile { local_id: dir_a })
+        .unwrap();
+
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: file_a,
+            content: b"modified content".to_vec(),
+        })
+        .unwrap();
+
+    // Restart and sync: file should appear on remote under new-parent
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 #[derive(Debug, Clone)]
 struct SimState {
     remote_file_ids: Vec<RemoteId>,

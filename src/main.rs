@@ -123,10 +123,29 @@ fn cmd_sync() -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
+    let client = open_client(&config)?;
     let mut engine = open_engine(&config)?;
-    engine.run_cycle()?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(engine.run_cycle_async(&client))?;
 
     Ok(())
+}
+
+fn open_client(config: &Config) -> Result<cozy_desktop::remote::client::CozyClient> {
+    let oauth = config
+        .oauth_client
+        .as_ref()
+        .ok_or_else(|| Error::NotFound("Not authenticated".to_string()))?;
+
+    let access_token = oauth
+        .access_token()
+        .ok_or_else(|| Error::NotFound("No access token".to_string()))?;
+
+    Ok(cozy_desktop::remote::client::CozyClient::new(
+        &config.instance_url,
+        access_token,
+    ))
 }
 
 fn open_engine(config: &Config) -> Result<SyncEngine> {
@@ -142,7 +161,9 @@ fn cmd_watch() -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
+    let client = open_client(&config)?;
     let mut engine = open_engine(&config)?;
+    let rt = tokio::runtime::Runtime::new()?;
 
     let (tx, rx) = mpsc::channel::<WatchEvent>();
 
@@ -163,7 +184,7 @@ fn cmd_watch() -> Result<()> {
                 tracing::debug!(event = ?event, "👁️ Watch event received");
                 if last_sync.elapsed() > debounce {
                     tracing::info!("🔄 Changes detected, syncing");
-                    if let Err(e) = engine.run_cycle() {
+                    if let Err(e) = rt.block_on(engine.run_cycle_async(&client)) {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
@@ -172,7 +193,7 @@ fn cmd_watch() -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_sync.elapsed() > Duration::from_secs(30) {
                     tracing::info!("🔄 Periodic sync");
-                    if let Err(e) = engine.run_cycle() {
+                    if let Err(e) = rt.block_on(engine.run_cycle_async(&client)) {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
