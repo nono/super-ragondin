@@ -25,6 +25,10 @@ pub struct SimulationRunner {
     stopped: bool,
     /// Per-instance counter for generating unique local file IDs
     inode_counter: u64,
+    /// Number of download ops to skip (simulating transient network failures)
+    pending_download_failures: u32,
+    /// Number of upload ops to skip (simulating transient network failures)
+    pending_upload_failures: u32,
 }
 
 /// Actions that can be simulated
@@ -79,6 +83,10 @@ pub enum SimAction {
     Sync,
     StopClient,
     RestartClient,
+    /// Inject a transient download failure (the next download/create-local-dir op will be skipped)
+    FailNextDownload,
+    /// Inject a transient upload failure (the next upload/create-remote-dir op will be skipped)
+    FailNextUpload,
 }
 
 impl SimulationRunner {
@@ -93,6 +101,8 @@ impl SimulationRunner {
             remote_to_local: std::collections::HashMap::new(),
             stopped: false,
             inode_counter: 0,
+            pending_download_failures: 0,
+            pending_upload_failures: 0,
         }
     }
 
@@ -170,6 +180,14 @@ impl SimulationRunner {
             SimAction::RestartClient => {
                 self.stopped = false;
                 self.reconcile_local()
+            }
+            SimAction::FailNextDownload => {
+                self.pending_download_failures += 1;
+                Ok(())
+            }
+            SimAction::FailNextUpload => {
+                self.pending_upload_failures += 1;
+                Ok(())
             }
         }
     }
@@ -502,6 +520,27 @@ impl SimulationRunner {
 
     fn execute_op(&mut self, op: crate::model::SyncOp) -> Result<(), String> {
         use crate::model::SyncOp;
+
+        // Inject transient failures: skip the operation so the planner retries later
+        match &op {
+            SyncOp::DownloadNew { .. }
+            | SyncOp::DownloadUpdate { .. }
+            | SyncOp::CreateLocalDir { .. } => {
+                if self.pending_download_failures > 0 {
+                    self.pending_download_failures -= 1;
+                    return Ok(());
+                }
+            }
+            SyncOp::UploadNew { .. }
+            | SyncOp::UploadUpdate { .. }
+            | SyncOp::CreateRemoteDir { .. } => {
+                if self.pending_upload_failures > 0 {
+                    self.pending_upload_failures -= 1;
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
 
         match op {
             SyncOp::DownloadNew { remote_id, .. } => self.execute_download_new(&remote_id),

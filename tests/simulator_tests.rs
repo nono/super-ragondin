@@ -1698,6 +1698,133 @@ fn nested_local_dirs_created_while_stopped_converge() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Network/IO Error Simulation Tests ====================
+
+#[test]
+fn single_download_failure_recovers_within_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello world".to_vec(),
+        })
+        .unwrap();
+
+    // A single failure is recovered by the sync loop's internal retry
+    runner.apply(SimAction::FailNextDownload).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn single_upload_failure_recovers_within_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    let file_local_id = LocalFileId::new(1, 9999);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "local.txt".to_string(),
+            content: b"local content".to_vec(),
+        })
+        .unwrap();
+
+    // A single failure is recovered by the sync loop's internal retry
+    runner.apply(SimAction::FailNextUpload).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn many_failures_exhaust_sync_loop_then_next_sync_recovers() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello".to_vec(),
+        })
+        .unwrap();
+
+    // Inject more failures than the sync loop's max_rounds (10), so the
+    // first sync cannot complete — it exhausts all retry rounds.
+    for _ in 0..12 {
+        runner.apply(SimAction::FailNextDownload).unwrap();
+    }
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // File should NOT exist locally (all rounds failed)
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "test.txt")
+        .collect();
+    assert_eq!(
+        local_files.len(),
+        0,
+        "File should not be downloaded when all rounds fail"
+    );
+
+    // Second sync — remaining 2 failures are consumed, then it succeeds
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
 // ==================== Regression: file moved out of directory before directory deleted ====================
 
 #[test]
@@ -1948,6 +2075,8 @@ enum ActionChoice {
     RemoteDeleteDir {
         idx: usize,
     },
+    FailNextDownload,
+    FailNextUpload,
 }
 
 fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
@@ -1999,6 +2128,8 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
             .prop_map(|(idx, new_name)| ActionChoice::LocalMoveDir { idx, new_name }),
         any::<usize>().prop_map(|idx| ActionChoice::LocalDeleteDir { idx }),
         any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteDir { idx }),
+        Just(ActionChoice::FailNextDownload),
+        Just(ActionChoice::FailNextUpload),
     ]
 }
 
@@ -2214,5 +2345,7 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             state.remove_remote_tree(&id);
             SimAction::RemoteDeleteFile { id }
         }
+        ActionChoice::FailNextDownload => SimAction::FailNextDownload,
+        ActionChoice::FailNextUpload => SimAction::FailNextUpload,
     }
 }
