@@ -822,7 +822,20 @@ fn sync_is_idempotent_after_local_create() {
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
-    "[a-z]{1,8}\\.[a-z]{2,3}".prop_map(|s| s)
+    // 50% chance: pick from a fixed pool (collision pressure + unicode coverage)
+    // 50% chance: generate a fresh short name (diverse inputs)
+    let pool = prop::sample::select(vec![
+        "notes.txt".to_string(),
+        "café.txt".to_string(),
+        "résumé.doc".to_string(),
+        "📊 report.pdf".to_string(),
+        "données.csv".to_string(),
+        "photo 🌅.jpg".to_string(),
+        "naïve.md".to_string(),
+        "über.log".to_string(),
+    ]);
+    let fresh = "[a-z]{1,4}\\.[a-z]{2,3}";
+    prop_oneof![pool, fresh]
 }
 
 fn arbitrary_content() -> impl Strategy<Value = Vec<u8>> {
