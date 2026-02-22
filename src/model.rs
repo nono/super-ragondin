@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Local filesystem identity (`device_id`, `inode`) - stable across renames
@@ -37,6 +38,12 @@ impl LocalFileId {
     }
 }
 
+impl fmt::Display for LocalFileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.device_id, self.inode)
+    }
+}
+
 /// Remote Cozy document ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RemoteId(pub String);
@@ -50,6 +57,12 @@ impl RemoteId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for RemoteId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

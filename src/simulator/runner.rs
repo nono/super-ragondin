@@ -69,6 +69,20 @@ pub enum ConcurrentRemoteOp {
     },
 }
 
+impl std::fmt::Display for ConcurrentRemoteOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CreateFile {
+                id, name, content, ..
+            } => write!(f, "CreateFile(id={id}, name={name}, {}B)", content.len()),
+            Self::ModifyFile { id, content } => {
+                write!(f, "ModifyFile(id={id}, {}B)", content.len())
+            }
+            Self::DeleteFile { id } => write!(f, "DeleteFile(id={id})"),
+        }
+    }
+}
+
 /// Actions that can be simulated
 #[derive(Debug, Clone)]
 pub enum SimAction {
@@ -131,6 +145,97 @@ pub enum SimAction {
     SnapshotState,
     /// Restore the runner state to the last snapshot (no-op if none)
     RollbackToSnapshot,
+}
+
+fn fmt_local_parent(parent: Option<&LocalFileId>) -> String {
+    parent.map_or_else(|| "root".to_string(), ToString::to_string)
+}
+
+fn fmt_remote_parent(parent: Option<&RemoteId>) -> String {
+    parent.map_or_else(|| "root".to_string(), ToString::to_string)
+}
+
+impl std::fmt::Display for SimAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LocalCreateFile {
+                local_id,
+                parent_local_id,
+                name,
+                content,
+            } => write!(
+                f,
+                "LocalCreateFile(id={local_id}, parent={}, name={name}, {}B)",
+                fmt_local_parent(parent_local_id.as_ref()),
+                content.len()
+            ),
+            Self::LocalCreateDir {
+                local_id,
+                parent_local_id,
+                name,
+            } => write!(
+                f,
+                "LocalCreateDir(id={local_id}, parent={}, name={name})",
+                fmt_local_parent(parent_local_id.as_ref())
+            ),
+            Self::LocalDeleteFile { local_id } => {
+                write!(f, "LocalDeleteFile(id={local_id})")
+            }
+            Self::LocalModifyFile { local_id, content } => {
+                write!(f, "LocalModifyFile(id={local_id}, {}B)", content.len())
+            }
+            Self::RemoteCreateFile {
+                id,
+                parent_id,
+                name,
+                content,
+            } => write!(
+                f,
+                "RemoteCreateFile(id={id}, parent={parent_id}, name={name}, {}B)",
+                content.len()
+            ),
+            Self::RemoteCreateDir {
+                id,
+                parent_id,
+                name,
+            } => write!(
+                f,
+                "RemoteCreateDir(id={id}, parent={}, name={name})",
+                fmt_remote_parent(parent_id.as_ref())
+            ),
+            Self::RemoteDeleteFile { id } => write!(f, "RemoteDeleteFile(id={id})"),
+            Self::RemoteModifyFile { id, content } => {
+                write!(f, "RemoteModifyFile(id={id}, {}B)", content.len())
+            }
+            Self::LocalMove {
+                local_id,
+                new_parent_local_id,
+                new_name,
+            } => write!(
+                f,
+                "LocalMove(id={local_id}, new_parent={}, new_name={new_name})",
+                fmt_local_parent(new_parent_local_id.as_ref())
+            ),
+            Self::RemoteMove {
+                id,
+                new_parent_id,
+                new_name,
+            } => write!(
+                f,
+                "RemoteMove(id={id}, new_parent={new_parent_id}, new_name={new_name})"
+            ),
+            Self::Sync => write!(f, "Sync"),
+            Self::StopClient => write!(f, "StopClient"),
+            Self::RestartClient => write!(f, "RestartClient"),
+            Self::FailNextDownload => write!(f, "FailNextDownload"),
+            Self::FailNextUpload => write!(f, "FailNextUpload"),
+            Self::ConcurrentRemoteChange(op) => {
+                write!(f, "ConcurrentRemoteChange({op})")
+            }
+            Self::SnapshotState => write!(f, "SnapshotState"),
+            Self::RollbackToSnapshot => write!(f, "RollbackToSnapshot"),
+        }
+    }
 }
 
 impl SimulationRunner {
