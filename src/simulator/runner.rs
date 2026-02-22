@@ -4,7 +4,7 @@ use crate::model::{
     LocalFileId, LocalNode, NodeInfo, NodeType, RemoteId, RemoteNode, SyncedRecord,
 };
 use crate::planner::Planner;
-use crate::store::TreeStore;
+use crate::store::{StoreSnapshot, TreeStore};
 use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
@@ -30,6 +30,23 @@ pub struct SimulationRunner {
     /// Number of upload ops to skip (simulating transient network failures)
     pending_upload_failures: u32,
     /// Queue of remote mutations to inject during the next sync execution
+    pending_concurrent_remote_ops: Vec<ConcurrentRemoteOp>,
+    /// Saved snapshot for rollback testing
+    snapshot: Option<RunnerSnapshot>,
+}
+
+/// Complete snapshot of the runner state for rollback testing
+#[derive(Clone)]
+struct RunnerSnapshot {
+    local_fs: MockFs,
+    remote: MockRemote,
+    store_snapshot: StoreSnapshot,
+    last_seq: u64,
+    remote_to_local: std::collections::HashMap<RemoteId, LocalFileId>,
+    stopped: bool,
+    inode_counter: u64,
+    pending_download_failures: u32,
+    pending_upload_failures: u32,
     pending_concurrent_remote_ops: Vec<ConcurrentRemoteOp>,
 }
 
@@ -110,6 +127,10 @@ pub enum SimAction {
     FailNextUpload,
     /// Queue a concurrent remote change that fires during the next sync execution
     ConcurrentRemoteChange(ConcurrentRemoteOp),
+    /// Save the entire runner state for later rollback
+    SnapshotState,
+    /// Restore the runner state to the last snapshot (no-op if none)
+    RollbackToSnapshot,
 }
 
 impl SimulationRunner {
@@ -127,6 +148,7 @@ impl SimulationRunner {
             pending_download_failures: 0,
             pending_upload_failures: 0,
             pending_concurrent_remote_ops: Vec::new(),
+            snapshot: None,
         }
     }
 
@@ -217,7 +239,45 @@ impl SimulationRunner {
                 self.pending_concurrent_remote_ops.push(op);
                 Ok(())
             }
+            SimAction::SnapshotState => self.take_snapshot(),
+            SimAction::RollbackToSnapshot => self.rollback_to_snapshot(),
         }
+    }
+
+    fn take_snapshot(&mut self) -> Result<(), String> {
+        let store_snapshot = self.store.snapshot().map_err(|e| e.to_string())?;
+        self.snapshot = Some(RunnerSnapshot {
+            local_fs: self.local_fs.clone(),
+            remote: self.remote.clone(),
+            store_snapshot,
+            last_seq: self.last_seq,
+            remote_to_local: self.remote_to_local.clone(),
+            stopped: self.stopped,
+            inode_counter: self.inode_counter,
+            pending_download_failures: self.pending_download_failures,
+            pending_upload_failures: self.pending_upload_failures,
+            pending_concurrent_remote_ops: self.pending_concurrent_remote_ops.clone(),
+        });
+        Ok(())
+    }
+
+    fn rollback_to_snapshot(&mut self) -> Result<(), String> {
+        let Some(snap) = self.snapshot.take() else {
+            return Ok(());
+        };
+        self.local_fs = snap.local_fs;
+        self.remote = snap.remote;
+        self.store
+            .restore(&snap.store_snapshot)
+            .map_err(|e| e.to_string())?;
+        self.last_seq = snap.last_seq;
+        self.remote_to_local = snap.remote_to_local;
+        self.stopped = snap.stopped;
+        self.inode_counter = snap.inode_counter;
+        self.pending_download_failures = snap.pending_download_failures;
+        self.pending_upload_failures = snap.pending_upload_failures;
+        self.pending_concurrent_remote_ops = snap.pending_concurrent_remote_ops;
+        Ok(())
     }
 
     fn apply_local_create_file(

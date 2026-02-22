@@ -3,6 +3,17 @@ use crate::model::{LocalFileId, LocalNode, RemoteId, RemoteNode, SyncedRecord};
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle};
 use std::path::Path;
 
+/// In-memory snapshot of all key-value pairs in the store
+#[derive(Debug, Clone)]
+pub struct StoreSnapshot {
+    remote: Vec<(Vec<u8>, Vec<u8>)>,
+    local: Vec<(Vec<u8>, Vec<u8>)>,
+    synced_by_local: Vec<(Vec<u8>, Vec<u8>)>,
+    synced_by_remote: Vec<(Vec<u8>, Vec<u8>)>,
+    local_children: Vec<(Vec<u8>, Vec<u8>)>,
+    remote_children: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
 /// Persistent storage for the 3 trees using fjall.
 ///
 /// Each tree uses appropriate keying:
@@ -321,6 +332,62 @@ impl TreeStore {
         tracing::debug!("💾 Store flushed to disk");
         Ok(())
     }
+
+    /// Take an in-memory snapshot of all key-value pairs in all partitions
+    ///
+    /// # Errors
+    /// Returns an error if reading from any partition fails
+    pub fn snapshot(&self) -> Result<StoreSnapshot> {
+        Ok(StoreSnapshot {
+            remote: snapshot_partition(&self.remote)?,
+            local: snapshot_partition(&self.local)?,
+            synced_by_local: snapshot_partition(&self.synced_by_local)?,
+            synced_by_remote: snapshot_partition(&self.synced_by_remote)?,
+            local_children: snapshot_partition(&self.local_children)?,
+            remote_children: snapshot_partition(&self.remote_children)?,
+        })
+    }
+
+    /// Restore all partitions from a previously taken snapshot, clearing
+    /// any data added after the snapshot was taken.
+    ///
+    /// # Errors
+    /// Returns an error if clearing or restoring any partition fails
+    pub fn restore(&self, snapshot: &StoreSnapshot) -> Result<()> {
+        restore_partition(&self.remote, &snapshot.remote)?;
+        restore_partition(&self.local, &snapshot.local)?;
+        restore_partition(&self.synced_by_local, &snapshot.synced_by_local)?;
+        restore_partition(&self.synced_by_remote, &snapshot.synced_by_remote)?;
+        restore_partition(&self.local_children, &snapshot.local_children)?;
+        restore_partition(&self.remote_children, &snapshot.remote_children)?;
+        tracing::debug!("💾 Store restored from snapshot");
+        Ok(())
+    }
+}
+
+fn snapshot_partition(partition: &PartitionHandle) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut entries = Vec::new();
+    for item in partition.iter() {
+        let (key, value) = item?;
+        entries.push((key.to_vec(), value.to_vec()));
+    }
+    Ok(entries)
+}
+
+fn restore_partition(partition: &PartitionHandle, entries: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+    // Collect existing keys to remove
+    let existing_keys: Vec<Vec<u8>> = partition
+        .iter()
+        .filter_map(|item| item.ok().map(|(k, _)| k.to_vec()))
+        .collect();
+    for key in existing_keys {
+        partition.remove(&key)?;
+    }
+    // Re-insert snapshot entries
+    for (key, value) in entries {
+        partition.insert(key, value)?;
+    }
+    Ok(())
 }
 
 fn make_child_key_local(parent_id: &LocalFileId, name: &str) -> Vec<u8> {

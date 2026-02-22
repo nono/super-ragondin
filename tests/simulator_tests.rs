@@ -1447,6 +1447,165 @@ fn concurrent_remote_delete_during_sync_converges() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== State Snapshot & Rollback Tests ====================
+
+#[test]
+fn snapshot_and_rollback_restores_state() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup: create root and a file, sync them
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "original.txt".to_string(),
+            content: b"original content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Take a snapshot
+    runner.apply(SimAction::SnapshotState).unwrap();
+
+    // Make changes: create a new file on remote and sync
+    let file2_id = RemoteId::new("file-2");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file2_id,
+            parent_id: root_id,
+            name: "new.txt".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify new file exists
+    assert_eq!(
+        runner
+            .local_fs
+            .list_all()
+            .iter()
+            .filter(|n| n.name == "new.txt")
+            .count(),
+        1
+    );
+
+    // Rollback to snapshot
+    runner.apply(SimAction::RollbackToSnapshot).unwrap();
+
+    // new.txt should be gone, original.txt should still be there
+    assert_eq!(
+        runner
+            .local_fs
+            .list_all()
+            .iter()
+            .filter(|n| n.name == "new.txt")
+            .count(),
+        0,
+        "new.txt should be gone after rollback"
+    );
+    assert_eq!(
+        runner
+            .local_fs
+            .list_all()
+            .iter()
+            .filter(|n| n.name == "original.txt")
+            .count(),
+        1,
+        "original.txt should still exist after rollback"
+    );
+
+    // After a new sync, should converge
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn rollback_without_snapshot_is_noop() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Rollback without snapshot should succeed (no-op)
+    runner.apply(SimAction::RollbackToSnapshot).unwrap();
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn snapshot_rollback_with_local_changes() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Snapshot after initial sync
+    runner.apply(SimAction::SnapshotState).unwrap();
+
+    // Create local file and sync
+    let file_local_id = LocalFileId::new(1, 9999);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "local.txt".to_string(),
+            content: b"local content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Rollback — local file and its remote counterpart should be gone
+    runner.apply(SimAction::RollbackToSnapshot).unwrap();
+
+    assert!(
+        !runner.local_fs.exists(&file_local_id),
+        "Local file should be gone after rollback"
+    );
+
+    // After sync, should converge (empty state)
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+}
+
 // ==================== Regression: directory delete must cascade ====================
 
 #[test]
@@ -2125,6 +2284,8 @@ struct SimState {
     next_remote_counter: usize,
     next_local_inode: u64,
     stopped: bool,
+    /// Saved snapshot for rollback
+    snapshot: Option<Box<SimState>>,
 }
 
 impl SimState {
@@ -2139,6 +2300,19 @@ impl SimState {
             next_remote_counter: 0,
             next_local_inode: 50_000,
             stopped: false,
+            snapshot: None,
+        }
+    }
+
+    fn take_snapshot(&mut self) {
+        let mut snap = self.clone();
+        snap.snapshot = None;
+        self.snapshot = Some(Box::new(snap));
+    }
+
+    fn rollback(&mut self) {
+        if let Some(snap) = self.snapshot.take() {
+            *self = *snap;
         }
     }
 
@@ -2288,6 +2462,8 @@ enum ActionChoice {
     ConcurrentRemoteDelete {
         idx: usize,
     },
+    SnapshotState,
+    RollbackToSnapshot,
 }
 
 fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
@@ -2351,6 +2527,8 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
         (any::<usize>(), arbitrary_content())
             .prop_map(|(idx, content)| ActionChoice::ConcurrentRemoteModify { idx, content }),
         any::<usize>().prop_map(|idx| ActionChoice::ConcurrentRemoteDelete { idx }),
+        Just(ActionChoice::SnapshotState),
+        Just(ActionChoice::RollbackToSnapshot),
     ]
 }
 
@@ -2604,6 +2782,14 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
             SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::DeleteFile { id })
+        }
+        ActionChoice::SnapshotState => {
+            state.take_snapshot();
+            SimAction::SnapshotState
+        }
+        ActionChoice::RollbackToSnapshot => {
+            state.rollback();
+            SimAction::RollbackToSnapshot
         }
     }
 }

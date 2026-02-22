@@ -1,2 +1,2 @@
 pub mod tree;
-pub use tree::TreeStore;
+pub use tree::{StoreSnapshot, TreeStore};
