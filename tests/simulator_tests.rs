@@ -1,7 +1,7 @@
 use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode};
 use cozy_desktop::simulator::mock_fs::MockFs;
 use cozy_desktop::simulator::mock_remote::MockRemote;
-use cozy_desktop::simulator::runner::{SimAction, SimulationRunner};
+use cozy_desktop::simulator::runner::{ConcurrentRemoteOp, SimAction, SimulationRunner};
 use cozy_desktop::store::TreeStore;
 use proptest::prelude::*;
 use tempfile::tempdir;
@@ -1188,9 +1188,12 @@ proptest! {
             runner.apply(action.clone()).unwrap();
         }
 
-        // Ensure client is running for final sync
+        // Ensure client is running for final syncs
         runner.apply(SimAction::RestartClient).unwrap();
-        runner.apply(SimAction::Sync).unwrap();
+        // Multiple sync rounds to handle concurrent remote changes injected mid-sync
+        for _ in 0..3 {
+            runner.apply(SimAction::Sync).unwrap();
+        }
 
         // After sync, local and remote must converge and be idempotent
         runner.check_convergence().unwrap();
@@ -1237,15 +1240,211 @@ proptest! {
             // Ensure client is running, then sync at the end of each round
             runner.apply(SimAction::RestartClient).unwrap();
             runner.apply(SimAction::Sync).unwrap();
+            // Extra sync to pick up any concurrent remote changes that fired mid-sync
+            runner.apply(SimAction::Sync).unwrap();
 
             // Check convergence after every round to catch state accumulation bugs
             runner.check_convergence().unwrap();
         }
 
+        // Extra sync rounds to handle any concurrent remote changes from the last round
+        for _ in 0..3 {
+            runner.apply(SimAction::Sync).unwrap();
+        }
+
         // Final invariant checks
+        runner.check_convergence().unwrap();
         runner.check_idempotency().unwrap();
         runner.check_store_consistency().unwrap();
     }
+}
+
+// ==================== Concurrent Remote Changes During Sync ====================
+
+#[test]
+fn concurrent_remote_create_during_sync_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create a local file that will be uploaded during sync
+    let file_local_id = LocalFileId::new(1, 9999);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "local.txt".to_string(),
+            content: b"local content".to_vec(),
+        })
+        .unwrap();
+
+    // Queue a concurrent remote file creation that fires during sync execution
+    runner
+        .apply(SimAction::ConcurrentRemoteChange(
+            ConcurrentRemoteOp::CreateFile {
+                id: RemoteId::new("concurrent-file-1"),
+                parent_id: root_id.clone(),
+                name: "concurrent.txt".to_string(),
+                content: b"concurrent content".to_vec(),
+            },
+        ))
+        .unwrap();
+
+    // First sync: uploads local file, concurrent change fires mid-execution
+    runner.apply(SimAction::Sync).unwrap();
+
+    // concurrent.txt is on MockRemote but not yet synced locally
+    assert!(
+        runner
+            .remote
+            .get_node(&RemoteId::new("concurrent-file-1"))
+            .is_some(),
+        "Concurrent file should exist on remote"
+    );
+
+    // Second sync picks up the concurrent change
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn concurrent_remote_modify_during_sync_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    // Create and sync a file
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id.clone(),
+            name: "data.txt".to_string(),
+            content: b"original".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Create a new remote file (triggers sync work)
+    let file2_id = RemoteId::new("file-2");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file2_id,
+            parent_id: root_id.clone(),
+            name: "other.txt".to_string(),
+            content: b"other".to_vec(),
+        })
+        .unwrap();
+
+    // Queue a concurrent modification that fires during the next sync
+    runner
+        .apply(SimAction::ConcurrentRemoteChange(
+            ConcurrentRemoteOp::ModifyFile {
+                id: file_id,
+                content: b"modified concurrently".to_vec(),
+            },
+        ))
+        .unwrap();
+
+    // First sync: downloads file-2, concurrent modify happens mid-execution
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Second sync picks up the modification
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn concurrent_remote_delete_during_sync_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    // Create and sync two files
+    let file1_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file1_id.clone(),
+            parent_id: root_id.clone(),
+            name: "keep.txt".to_string(),
+            content: b"keep me".to_vec(),
+        })
+        .unwrap();
+
+    let file2_id = RemoteId::new("file-2");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file2_id.clone(),
+            parent_id: root_id.clone(),
+            name: "delete-me.txt".to_string(),
+            content: b"will be deleted".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Modify keep.txt on remote (triggers sync work)
+    runner
+        .apply(SimAction::RemoteModifyFile {
+            id: file1_id,
+            content: b"updated keep".to_vec(),
+        })
+        .unwrap();
+
+    // Queue concurrent deletion of file-2 during sync
+    runner
+        .apply(SimAction::ConcurrentRemoteChange(
+            ConcurrentRemoteOp::DeleteFile { id: file2_id },
+        ))
+        .unwrap();
+
+    // First sync + second sync to converge
+    runner.apply(SimAction::Sync).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
 }
 
 // ==================== Regression: directory delete must cascade ====================
@@ -2077,6 +2276,18 @@ enum ActionChoice {
     },
     FailNextDownload,
     FailNextUpload,
+    ConcurrentRemoteCreate {
+        parent_idx: usize,
+        name: String,
+        content: Vec<u8>,
+    },
+    ConcurrentRemoteModify {
+        idx: usize,
+        content: Vec<u8>,
+    },
+    ConcurrentRemoteDelete {
+        idx: usize,
+    },
 }
 
 fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
@@ -2130,6 +2341,16 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
         any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteDir { idx }),
         Just(ActionChoice::FailNextDownload),
         Just(ActionChoice::FailNextUpload),
+        (any::<usize>(), arbitrary_file_name(), arbitrary_content()).prop_map(
+            |(parent_idx, name, content)| ActionChoice::ConcurrentRemoteCreate {
+                parent_idx,
+                name,
+                content,
+            }
+        ),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::ConcurrentRemoteModify { idx, content }),
+        any::<usize>().prop_map(|idx| ActionChoice::ConcurrentRemoteDelete { idx }),
     ]
 }
 
@@ -2347,5 +2568,42 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
         }
         ActionChoice::FailNextDownload => SimAction::FailNextDownload,
         ActionChoice::FailNextUpload => SimAction::FailNextUpload,
+        ActionChoice::ConcurrentRemoteCreate {
+            parent_idx,
+            name,
+            content,
+        } => {
+            if state.remote_dir_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.next_remote_id();
+            let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
+            // Don't track in remote_file_ids — the file won't exist on MockRemote
+            // until the concurrent change fires mid-sync.
+            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::CreateFile {
+                id,
+                parent_id: parent,
+                name: name.clone(),
+                content: content.clone(),
+            })
+        }
+        ActionChoice::ConcurrentRemoteModify { idx, content } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::ModifyFile {
+                id,
+                content: content.clone(),
+            })
+        }
+        ActionChoice::ConcurrentRemoteDelete { idx } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            state.remote_file_ids.retain(|x| x != &id);
+            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::DeleteFile { id })
+        }
     }
 }

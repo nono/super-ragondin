@@ -29,6 +29,27 @@ pub struct SimulationRunner {
     pending_download_failures: u32,
     /// Number of upload ops to skip (simulating transient network failures)
     pending_upload_failures: u32,
+    /// Queue of remote mutations to inject during the next sync execution
+    pending_concurrent_remote_ops: Vec<ConcurrentRemoteOp>,
+}
+
+/// Remote mutations injected during sync execution to simulate concurrent
+/// changes from other devices (e.g., `CouchDB` changes arriving mid-sync).
+#[derive(Debug, Clone)]
+pub enum ConcurrentRemoteOp {
+    CreateFile {
+        id: RemoteId,
+        parent_id: RemoteId,
+        name: String,
+        content: Vec<u8>,
+    },
+    ModifyFile {
+        id: RemoteId,
+        content: Vec<u8>,
+    },
+    DeleteFile {
+        id: RemoteId,
+    },
 }
 
 /// Actions that can be simulated
@@ -87,6 +108,8 @@ pub enum SimAction {
     FailNextDownload,
     /// Inject a transient upload failure (the next upload/create-remote-dir op will be skipped)
     FailNextUpload,
+    /// Queue a concurrent remote change that fires during the next sync execution
+    ConcurrentRemoteChange(ConcurrentRemoteOp),
 }
 
 impl SimulationRunner {
@@ -103,6 +126,7 @@ impl SimulationRunner {
             inode_counter: 0,
             pending_download_failures: 0,
             pending_upload_failures: 0,
+            pending_concurrent_remote_ops: Vec::new(),
         }
     }
 
@@ -187,6 +211,10 @@ impl SimulationRunner {
             }
             SimAction::FailNextUpload => {
                 self.pending_upload_failures += 1;
+                Ok(())
+            }
+            SimAction::ConcurrentRemoteChange(op) => {
+                self.pending_concurrent_remote_ops.push(op);
                 Ok(())
             }
         }
@@ -459,6 +487,10 @@ impl SimulationRunner {
     ///   Phase B: re-plan, then execute deletes
     /// This ensures moves are executed before cascade deletes can orphan files
     /// (e.g., a file moved out of a directory that is then deleted).
+    ///
+    /// After the first batch of non-delete ops, any queued concurrent remote
+    /// changes are applied to `MockRemote` (but not fetched into the store).
+    /// This simulates `CouchDB` changes arriving mid-sync from other devices.
     fn plan_and_execute_loop(&mut self) -> Result<(), String> {
         let max_rounds = 10;
         for _ in 0..max_rounds {
@@ -472,6 +504,11 @@ impl SimulationRunner {
             for op in non_delete_ops {
                 self.execute_op(op)?;
             }
+
+            // Inject concurrent remote changes after non-delete ops execute.
+            // These modify MockRemote but are NOT fetched into the store,
+            // simulating changes that arrive while sync is in progress.
+            self.apply_concurrent_remote_ops();
 
             if !delete_ops.is_empty() {
                 // Re-plan before deletes: moves that were blocked (ParentMissing)
@@ -488,7 +525,39 @@ impl SimulationRunner {
             }
         }
 
+        // Drain any remaining concurrent changes even when the planner found
+        // no work (e.g., everything was already in sync). They'll be picked
+        // up by the next sync call's fetch_remote_changes.
+        self.apply_concurrent_remote_ops();
+
         Ok(())
+    }
+
+    fn apply_concurrent_remote_ops(&mut self) {
+        let ops: Vec<_> = self.pending_concurrent_remote_ops.drain(..).collect();
+        for op in ops {
+            match op {
+                ConcurrentRemoteOp::CreateFile {
+                    id,
+                    parent_id,
+                    name,
+                    content,
+                } => {
+                    // Only create if parent still exists (a real server would
+                    // reject creates into a deleted directory)
+                    if self.remote.get_node(&parent_id).is_some() {
+                        self.apply_remote_create_file(&id, &parent_id, name, content);
+                    }
+                }
+                ConcurrentRemoteOp::ModifyFile { id, content } => {
+                    // Silently ignore if the file no longer exists (concurrent deletion)
+                    let _ = self.apply_remote_modify(&id, content);
+                }
+                ConcurrentRemoteOp::DeleteFile { id } => {
+                    self.remote.delete_node(&id);
+                }
+            }
+        }
     }
 
     fn plan_sync_ops(&self) -> Result<Vec<crate::model::SyncOp>, String> {
