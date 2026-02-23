@@ -2271,6 +2271,109 @@ fn file_moved_out_of_dir_then_dir_deleted_converges() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Cycle Detection in Moves ====================
+
+#[test]
+fn remote_cycle_two_dirs_does_not_infinite_loop() {
+    // Simulate a CouchDB change feed that creates a parent cycle:
+    // dir_a's parent is dir_b, and dir_b's parent is dir_a.
+    // The planner must detect the cycle and not infinite-loop.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Create root and two dirs on remote, sync them
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let dir_a = RemoteId::new("dir-a");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: dir_a.clone(),
+            parent_id: Some(root_id.clone()),
+            name: "alpha".to_string(),
+        })
+        .unwrap();
+
+    let dir_b = RemoteId::new("dir-b");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: dir_b.clone(),
+            parent_id: Some(root_id.clone()),
+            name: "beta".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Now create a cycle: move dir_a under dir_b, then dir_b under dir_a
+    runner
+        .apply(SimAction::RemoteMove {
+            id: dir_a.clone(),
+            new_parent_id: dir_b.clone(),
+            new_name: "alpha".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteMove {
+            id: dir_b.clone(),
+            new_parent_id: dir_a.clone(),
+            new_name: "beta".to_string(),
+        })
+        .unwrap();
+
+    // Sync must not infinite-loop — it should complete
+    runner.apply(SimAction::Sync).unwrap();
+}
+
+#[test]
+fn remote_cycle_self_parent_does_not_infinite_loop() {
+    // A directory whose parent_id points to itself
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let dir_a = RemoteId::new("dir-a");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: dir_a.clone(),
+            parent_id: Some(root_id.clone()),
+            name: "alpha".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move dir_a to be its own parent (self-cycle)
+    runner
+        .apply(SimAction::RemoteMove {
+            id: dir_a.clone(),
+            new_parent_id: dir_a.clone(),
+            new_name: "alpha".to_string(),
+        })
+        .unwrap();
+
+    // Sync must not infinite-loop
+    runner.apply(SimAction::Sync).unwrap();
+}
+
 #[derive(Debug, Clone)]
 struct SimState {
     remote_file_ids: Vec<RemoteId>,
@@ -2318,60 +2421,58 @@ impl SimState {
 
     /// Remove a remote directory and all its descendants from tracking
     fn remove_remote_tree(&mut self, dir_id: &RemoteId) {
-        let children_files: Vec<RemoteId> = self
-            .remote_file_ids
-            .iter()
-            .filter(|id| self.remote_parents.get(*id) == Some(dir_id))
-            .cloned()
-            .collect();
-        let children_dirs: Vec<RemoteId> = self
-            .remote_dir_ids
-            .iter()
-            .filter(|id| self.remote_parents.get(*id) == Some(dir_id))
-            .cloned()
-            .collect();
-        for child in &children_dirs {
-            self.remove_remote_tree(child);
+        let mut to_remove = Vec::new();
+        let mut stack = vec![dir_id.clone()];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            for id in &self.remote_file_ids {
+                if self.remote_parents.get(id) == Some(&current) {
+                    to_remove.push(id.clone());
+                }
+            }
+            for id in &self.remote_dir_ids {
+                if self.remote_parents.get(id) == Some(&current) {
+                    stack.push(id.clone());
+                }
+            }
+            to_remove.push(current);
         }
-        for child in &children_files {
-            self.remote_file_ids.retain(|x| x != child);
-            self.remote_parents.remove(child);
+        for id in &to_remove {
+            self.remote_file_ids.retain(|x| x != id);
+            self.remote_dir_ids.retain(|x| x != id);
+            self.remote_parents.remove(id);
         }
-        for child in &children_dirs {
-            self.remote_dir_ids.retain(|x| x != child);
-            self.remote_parents.remove(child);
-        }
-        self.remote_dir_ids.retain(|x| x != dir_id);
-        self.remote_parents.remove(dir_id);
     }
 
     /// Remove a local directory and all its descendants from tracking
     fn remove_local_tree(&mut self, dir_id: &LocalFileId) {
-        let children_files: Vec<LocalFileId> = self
-            .local_file_ids
-            .iter()
-            .filter(|id| self.local_parents.get(*id) == Some(dir_id))
-            .cloned()
-            .collect();
-        let children_dirs: Vec<LocalFileId> = self
-            .local_dir_ids
-            .iter()
-            .filter(|id| self.local_parents.get(*id) == Some(dir_id))
-            .cloned()
-            .collect();
-        for child in &children_dirs {
-            self.remove_local_tree(child);
+        let mut to_remove = Vec::new();
+        let mut stack = vec![dir_id.clone()];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            for id in &self.local_file_ids {
+                if self.local_parents.get(id) == Some(&current) {
+                    to_remove.push(id.clone());
+                }
+            }
+            for id in &self.local_dir_ids {
+                if self.local_parents.get(id) == Some(&current) {
+                    stack.push(id.clone());
+                }
+            }
+            to_remove.push(current);
         }
-        for child in &children_files {
-            self.local_file_ids.retain(|x| x != child);
-            self.local_parents.remove(child);
+        for id in &to_remove {
+            self.local_file_ids.retain(|x| x != id);
+            self.local_dir_ids.retain(|x| x != id);
+            self.local_parents.remove(id);
         }
-        for child in &children_dirs {
-            self.local_dir_ids.retain(|x| x != child);
-            self.local_parents.remove(child);
-        }
-        self.local_dir_ids.retain(|x| x != dir_id);
-        self.local_parents.remove(dir_id);
     }
 
     fn next_remote_id(&mut self) -> RemoteId {
@@ -2384,6 +2485,26 @@ impl SimState {
         let id = LocalFileId::new(1, self.next_local_inode);
         self.next_local_inode += 1;
         id
+    }
+
+    /// Check if moving `dir_id` under `new_parent` would create a cycle
+    /// in the local parent chain.
+    fn would_create_local_cycle(&self, dir_id: &LocalFileId, new_parent: &LocalFileId) -> bool {
+        let mut current = new_parent.clone();
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if &current == dir_id {
+                return true;
+            }
+            if !visited.insert(current.clone()) {
+                return false;
+            }
+            if let Some(parent) = self.local_parents.get(&current) {
+                current = parent.clone();
+            } else {
+                return false;
+            }
+        }
     }
 }
 
@@ -2436,10 +2557,12 @@ enum ActionChoice {
     },
     RemoteMoveDir {
         idx: usize,
+        parent_idx: usize,
         new_name: String,
     },
     LocalMoveDir {
         idx: usize,
+        parent_idx: usize,
         new_name: String,
     },
     LocalDeleteDir {
@@ -2509,10 +2632,20 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
                 new_name,
             }
         ),
-        (any::<usize>(), arbitrary_file_name())
-            .prop_map(|(idx, new_name)| ActionChoice::RemoteMoveDir { idx, new_name }),
-        (any::<usize>(), arbitrary_file_name())
-            .prop_map(|(idx, new_name)| ActionChoice::LocalMoveDir { idx, new_name }),
+        (any::<usize>(), any::<usize>(), arbitrary_file_name()).prop_map(
+            |(idx, parent_idx, new_name)| ActionChoice::RemoteMoveDir {
+                idx,
+                parent_idx,
+                new_name,
+            },
+        ),
+        (any::<usize>(), any::<usize>(), arbitrary_file_name()).prop_map(
+            |(idx, parent_idx, new_name)| ActionChoice::LocalMoveDir {
+                idx,
+                parent_idx,
+                new_name,
+            },
+        ),
         any::<usize>().prop_map(|idx| ActionChoice::LocalDeleteDir { idx }),
         any::<usize>().prop_map(|idx| ActionChoice::RemoteDeleteDir { idx }),
         Just(ActionChoice::FailNextDownload),
@@ -2698,13 +2831,18 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
                 new_name: new_name.clone(),
             }
         }
-        ActionChoice::RemoteMoveDir { idx, new_name } => {
+        ActionChoice::RemoteMoveDir {
+            idx,
+            parent_idx,
+            new_name,
+        } => {
             if state.remote_dir_ids.len() <= 1 {
                 return SimAction::Sync;
             }
             let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
-            let new_parent = state.remote_dir_ids[0].clone();
+            let new_parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
+            // Allow cyclic moves — the planner must handle them gracefully
             state.remote_parents.insert(id.clone(), new_parent.clone());
             SimAction::RemoteMove {
                 id,
@@ -2712,13 +2850,21 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
                 new_name: new_name.clone(),
             }
         }
-        ActionChoice::LocalMoveDir { idx, new_name } => {
+        ActionChoice::LocalMoveDir {
+            idx,
+            parent_idx,
+            new_name,
+        } => {
             if state.local_dir_ids.len() <= 1 {
                 return SimAction::Sync;
             }
             let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
-            let new_parent = state.local_dir_ids[0].clone();
+            let new_parent = state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone();
+            // Skip cyclic local moves — the local FS can't have cycles
+            if state.would_create_local_cycle(&id, &new_parent) {
+                return SimAction::Sync;
+            }
             state.local_parents.insert(id.clone(), new_parent.clone());
             SimAction::LocalMove {
                 local_id: id,

@@ -40,20 +40,33 @@ impl MockFs {
     }
 
     pub fn delete(&mut self, id: &LocalFileId) {
-        // Recursively collect all descendants
-        let children: Vec<LocalFileId> = self
-            .nodes
+        let mut to_remove = Vec::new();
+        Self::collect_tree(&self.nodes, id, &mut to_remove, &mut HashSet::new());
+        for rid in &to_remove {
+            self.files.remove(rid);
+            self.dirs.remove(rid);
+            self.nodes.remove(rid);
+        }
+    }
+
+    fn collect_tree(
+        nodes: &HashMap<LocalFileId, LocalNode>,
+        id: &LocalFileId,
+        out: &mut Vec<LocalFileId>,
+        visited: &mut HashSet<LocalFileId>,
+    ) {
+        if !visited.insert(id.clone()) {
+            return;
+        }
+        let children: Vec<LocalFileId> = nodes
             .values()
             .filter(|n| n.parent_id.as_ref() == Some(id))
             .map(|n| n.id.clone())
             .collect();
         for child in children {
-            self.delete(&child);
+            Self::collect_tree(nodes, &child, out, visited);
         }
-
-        self.files.remove(id);
-        self.dirs.remove(id);
-        self.nodes.remove(id);
+        out.push(id.clone());
     }
 
     #[must_use]

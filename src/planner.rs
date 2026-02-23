@@ -4,7 +4,7 @@ use crate::model::{
     SyncOp, SyncedRecord, content_matches,
 };
 use crate::store::TreeStore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub struct Planner<'a> {
@@ -50,7 +50,34 @@ impl<'a> Planner<'a> {
             .map(|r| (r.remote_id.clone(), r))
             .collect();
 
+        let cyclic_remote_ids = Self::find_remote_cycles(&remote_by_id);
+
         for remote in &remote_nodes {
+            if cyclic_remote_ids.contains(&remote.id) {
+                tracing::warn!(
+                    remote_id = remote.id.as_str(),
+                    name = &remote.name,
+                    "⚠️ Skipping node involved in parent cycle"
+                );
+                // If the node was previously synced, delete the local copy
+                if let Some(synced) = synced_by_remote.get(&remote.id)
+                    && let Some(local) = local_by_id.get(&synced.local_id)
+                {
+                    results.push(PlanResult::Op(SyncOp::DeleteLocal {
+                        local_id: local.id.clone(),
+                        local_path: self.compute_local_path_from_local(local),
+                        expected_md5: synced.md5sum.clone(),
+                    }));
+                }
+                results.push(PlanResult::Conflict(Conflict {
+                    local_id: None,
+                    remote_id: Some(remote.id.clone()),
+                    reason: "Parent chain forms a cycle".to_string(),
+                    kind: ConflictKind::CycleDetected,
+                }));
+                continue;
+            }
+
             let synced = synced_by_remote.get(&remote.id);
             let local = synced.and_then(|s| local_by_id.get(&s.local_id));
 
@@ -433,6 +460,37 @@ impl<'a> Planner<'a> {
         Some(synced.remote_id)
     }
 
+    /// Find all remote node IDs whose ancestor chain does not reach root.
+    ///
+    /// This includes nodes directly in a cycle (e.g., A→B→A) and nodes
+    /// whose ancestor is in a cycle (unreachable descendants).
+    fn find_remote_cycles(remote_by_id: &HashMap<RemoteId, &RemoteNode>) -> HashSet<RemoteId> {
+        let mut unreachable = HashSet::new();
+
+        for id in remote_by_id.keys() {
+            let mut visited = HashSet::new();
+            let mut current = Some(id.clone());
+            let mut reaches_root = false;
+            while let Some(ref cid) = current {
+                if !visited.insert(cid.clone()) {
+                    break; // cycle detected
+                }
+                match remote_by_id.get(cid).and_then(|n| n.parent_id.as_ref()) {
+                    None => {
+                        reaches_root = true;
+                        break;
+                    }
+                    Some(pid) => current = Some(pid.clone()),
+                }
+            }
+            if !reaches_root {
+                unreachable.insert(id.clone());
+            }
+        }
+
+        unreachable
+    }
+
     fn compute_local_path(&self, remote: &RemoteNode) -> PathBuf {
         let rel_path = self.compute_remote_rel_path(remote);
         self.sync_root.join(rel_path)
@@ -447,7 +505,11 @@ impl<'a> Planner<'a> {
         }
 
         let mut current_parent = remote.parent_id.clone();
+        let mut visited = HashSet::new();
         while let Some(ref parent_id) = current_parent {
+            if !visited.insert(parent_id.clone()) {
+                break;
+            }
             if let Ok(Some(parent)) = self.store.get_remote_node(parent_id) {
                 if !parent.name.is_empty() {
                     components.push(parent.name.clone());
@@ -476,7 +538,11 @@ impl<'a> Planner<'a> {
         }
 
         let mut current_parent = local.parent_id.clone();
+        let mut visited = HashSet::new();
         while let Some(ref parent_id) = current_parent {
+            if !visited.insert(parent_id.clone()) {
+                break;
+            }
             if let Ok(Some(parent)) = self.store.get_local_node(parent_id) {
                 if !parent.name.is_empty() {
                     components.push(parent.name.clone());

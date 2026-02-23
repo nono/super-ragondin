@@ -341,6 +341,8 @@ pub enum ConflictKind {
     BothMoved,
     /// Name contains unsafe characters (path traversal)
     InvalidName,
+    /// Parent chain forms a cycle (e.g., A's parent is B, B's parent is A)
+    CycleDetected,
 }
 
 /// Result of planning sync operations for an item

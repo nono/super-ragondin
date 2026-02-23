@@ -549,16 +549,28 @@ impl SimulationRunner {
     }
 
     fn delete_local_recursive(&self, id: &LocalFileId) -> Result<(), String> {
-        let children = self
-            .store
-            .list_local_children(id)
-            .map_err(|e| e.to_string())?;
-        for child in &children {
-            self.delete_local_recursive(&child.id)?;
+        let mut to_delete = Vec::new();
+        let mut stack = vec![id.clone()];
+        let mut visited = HashSet::new();
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            let children = self
+                .store
+                .list_local_children(&current)
+                .map_err(|e| e.to_string())?;
+            for child in &children {
+                stack.push(child.id.clone());
+            }
+            to_delete.push(current);
         }
-        self.store
-            .delete_local_node(id)
-            .map_err(|e| e.to_string())?;
+        // Delete in reverse order (children before parents)
+        for del_id in to_delete.iter().rev() {
+            self.store
+                .delete_local_node(del_id)
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -1225,8 +1237,34 @@ impl SimulationRunner {
         parts.join("/")
     }
 
+    /// Check whether a remote node's ancestor chain reaches root without a cycle.
+    /// Nodes involved in or under a cycle are "unreachable" and excluded from
+    /// convergence checks because the planner reports them as conflicts.
+    fn remote_node_reachable(&self, node: &RemoteNode) -> bool {
+        if node.parent_id.is_none() {
+            return true;
+        }
+        let mut current = node.parent_id.clone();
+        let mut visited = HashSet::new();
+        while let Some(ref pid) = current {
+            if !visited.insert(pid.clone()) {
+                return false;
+            }
+            if let Some(parent) = self.remote.get_node(pid) {
+                if parent.parent_id.is_none() {
+                    return true;
+                }
+                current.clone_from(&parent.parent_id);
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Check invariant: after sync, local and remote should have same files
-    /// and directories (same paths and same content for files)
+    /// and directories (same paths and same content for files).
+    /// Remote nodes that are unreachable due to parent cycles are excluded.
     ///
     /// # Errors
     /// Returns an error describing the convergence mismatch
@@ -1247,7 +1285,7 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.is_file())
+            .filter(|n| n.is_file() && self.remote_node_reachable(n))
             .filter_map(|n| {
                 n.md5sum
                     .as_ref()
@@ -1275,7 +1313,7 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.is_dir() && !n.name.is_empty())
+            .filter(|n| n.is_dir() && !n.name.is_empty() && self.remote_node_reachable(n))
             .map(|n| self.remote_path(n))
             .collect();
 
@@ -1394,9 +1432,17 @@ impl SimulationRunner {
             .iter()
             .filter(|r| matches!(r, crate::model::PlanResult::Op(_)))
             .collect();
+        // CycleDetected conflicts are persistent (they remain until the
+        // server resolves the cycle), so they don't indicate non-idempotency.
         let conflicts: Vec<_> = results
             .iter()
-            .filter(|r| matches!(r, crate::model::PlanResult::Conflict(_)))
+            .filter(|r| {
+                matches!(
+                    r,
+                    crate::model::PlanResult::Conflict(c)
+                        if c.kind != crate::model::ConflictKind::CycleDetected
+                )
+            })
             .collect();
 
         if ops.is_empty() && conflicts.is_empty() {

@@ -1,5 +1,5 @@
 use crate::model::{RemoteId, RemoteNode};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A change record for tracking remote changes
 #[derive(Debug, Clone)]
@@ -38,25 +38,38 @@ impl MockRemote {
     }
 
     pub fn delete_node(&mut self, id: &RemoteId) {
-        // Recursively collect and delete all descendants first
-        let children: Vec<RemoteId> = self
-            .nodes
+        let mut to_remove = Vec::new();
+        Self::collect_tree(&self.nodes, id, &mut to_remove, &mut HashSet::new());
+        for rid in &to_remove {
+            self.seq += 1;
+            self.changes.push(ChangeRecord {
+                seq: self.seq,
+                remote_id: rid.clone(),
+                deleted: true,
+            });
+            self.nodes.remove(rid);
+            self.file_contents.remove(rid);
+        }
+    }
+
+    fn collect_tree(
+        nodes: &HashMap<RemoteId, RemoteNode>,
+        id: &RemoteId,
+        out: &mut Vec<RemoteId>,
+        visited: &mut HashSet<RemoteId>,
+    ) {
+        if !visited.insert(id.clone()) {
+            return;
+        }
+        let children: Vec<RemoteId> = nodes
             .values()
             .filter(|n| n.parent_id.as_ref() == Some(id))
             .map(|n| n.id.clone())
             .collect();
         for child in children {
-            self.delete_node(&child);
+            Self::collect_tree(nodes, &child, out, visited);
         }
-
-        self.seq += 1;
-        self.changes.push(ChangeRecord {
-            seq: self.seq,
-            remote_id: id.clone(),
-            deleted: true,
-        });
-        self.nodes.remove(id);
-        self.file_contents.remove(id);
+        out.push(id.clone());
     }
 
     #[must_use]
