@@ -21,7 +21,6 @@ pub struct StoreSnapshot {
 /// - Local: keyed by `LocalFileId` (16-byte binary)
 /// - Synced: keyed by `LocalFileId` with reverse index by `RemoteId`
 pub struct TreeStore {
-    #[allow(dead_code)]
     keyspace: Keyspace,
     remote: PartitionHandle,
     local: PartitionHandle,
