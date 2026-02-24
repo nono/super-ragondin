@@ -1,7 +1,9 @@
 use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode};
 use cozy_desktop::simulator::mock_fs::MockFs;
 use cozy_desktop::simulator::mock_remote::MockRemote;
-use cozy_desktop::simulator::runner::{ConcurrentRemoteOp, SimAction, SimulationRunner};
+use cozy_desktop::simulator::runner::{
+    ConcurrentRemoteOp, SimAction, SimulationRunner, TRASH_DIR_ID,
+};
 use cozy_desktop::store::TreeStore;
 use proptest::prelude::*;
 use tempfile::tempdir;
@@ -1927,6 +1929,132 @@ fn check_convergence_detects_directory_mismatch() {
     );
 }
 
+// ==================== Trash Folder Tests ====================
+
+#[test]
+fn remote_trash_file_removes_locally_on_sync() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "test.txt".to_string(),
+            content: b"hello world".to_vec(),
+        })
+        .unwrap();
+
+    // Sync — file appears locally
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "test.txt")
+        .collect();
+    assert_eq!(local_files.len(), 1, "File should exist locally after sync");
+
+    // Trash the file on remote
+    runner
+        .apply(SimAction::RemoteTrash { id: file_id })
+        .unwrap();
+
+    // Sync — trash should propagate as a deletion
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "test.txt")
+        .collect();
+    assert_eq!(
+        local_files.len(),
+        0,
+        "File should be removed locally after trash"
+    );
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn remote_trash_dir_removes_children_locally() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let dir_id = RemoteId::new("dir-1");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: dir_id.clone(),
+            parent_id: Some(root_id),
+            name: "photos".to_string(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: dir_id.clone(),
+            name: "vacation.jpg".to_string(),
+            content: b"image data".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Trash the directory (which contains the file)
+    runner.apply(SimAction::RemoteTrash { id: dir_id }).unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "photos")
+        .collect();
+    assert_eq!(local_dirs.len(), 0, "Trashed dir should be removed locally");
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "vacation.jpg")
+        .collect();
+    assert_eq!(
+        local_files.len(),
+        0,
+        "File in trashed dir should be removed locally"
+    );
+
+    runner.check_convergence().unwrap();
+}
+
 // ==================== Regression: deeply nested local dirs must sync ====================
 
 #[test]
@@ -2585,6 +2713,15 @@ enum ActionChoice {
     ConcurrentRemoteDelete {
         idx: usize,
     },
+    ConcurrentRemoteTrash {
+        idx: usize,
+    },
+    RemoteTrashFile {
+        idx: usize,
+    },
+    RemoteTrashDir {
+        idx: usize,
+    },
     SnapshotState,
     RollbackToSnapshot,
 }
@@ -2660,6 +2797,9 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
         (any::<usize>(), arbitrary_content())
             .prop_map(|(idx, content)| ActionChoice::ConcurrentRemoteModify { idx, content }),
         any::<usize>().prop_map(|idx| ActionChoice::ConcurrentRemoteDelete { idx }),
+        any::<usize>().prop_map(|idx| ActionChoice::ConcurrentRemoteTrash { idx }),
+        any::<usize>().prop_map(|idx| ActionChoice::RemoteTrashFile { idx }),
+        any::<usize>().prop_map(|idx| ActionChoice::RemoteTrashDir { idx }),
         Just(ActionChoice::SnapshotState),
         Just(ActionChoice::RollbackToSnapshot),
     ]
@@ -2928,6 +3068,31 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
             SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::DeleteFile { id })
+        }
+        ActionChoice::ConcurrentRemoteTrash { idx } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            state.remote_file_ids.retain(|x| x != &id);
+            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::TrashFile { id })
+        }
+        ActionChoice::RemoteTrashFile { idx } => {
+            if state.remote_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
+            state.remote_file_ids.retain(|x| x != &id);
+            SimAction::RemoteTrash { id }
+        }
+        ActionChoice::RemoteTrashDir { idx } => {
+            if state.remote_dir_ids.len() <= 1 {
+                return SimAction::Sync;
+            }
+            let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
+            let id = non_root[idx % non_root.len()].clone();
+            state.remove_remote_tree(&id);
+            SimAction::RemoteTrash { id }
         }
         ActionChoice::SnapshotState => {
             state.take_snapshot();

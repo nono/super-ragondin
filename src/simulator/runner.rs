@@ -9,6 +9,9 @@ use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
+/// Well-known remote ID for the Cozy trash directory
+pub const TRASH_DIR_ID: &str = "io.cozy.files.trash-dir";
+
 fn compute_md5(content: &[u8]) -> String {
     compute_md5_from_bytes(content)
 }
@@ -67,6 +70,9 @@ pub enum ConcurrentRemoteOp {
     DeleteFile {
         id: RemoteId,
     },
+    TrashFile {
+        id: RemoteId,
+    },
 }
 
 impl std::fmt::Display for ConcurrentRemoteOp {
@@ -79,6 +85,7 @@ impl std::fmt::Display for ConcurrentRemoteOp {
                 write!(f, "ModifyFile(id={id}, {}B)", content.len())
             }
             Self::DeleteFile { id } => write!(f, "DeleteFile(id={id})"),
+            Self::TrashFile { id } => write!(f, "TrashFile(id={id})"),
         }
     }
 }
@@ -116,6 +123,10 @@ pub enum SimAction {
         name: String,
     },
     RemoteDeleteFile {
+        id: RemoteId,
+    },
+    /// Move a remote file or directory to the trash (`io.cozy.files.trash-dir`)
+    RemoteTrash {
         id: RemoteId,
     },
     RemoteModifyFile {
@@ -204,6 +215,7 @@ impl std::fmt::Display for SimAction {
                 fmt_remote_parent(parent_id.as_ref())
             ),
             Self::RemoteDeleteFile { id } => write!(f, "RemoteDeleteFile(id={id})"),
+            Self::RemoteTrash { id } => write!(f, "RemoteTrash(id={id})"),
             Self::RemoteModifyFile { id, content } => {
                 write!(f, "RemoteModifyFile(id={id}, {}B)", content.len())
             }
@@ -302,6 +314,10 @@ impl SimulationRunner {
             }
             SimAction::RemoteDeleteFile { id } => {
                 self.remote.delete_node(&id);
+                Ok(())
+            }
+            SimAction::RemoteTrash { id } => {
+                self.apply_remote_trash(&id);
                 Ok(())
             }
             SimAction::RemoteModifyFile { id, content } => self.apply_remote_modify(&id, content),
@@ -530,6 +546,48 @@ impl SimulationRunner {
         Ok(())
     }
 
+    fn ensure_trash_dir_exists(&mut self) {
+        let trash_id = RemoteId::new(TRASH_DIR_ID);
+        if self.remote.get_node(&trash_id).is_none() {
+            self.apply_remote_create_dir(&trash_id, None, ".cozy_trash".to_string());
+        }
+    }
+
+    fn apply_remote_trash(&mut self, id: &RemoteId) {
+        self.ensure_trash_dir_exists();
+        let trash_id = RemoteId::new(TRASH_DIR_ID);
+        if let Some(node) = self.remote.get_node(id) {
+            let name = node.name.clone();
+            self.remote.move_node(id, trash_id, name);
+        }
+    }
+
+    /// Check whether a remote node is under the trash directory
+    fn is_under_trash(&self, node: &RemoteNode) -> bool {
+        let trash_id = RemoteId::new(TRASH_DIR_ID);
+        let mut current = node.parent_id.clone();
+        let mut visited = HashSet::new();
+        while let Some(ref pid) = current {
+            if *pid == trash_id {
+                return true;
+            }
+            if !visited.insert(pid.clone()) {
+                return false;
+            }
+            if let Some(parent) = self.remote.get_node(pid) {
+                current.clone_from(&parent.parent_id);
+            } else {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Check whether a remote node is the trash directory or under it
+    fn is_trashed_or_trash_dir(&self, node: &RemoteNode) -> bool {
+        node.id.as_str() == TRASH_DIR_ID || self.is_under_trash(node)
+    }
+
     fn apply_local_move(
         &mut self,
         local_id: &LocalFileId,
@@ -601,12 +659,24 @@ impl SimulationRunner {
     }
 
     fn fetch_remote_changes(&mut self) -> Result<(), String> {
+        let trash_id = RemoteId::new(TRASH_DIR_ID);
         for change in self.remote.get_all_changes_since(self.last_seq) {
             if change.deleted {
                 self.store
                     .delete_remote_node(&change.remote_id)
                     .map_err(|e| e.to_string())?;
             } else if let Some(node) = self.remote.get_node(&change.remote_id).cloned() {
+                // Skip the trash directory itself — it should never be synced
+                if node.id == trash_id {
+                    continue;
+                }
+
+                // Nodes moved under the trash are treated as remote deletions
+                if self.is_under_trash(&node) {
+                    self.delete_remote_tree_from_store(&node.id)?;
+                    continue;
+                }
+
                 self.store
                     .insert_remote_node(&node)
                     .map_err(|e| e.to_string())?;
@@ -617,6 +687,30 @@ impl SimulationRunner {
             }
         }
         self.last_seq = self.remote.current_seq();
+        Ok(())
+    }
+
+    /// Delete a remote node and all its descendants from the store's remote tree.
+    /// Used when a node is moved to trash — children don't get individual change
+    /// records, so we recursively clean them up.
+    fn delete_remote_tree_from_store(&self, id: &RemoteId) -> Result<(), String> {
+        let all_remote = self.store.list_all_remote().map_err(|e| e.to_string())?;
+        let mut to_delete = vec![id.clone()];
+        let mut i = 0;
+        while i < to_delete.len() {
+            let current = to_delete[i].clone();
+            for node in &all_remote {
+                if node.parent_id.as_ref() == Some(&current) && !to_delete.contains(&node.id) {
+                    to_delete.push(node.id.clone());
+                }
+            }
+            i += 1;
+        }
+        for del_id in &to_delete {
+            self.store
+                .delete_remote_node(del_id)
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -732,6 +826,9 @@ impl SimulationRunner {
                 }
                 ConcurrentRemoteOp::DeleteFile { id } => {
                     self.remote.delete_node(&id);
+                }
+                ConcurrentRemoteOp::TrashFile { id } => {
+                    self.apply_remote_trash(&id);
                 }
             }
         }
@@ -1285,7 +1382,9 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.is_file() && self.remote_node_reachable(n))
+            .filter(|n| {
+                n.is_file() && self.remote_node_reachable(n) && !self.is_trashed_or_trash_dir(n)
+            })
             .filter_map(|n| {
                 n.md5sum
                     .as_ref()
@@ -1313,7 +1412,12 @@ impl SimulationRunner {
             .remote
             .nodes
             .values()
-            .filter(|n| n.is_dir() && !n.name.is_empty() && self.remote_node_reachable(n))
+            .filter(|n| {
+                n.is_dir()
+                    && !n.name.is_empty()
+                    && self.remote_node_reachable(n)
+                    && !self.is_trashed_or_trash_dir(n)
+            })
             .map(|n| self.remote_path(n))
             .collect();
 
