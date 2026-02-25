@@ -28,6 +28,9 @@ impl<'a> Planner<'a> {
 
         let remote_nodes = self.store.list_all_remote()?;
         let local_nodes = self.store.list_all_local()?;
+
+        self.reconcile_inodes(&local_nodes)?;
+
         let synced_records = self.store.list_all_synced()?;
 
         tracing::info!(
@@ -120,6 +123,61 @@ impl<'a> Planner<'a> {
             "📋 Planning complete"
         );
         Ok(results)
+    }
+
+    /// Detect files that were atomically saved (write-to-temp, delete, rename).
+    ///
+    /// When a synced record's `local_id` (inode) no longer exists in the local
+    /// tree but a local node with the same name and parent does, re-bind the
+    /// synced record to the new inode. This turns what would be a
+    /// `DeleteRemote` + `UploadNew` into an `UploadUpdate`, preserving the
+    /// remote document ID (and its sharing permissions, history, etc.).
+    fn reconcile_inodes(&self, local_nodes: &[LocalNode]) -> Result<()> {
+        let local_by_id: HashMap<LocalFileId, &LocalNode> =
+            local_nodes.iter().map(|n| (n.id.clone(), n)).collect();
+
+        let synced_local_ids: HashSet<LocalFileId> = self
+            .store
+            .list_all_synced()?
+            .into_iter()
+            .map(|r| r.local_id)
+            .collect();
+
+        let unbound_by_location: HashMap<(Option<&LocalFileId>, &str), &LocalNode> = local_nodes
+            .iter()
+            .filter(|n| !synced_local_ids.contains(&n.id))
+            .map(|n| ((n.parent_id.as_ref(), n.name.as_str()), n))
+            .collect();
+
+        for synced in self.store.list_all_synced()? {
+            if local_by_id.contains_key(&synced.local_id) {
+                continue;
+            }
+
+            let Some(synced_name) = &synced.local_name else {
+                continue;
+            };
+            let synced_parent = synced.local_parent_id.as_ref();
+
+            if let Some(new_local) = unbound_by_location.get(&(synced_parent, synced_name.as_str()))
+            {
+                tracing::info!(
+                    old_inode = %synced.local_id,
+                    new_inode = %new_local.id,
+                    name = synced_name,
+                    "🔄 Atomic save detected, rebinding inode"
+                );
+
+                let new_synced = SyncedRecord {
+                    local_id: new_local.id.clone(),
+                    ..synced.clone()
+                };
+                self.store.delete_synced(&synced.local_id)?;
+                self.store.insert_synced(&new_synced)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn plan_remote_node(

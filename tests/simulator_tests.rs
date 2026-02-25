@@ -2055,6 +2055,111 @@ fn remote_trash_dir_removes_children_locally() {
     runner.check_convergence().unwrap();
 }
 
+// ==================== Atomic save (write-to-temp, delete, rename) ====================
+
+#[test]
+fn atomic_save_preserves_remote_identity() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup root + remote file
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "report.odt".to_string(),
+            content: b"original content".to_vec(),
+        })
+        .unwrap();
+
+    // Sync so the file is downloaded locally
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Find the local ID for the synced file
+    let local_id = runner.remote_to_local.get(&file_id).cloned().unwrap();
+
+    // Atomic save: same path, new inode, new content
+    runner
+        .apply(SimAction::LocalAtomicSave {
+            local_id,
+            content: b"updated content".to_vec(),
+        })
+        .unwrap();
+
+    // Sync — should upload update, NOT delete + re-create
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Remote file must still have the same ID (preserving sharing, etc.)
+    assert!(
+        runner.remote.get_node(&file_id).is_some(),
+        "Remote file must keep its original ID"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn atomic_save_same_content_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "report.odt".to_string(),
+            content: b"same content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_id = runner.remote_to_local.get(&file_id).cloned().unwrap();
+
+    // Atomic save with identical content (e.g. user saved without editing)
+    runner
+        .apply(SimAction::LocalAtomicSave {
+            local_id,
+            content: b"same content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    assert!(
+        runner.remote.get_node(&file_id).is_some(),
+        "Remote file must keep its original ID"
+    );
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Regression: deeply nested local dirs must sync ====================
 
 #[test]
@@ -2722,6 +2827,10 @@ enum ActionChoice {
     RemoteTrashDir {
         idx: usize,
     },
+    LocalAtomicSave {
+        idx: usize,
+        content: Vec<u8>,
+    },
     SnapshotState,
     RollbackToSnapshot,
 }
@@ -2800,6 +2909,8 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
         any::<usize>().prop_map(|idx| ActionChoice::ConcurrentRemoteTrash { idx }),
         any::<usize>().prop_map(|idx| ActionChoice::RemoteTrashFile { idx }),
         any::<usize>().prop_map(|idx| ActionChoice::RemoteTrashDir { idx }),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::LocalAtomicSave { idx, content }),
         Just(ActionChoice::SnapshotState),
         Just(ActionChoice::RollbackToSnapshot),
     ]
@@ -3093,6 +3204,16 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             let id = non_root[idx % non_root.len()].clone();
             state.remove_remote_tree(&id);
             SimAction::RemoteTrash { id }
+        }
+        ActionChoice::LocalAtomicSave { idx, content } => {
+            if state.local_file_ids.is_empty() {
+                return SimAction::Sync;
+            }
+            let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
+            SimAction::LocalAtomicSave {
+                local_id: id,
+                content: content.clone(),
+            }
         }
         ActionChoice::SnapshotState => {
             state.take_snapshot();

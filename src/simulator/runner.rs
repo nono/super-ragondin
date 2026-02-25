@@ -133,6 +133,12 @@ pub enum SimAction {
         id: RemoteId,
         content: Vec<u8>,
     },
+    /// Simulate an atomic save: delete the old inode, create a new one with
+    /// the same name and parent but new content (and a fresh inode).
+    LocalAtomicSave {
+        local_id: LocalFileId,
+        content: Vec<u8>,
+    },
     LocalMove {
         local_id: LocalFileId,
         new_parent_local_id: Option<LocalFileId>,
@@ -219,6 +225,9 @@ impl std::fmt::Display for SimAction {
             Self::RemoteModifyFile { id, content } => {
                 write!(f, "RemoteModifyFile(id={id}, {}B)", content.len())
             }
+            Self::LocalAtomicSave { local_id, content } => {
+                write!(f, "LocalAtomicSave(id={local_id}, {}B)", content.len())
+            }
             Self::LocalMove {
                 local_id,
                 new_parent_local_id,
@@ -294,6 +303,9 @@ impl SimulationRunner {
             SimAction::LocalDeleteFile { local_id } => self.apply_local_delete(&local_id),
             SimAction::LocalModifyFile { local_id, content } => {
                 self.apply_local_modify(local_id, content)
+            }
+            SimAction::LocalAtomicSave { local_id, content } => {
+                self.apply_local_atomic_save(&local_id, content)
             }
             SimAction::RemoteCreateFile {
                 id,
@@ -464,11 +476,9 @@ impl SimulationRunner {
         local_id: LocalFileId,
         content: Vec<u8>,
     ) -> Result<(), String> {
-        let node = self
-            .local_fs
-            .get_node(&local_id)
-            .cloned()
-            .ok_or_else(|| format!("LocalModifyFile: node {local_id:?} not found"))?;
+        let Some(node) = self.local_fs.get_node(&local_id).cloned() else {
+            return Ok(());
+        };
         let md5sum = compute_md5(&content);
         let mut updated = node;
         updated.md5sum = Some(md5sum);
@@ -479,6 +489,51 @@ impl SimulationRunner {
         if !self.stopped {
             self.store
                 .insert_local_node(&updated)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn apply_local_atomic_save(
+        &mut self,
+        local_id: &LocalFileId,
+        content: Vec<u8>,
+    ) -> Result<(), String> {
+        let Some(node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        if node.node_type != NodeType::File {
+            return Ok(());
+        }
+
+        let name = node.name;
+        let parent_id = node.parent_id;
+
+        // Delete old inode
+        self.local_fs.delete(local_id);
+        if !self.stopped {
+            self.store
+                .delete_local_node(local_id)
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Create new inode with same name and parent
+        let new_local_id = self.next_local_id();
+        let md5sum = compute_md5(&content);
+        let new_node = LocalNode {
+            id: new_local_id.clone(),
+            parent_id,
+            name,
+            node_type: NodeType::File,
+            md5sum: Some(md5sum),
+            size: Some(content.len() as u64),
+            mtime: 1000,
+        };
+        self.local_fs
+            .create_file(new_local_id, new_node.clone(), content);
+        if !self.stopped {
+            self.store
+                .insert_local_node(&new_node)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -655,7 +710,23 @@ impl SimulationRunner {
 
     fn sync(&mut self) -> Result<(), String> {
         self.fetch_remote_changes()?;
-        self.plan_and_execute_loop()
+        self.plan_and_execute_loop()?;
+        self.refresh_remote_to_local()
+    }
+
+    /// Rebuild `remote_to_local` from the synced records in the store.
+    ///
+    /// This is needed after the planner's inode reconciliation (atomic save
+    /// detection) which updates synced records directly in the store,
+    /// bypassing the runner's `remote_to_local` map.
+    fn refresh_remote_to_local(&mut self) -> Result<(), String> {
+        let synced_records = self.store.list_all_synced().map_err(|e| e.to_string())?;
+        self.remote_to_local.clear();
+        for record in synced_records {
+            self.remote_to_local
+                .insert(record.remote_id, record.local_id);
+        }
+        Ok(())
     }
 
     fn fetch_remote_changes(&mut self) -> Result<(), String> {

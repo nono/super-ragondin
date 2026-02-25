@@ -1174,3 +1174,266 @@ fn test_remote_name_dot_is_rejected_as_conflict() {
         .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
     assert!(!has_download, "Should NOT plan a download for '.' name");
 }
+
+#[test]
+fn test_atomic_save_rebinds_inode_and_generates_upload_update() {
+    // Simulate "atomic save": app writes to temp file, deletes original,
+    // renames temp to original. The file gets a new inode but same path.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let old_lid = local_id(1, 100); // original inode
+    let new_lid = local_id(1, 200); // new inode after atomic save
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    // Set up root
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    // Synced record points to old inode
+    let synced = make_synced_with_location(
+        old_lid.clone(),
+        rid.clone(),
+        "report.odt",
+        Some("old_hash"),
+        NodeType::File,
+        "report.odt",
+        Some(parent_lid.clone()),
+        "report.odt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    // Old inode is GONE (not in local tree) — deleted by atomic save
+    // New inode appears at same path with new content
+    let new_local = make_local_file(
+        new_lid.clone(),
+        Some(parent_lid.clone()),
+        "report.odt",
+        "new_hash",
+    );
+    store.insert_local_node(&new_local).unwrap();
+
+    // Remote is unchanged
+    let remote = make_remote_file(
+        rid.clone(),
+        Some(parent_rid.clone()),
+        "report.odt",
+        "old_hash",
+    );
+    store.insert_remote_node(&remote).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    // Should NOT produce DeleteRemote + UploadNew
+    let has_delete = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DeleteRemote { .. })));
+    assert!(!has_delete, "Should NOT delete remote file on atomic save");
+
+    let has_upload_new = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadNew { .. })));
+    assert!(
+        !has_upload_new,
+        "Should NOT upload as new file on atomic save"
+    );
+
+    // Should produce UploadUpdate with the new local ID
+    let upload_update = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })));
+    assert!(
+        upload_update.is_some(),
+        "Should produce UploadUpdate for atomic save, got: {:?}",
+        ops
+    );
+
+    if let Some(PlanResult::Op(SyncOp::UploadUpdate {
+        local_id,
+        remote_id,
+        expected_local_md5,
+        ..
+    })) = upload_update
+    {
+        assert_eq!(*local_id, new_lid, "Should use the new inode");
+        assert_eq!(remote_id.as_str(), "f1");
+        assert_eq!(expected_local_md5, "new_hash");
+    }
+}
+
+#[test]
+fn test_atomic_save_same_content_produces_no_op() {
+    // Atomic save where content didn't actually change (e.g. user opened and
+    // saved without editing). Should produce no operations.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let old_lid = local_id(1, 100);
+    let new_lid = local_id(1, 200);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        old_lid.clone(),
+        rid.clone(),
+        "report.odt",
+        Some("same_hash"),
+        NodeType::File,
+        "report.odt",
+        Some(parent_lid.clone()),
+        "report.odt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    // New inode, same content hash
+    let new_local = make_local_file(
+        new_lid.clone(),
+        Some(parent_lid.clone()),
+        "report.odt",
+        "same_hash",
+    );
+    store.insert_local_node(&new_local).unwrap();
+
+    let remote = make_remote_file(
+        rid.clone(),
+        Some(parent_rid.clone()),
+        "report.odt",
+        "same_hash",
+    );
+    store.insert_remote_node(&remote).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    assert!(
+        ops.is_empty(),
+        "Atomic save with same content should be a no-op, got: {:?}",
+        ops
+    );
+}
+
+#[test]
+fn test_atomic_save_does_not_rebind_when_name_differs() {
+    // A synced file disappears and a *different* file appears in the same
+    // parent. Should NOT rebind — treat as normal delete + create.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let old_lid = local_id(1, 100);
+    let new_lid = local_id(1, 200);
+    let rid = remote_id("f1");
+    let parent_lid = local_id(1, 1);
+    let parent_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        parent_lid.clone(),
+        parent_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(parent_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(parent_rid.clone(), None, ""))
+        .unwrap();
+
+    let synced = make_synced_with_location(
+        old_lid.clone(),
+        rid.clone(),
+        "report.odt",
+        Some("old_hash"),
+        NodeType::File,
+        "report.odt",
+        Some(parent_lid.clone()),
+        "report.odt",
+        Some(parent_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    // Different file name — this is NOT an atomic save
+    let new_local = make_local_file(
+        new_lid.clone(),
+        Some(parent_lid.clone()),
+        "other_file.txt",
+        "new_hash",
+    );
+    store.insert_local_node(&new_local).unwrap();
+
+    let remote = make_remote_file(
+        rid.clone(),
+        Some(parent_rid.clone()),
+        "report.odt",
+        "old_hash",
+    );
+    store.insert_remote_node(&remote).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    // Should treat as separate delete + create, not rebind
+    let has_delete = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DeleteRemote { .. })));
+    let has_upload_new = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadNew { .. })));
+
+    assert!(
+        has_delete,
+        "Should delete remote when name differs, got: {:?}",
+        ops
+    );
+    assert!(
+        has_upload_new,
+        "Should upload new when name differs, got: {:?}",
+        ops
+    );
+}
