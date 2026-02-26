@@ -862,3 +862,152 @@ async fn test_sync_engine_upload_new_via_async() {
         .unwrap();
     assert!(synced.is_some(), "SyncedRecord should exist after upload");
 }
+
+#[tokio::test]
+async fn test_sync_engine_parallel_downloads() {
+    use cozy_desktop::model::{PlanResult, SyncOp};
+    use cozy_desktop::remote::client::CozyClient;
+    use md5::Digest;
+    use std::os::unix::fs::MetadataExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    // Mock two download endpoints
+    let content_a = b"content of file A";
+    let content_b = b"content of file B";
+
+    // md5 of "content of file A"
+    let md5_a = format!("{:x}", md5::Md5::digest(content_a));
+    // md5 of "content of file B"
+    let md5_b = format!("{:x}", md5::Md5::digest(content_b));
+
+    Mock::given(method("GET"))
+        .and(path("/files/download/file-a"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(content_a.as_slice()))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/files/download/file-b"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(content_b.as_slice()))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Set up root
+    let sync_meta = std::fs::metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(sync_meta.dev(), sync_meta.ino());
+    let root_synced = SyncedRecord {
+        local_id: root_local_id.clone(),
+        remote_id: RemoteId::new("io.cozy.files.root-dir"),
+        rel_path: String::new(),
+        md5sum: None,
+        size: None,
+        rev: "1-root".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some(String::new()),
+        local_parent_id: None,
+        remote_name: Some(String::new()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&root_synced).unwrap();
+
+    let root = RemoteNode {
+        id: RemoteId::new("io.cozy.files.root-dir"),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-root".to_string(),
+    };
+    store.insert_remote_node(&root).unwrap();
+
+    let root_local = cozy_desktop::model::LocalNode {
+        id: root_local_id,
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        mtime: 0,
+    };
+    store.insert_local_node(&root_local).unwrap();
+
+    // Add two remote files
+    let file_a = RemoteNode {
+        id: RemoteId::new("file-a"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "a.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some(md5_a.clone()),
+        size: Some(content_a.len() as u64),
+        updated_at: 1000,
+        rev: "1-a".to_string(),
+    };
+    let file_b = RemoteNode {
+        id: RemoteId::new("file-b"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "b.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some(md5_b.clone()),
+        size: Some(content_b.len() as u64),
+        updated_at: 1000,
+        rev: "1-b".to_string(),
+    };
+    store.insert_remote_node(&file_a).unwrap();
+    store.insert_remote_node(&file_b).unwrap();
+    store.flush().unwrap();
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let results = engine.run_cycle_async(&client).await.unwrap();
+
+    // Both downloads should have been planned
+    let download_count = results
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })))
+        .count();
+    assert_eq!(download_count, 2, "Should have planned 2 downloads");
+
+    // Both files should exist on disk
+    assert_eq!(
+        std::fs::read_to_string(sync_dir.path().join("a.txt")).unwrap(),
+        "content of file A"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sync_dir.path().join("b.txt")).unwrap(),
+        "content of file B"
+    );
+
+    // Both synced records should exist
+    assert!(
+        engine
+            .store()
+            .get_synced_by_remote(&RemoteId::new("file-a"))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        engine
+            .store()
+            .get_synced_by_remote(&RemoteId::new("file-b"))
+            .unwrap()
+            .is_some()
+    );
+}

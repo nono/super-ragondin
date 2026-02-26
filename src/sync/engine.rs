@@ -111,6 +111,8 @@ impl SyncEngine {
     ///
     /// Returns an error if scanning, planning, or execution fails.
     pub async fn run_cycle_async(&mut self, client: &CozyClient) -> Result<Vec<PlanResult>> {
+        use futures::stream::{self, StreamExt as _};
+
         tracing::info!("🔄 Starting async sync cycle");
         self.initial_scan()?;
 
@@ -121,15 +123,35 @@ impl SyncEngine {
             .count();
         tracing::info!(operations = op_count, "📋 Planned operations");
 
-        for result in &results {
-            match result {
-                PlanResult::Op(sync_op) => {
-                    self.execute_op_async(client, sync_op).await?;
-                }
+        let ops: Vec<&SyncOp> = results
+            .iter()
+            .filter_map(|r| match r {
+                PlanResult::Op(op) => Some(op),
                 PlanResult::Conflict(conflict) => {
                     tracing::warn!(conflict = ?conflict, "⚠️ Conflict");
+                    None
                 }
-                PlanResult::NoOp => {}
+                PlanResult::NoOp => None,
+            })
+            .collect();
+
+        let mut i = 0;
+        while i < ops.len() {
+            if ops[i].is_transfer() {
+                let start = i;
+                while i < ops.len() && ops[i].is_transfer() {
+                    i += 1;
+                }
+                let engine_ref = &*self;
+                let mut stream = stream::iter(&ops[start..i])
+                    .map(|op| engine_ref.execute_op_async(client, op))
+                    .buffer_unordered(2);
+                while let Some(result) = stream.next().await {
+                    result?;
+                }
+            } else {
+                self.execute_op_async(client, ops[i]).await?;
+                i += 1;
             }
         }
 
@@ -142,7 +164,7 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    pub async fn execute_op_async(&mut self, client: &CozyClient, op: &SyncOp) -> Result<()> {
+    pub async fn execute_op_async(&self, client: &CozyClient, op: &SyncOp) -> Result<()> {
         match op {
             SyncOp::CreateLocalDir { .. }
             | SyncOp::DeleteLocal { .. }
@@ -245,7 +267,7 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    pub fn execute_op(&mut self, op: &SyncOp) -> Result<()> {
+    pub fn execute_op(&self, op: &SyncOp) -> Result<()> {
         match op {
             SyncOp::CreateLocalDir {
                 remote_id,
