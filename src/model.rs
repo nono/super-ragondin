@@ -311,6 +311,20 @@ pub enum SyncOp {
     },
 }
 
+impl SyncOp {
+    /// Returns true for file transfer operations (downloads and uploads).
+    #[must_use]
+    pub const fn is_transfer(&self) -> bool {
+        matches!(
+            self,
+            Self::DownloadNew { .. }
+                | Self::DownloadUpdate { .. }
+                | Self::UploadNew { .. }
+                | Self::UploadUpdate { .. }
+        )
+    }
+}
+
 /// A conflict detected during planning that requires resolution
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
@@ -670,5 +684,37 @@ mod tests {
         let json = serde_json::to_string(&node).unwrap();
         let deserialized: RemoteNode = serde_json::from_str(&json).unwrap();
         assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn sync_op_is_transfer() {
+        let download = SyncOp::DownloadNew {
+            remote_id: RemoteId::new("r1"),
+            local_path: PathBuf::from("/tmp/f"),
+            expected_rev: "1-x".to_string(),
+            expected_md5: "abc".to_string(),
+        };
+        assert!(download.is_transfer());
+
+        let upload = SyncOp::UploadNew {
+            local_id: LocalFileId::new(1, 1),
+            local_path: PathBuf::from("/tmp/f"),
+            parent_remote_id: RemoteId::new("p"),
+            name: "f".to_string(),
+            expected_md5: "abc".to_string(),
+        };
+        assert!(upload.is_transfer());
+
+        let create_dir = SyncOp::CreateLocalDir {
+            remote_id: RemoteId::new("d1"),
+            local_path: PathBuf::from("/tmp/d"),
+        };
+        assert!(!create_dir.is_transfer());
+
+        let delete = SyncOp::DeleteRemote {
+            remote_id: RemoteId::new("r1"),
+            expected_rev: "1-x".to_string(),
+        };
+        assert!(!delete.is_transfer());
     }
 }
