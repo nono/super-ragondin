@@ -48,6 +48,9 @@ impl SyncEngine {
     /// Returns an error if scanning or storage fails.
     pub fn initial_scan(&mut self) -> Result<()> {
         tracing::info!(sync_dir = %self.sync_dir.display(), "🔍 Starting initial scan");
+
+        self.bootstrap_root()?;
+
         let scanner = Scanner::new(&self.sync_dir);
         let local_nodes = scanner.scan()?;
         let count = local_nodes.len();
@@ -58,6 +61,49 @@ impl SyncEngine {
 
         tracing::info!(count, "🔍 Initial scan found nodes");
         self.store.flush()?;
+        Ok(())
+    }
+
+    /// Bootstrap the root synced record and local node for the sync directory.
+    ///
+    /// This maps the sync directory's filesystem identity (`device_id`, `inode`)
+    /// to the well-known Cozy root remote ID `io.cozy.files.root-dir`.
+    fn bootstrap_root(&self) -> Result<()> {
+        let metadata = fs::symlink_metadata(&self.sync_dir)?;
+        let root_local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+        if self.store.get_synced_by_local(&root_local_id)?.is_some() {
+            return Ok(());
+        }
+
+        tracing::info!("🌱 Bootstrapping root synced record");
+
+        let root_local = LocalNode {
+            id: root_local_id.clone(),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: metadata.mtime(),
+        };
+        self.store.insert_local_node(&root_local)?;
+
+        let root_synced = SyncedRecord {
+            local_id: root_local_id,
+            remote_id: RemoteId::new("io.cozy.files.root-dir"),
+            rel_path: String::new(),
+            md5sum: None,
+            size: None,
+            rev: String::new(),
+            node_type: NodeType::Directory,
+            local_name: Some(String::new()),
+            local_parent_id: None,
+            remote_name: Some(String::new()),
+            remote_parent_id: None,
+        };
+        self.store.insert_synced(&root_synced)?;
+
         Ok(())
     }
 
