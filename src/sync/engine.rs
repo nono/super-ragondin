@@ -151,6 +151,33 @@ impl SyncEngine {
         Ok(results)
     }
 
+    /// Fetch remote changes and apply them to the remote tree.
+    ///
+    /// Inserts new/updated nodes and removes deleted ones. Returns the new
+    /// `last_seq` value for incremental fetches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request or store operations fail.
+    pub async fn fetch_and_apply_remote_changes(
+        &self,
+        client: &CozyClient,
+        since: Option<&str>,
+    ) -> Result<String> {
+        let changes = client.fetch_changes(since).await?;
+
+        for result in &changes.results {
+            if result.deleted {
+                self.store.delete_remote_node(&result.node.id)?;
+            } else {
+                self.store.insert_remote_node(&result.node)?;
+            }
+        }
+
+        self.store.flush()?;
+        Ok(changes.last_seq)
+    }
+
     /// Run a full sync cycle with async network support: scan, plan, and execute all operations.
     ///
     /// # Errors

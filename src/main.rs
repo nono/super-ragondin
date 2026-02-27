@@ -90,7 +90,7 @@ fn cmd_auth() -> Result<()> {
 
     rt.block_on(async {
         let oauth =
-            OAuthClient::register(&config.instance_url, "Cozy Desktop PoC", "cozy-desktop-poc")
+            OAuthClient::register(&config.instance_url, "Cozy Desktop NG", "cozy-desktop-ng")
                 .await?;
 
         let state = uuid::Uuid::new_v4().to_string();
@@ -120,15 +120,23 @@ fn cmd_auth() -> Result<()> {
 }
 
 fn cmd_sync() -> Result<()> {
-    let config = Config::load(&config_path())?
+    let mut config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
     let client = open_client(&config)?;
     let mut engine = open_engine(&config)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(engine.run_cycle_async(&client))?;
+    rt.block_on(async {
+        let last_seq = engine
+            .fetch_and_apply_remote_changes(&client, config.last_seq.as_deref())
+            .await?;
+        config.last_seq = Some(last_seq);
 
+        engine.run_cycle_async(&client).await
+    })?;
+
+    config.save(&config_path())?;
     Ok(())
 }
 
@@ -158,7 +166,7 @@ fn open_engine(config: &Config) -> Result<SyncEngine> {
 }
 
 fn cmd_watch() -> Result<()> {
-    let config = Config::load(&config_path())?
+    let mut config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
     let client = open_client(&config)?;
@@ -184,7 +192,7 @@ fn cmd_watch() -> Result<()> {
                 tracing::debug!(event = ?event, "👁️ Watch event received");
                 if last_sync.elapsed() > debounce {
                     tracing::info!("🔄 Changes detected, syncing");
-                    if let Err(e) = rt.block_on(engine.run_cycle_async(&client)) {
+                    if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
@@ -193,7 +201,7 @@ fn cmd_watch() -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_sync.elapsed() > Duration::from_secs(30) {
                     tracing::info!("🔄 Periodic sync");
-                    if let Err(e) = rt.block_on(engine.run_cycle_async(&client)) {
+                    if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
                         tracing::error!(error = %e, "❌ Sync failed");
                     }
                     last_sync = Instant::now();
@@ -206,6 +214,26 @@ fn cmd_watch() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn run_sync_cycle(
+    rt: &tokio::runtime::Runtime,
+    engine: &mut SyncEngine,
+    client: &cozy_desktop::remote::client::CozyClient,
+    config: &mut Config,
+) -> Result<()> {
+    rt.block_on(async {
+        let last_seq = engine
+            .fetch_and_apply_remote_changes(client, config.last_seq.as_deref())
+            .await?;
+        config.last_seq = Some(last_seq);
+
+        engine.run_cycle_async(client).await?;
+        Ok::<_, Error>(())
+    })?;
+
+    config.save(&config_path())?;
     Ok(())
 }
 

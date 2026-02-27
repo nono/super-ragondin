@@ -1071,3 +1071,174 @@ fn test_initial_scan_bootstraps_root() {
     assert!(root_local.parent_id.is_none());
     assert_eq!(root_local.node_type, NodeType::Directory);
 }
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_populates_remote_tree() {
+    use cozy_desktop::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    // Mock the changes endpoint
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "5-abc",
+            "results": [
+                {
+                    "id": "file-1",
+                    "seq": "3-aaa",
+                    "doc": {
+                        "_id": "file-1",
+                        "_rev": "1-rev1",
+                        "type": "file",
+                        "name": "notes.txt",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "md5sum": "d41d8cd98f00b204e9800998ecf8427e",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "dir-1",
+                    "seq": "4-bbb",
+                    "doc": {
+                        "_id": "dir-1",
+                        "_rev": "1-rev2",
+                        "type": "directory",
+                        "name": "photos",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "size": null,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    // Remote tree should be empty before
+    assert!(engine.store().list_all_remote().unwrap().is_empty());
+
+    let last_seq = engine
+        .fetch_and_apply_remote_changes(&client, None)
+        .await
+        .unwrap();
+
+    assert_eq!(last_seq, "5-abc");
+
+    // Remote tree should now have 2 nodes
+    let remote_nodes = engine.store().list_all_remote().unwrap();
+    assert_eq!(remote_nodes.len(), 2);
+
+    let file_node = engine
+        .store()
+        .get_remote_node(&RemoteId::new("file-1"))
+        .unwrap();
+    assert!(file_node.is_some());
+    let file_node = file_node.unwrap();
+    assert_eq!(file_node.name, "notes.txt");
+    assert_eq!(file_node.node_type, NodeType::File);
+
+    let dir_node = engine
+        .store()
+        .get_remote_node(&RemoteId::new("dir-1"))
+        .unwrap();
+    assert!(dir_node.is_some());
+    let dir_node = dir_node.unwrap();
+    assert_eq!(dir_node.name, "photos");
+    assert_eq!(dir_node.node_type, NodeType::Directory);
+}
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_handles_deletions() {
+    use cozy_desktop::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "10-xyz",
+            "results": [
+                {
+                    "id": "file-to-delete",
+                    "seq": "10-xyz",
+                    "deleted": true
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Pre-populate a remote node that will be deleted
+    let existing = RemoteNode {
+        id: RemoteId::new("file-to-delete"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "old.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-old".to_string(),
+    };
+    store.insert_remote_node(&existing).unwrap();
+    store.flush().unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    // Confirm the node exists
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-to-delete"))
+            .unwrap()
+            .is_some()
+    );
+
+    let last_seq = engine
+        .fetch_and_apply_remote_changes(&client, Some("5-prev"))
+        .await
+        .unwrap();
+
+    assert_eq!(last_seq, "10-xyz");
+
+    // Node should be deleted from remote tree
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-to-delete"))
+            .unwrap()
+            .is_none()
+    );
+}
