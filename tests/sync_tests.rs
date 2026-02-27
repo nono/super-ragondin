@@ -599,7 +599,19 @@ fn test_sync_engine_run_cycle() {
     let sync_dir = tempdir().unwrap();
 
     let store = TreeStore::open(store_dir.path()).unwrap();
-    insert_root_synced(&store);
+
+    // Add root remote node so the planner doesn't think it was remotely deleted
+    let root_remote = RemoteNode {
+        id: RemoteId::new("io.cozy.files.root-dir"),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-root".to_string(),
+    };
+    store.insert_remote_node(&root_remote).unwrap();
 
     // Add a remote directory that should be created locally
     let remote_dir = RemoteNode {
@@ -861,4 +873,52 @@ async fn test_sync_engine_upload_new_via_async() {
         .get_synced_by_remote(&RemoteId::new("new-remote-file-1"))
         .unwrap();
     assert!(synced.is_some(), "SyncedRecord should exist after upload");
+}
+
+#[test]
+fn test_initial_scan_bootstraps_root() {
+    use std::os::unix::fs::MetadataExt;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    engine.initial_scan().unwrap();
+
+    // Root synced record should be bootstrapped automatically
+    let sync_meta = std::fs::metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(sync_meta.dev(), sync_meta.ino());
+
+    let root_synced = engine.store().get_synced_by_local(&root_local_id).unwrap();
+    assert!(
+        root_synced.is_some(),
+        "Root synced record should be bootstrapped by initial_scan"
+    );
+    let root_synced = root_synced.unwrap();
+    assert_eq!(
+        root_synced.remote_id,
+        RemoteId::new("io.cozy.files.root-dir")
+    );
+    assert_eq!(root_synced.node_type, NodeType::Directory);
+    assert!(root_synced.local_parent_id.is_none());
+    assert!(root_synced.remote_parent_id.is_none());
+
+    // Root local node should also be inserted
+    let root_local = engine.store().get_local_node(&root_local_id).unwrap();
+    assert!(
+        root_local.is_some(),
+        "Root local node should be inserted by initial_scan"
+    );
+    let root_local = root_local.unwrap();
+    assert_eq!(root_local.name, "");
+    assert!(root_local.parent_id.is_none());
+    assert_eq!(root_local.node_type, NodeType::Directory);
 }
