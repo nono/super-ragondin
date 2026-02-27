@@ -17,6 +17,24 @@ cargo build                   # Build the project
 cargo fmt --all               # Format the code
 cargo test -q                 # Run tests
 cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
+cargo test --test integration_tests -- --ignored  # Run integration tests (requires cozy-stack serve)
+```
+
+### Cozy-stack
+
+We can start the cozy-stack server, create an instance (aka a cozy or a user), then register an OAuth client, and get an access token.
+
+```bash
+cozy-stack serve
+cozy-stack instances add alice.localhost:8080 --passphrase cozy --apps home,drive --email alice@cozy.localhost --public-name Alice
+CLIENT_ID=$(cozy-stack instances client-oauth alice.localhost:8080 http://localhost/ desktop-ng github.com/nono/cozy-desktop-experiments)
+TOKEN=$(cozy-stack instances token-oauth alice.localhost:8080 $CLIENT_ID "io.cozy.files")
+```
+
+Don't forget to clean the instance when you have finished with:
+
+```bash
+cozy-stack instances rm --force alice.localhost:8080
 ```
 
 ## Project Structure
