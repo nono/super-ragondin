@@ -2,7 +2,7 @@ use base64::Engine;
 
 use crate::error::{Error, Result};
 use crate::model::{NodeType, RemoteId, RemoteNode};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 pub struct CozyClient {
     instance_url: String,
@@ -41,9 +41,11 @@ struct RawDoc {
     rev: String,
     #[serde(rename = "type")]
     doc_type: String,
+    #[serde(default)]
     name: String,
     dir_id: Option<String>,
     md5sum: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_u64")]
     size: Option<u64>,
     updated_at: String,
 }
@@ -68,6 +70,7 @@ struct FileAttributes {
     name: String,
     dir_id: Option<String>,
     md5sum: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_u64")]
     size: Option<u64>,
     updated_at: Option<String>,
 }
@@ -151,7 +154,7 @@ impl CozyClient {
                         parent_id: doc.dir_id.map(RemoteId::new),
                         name: doc.name,
                         node_type,
-                        md5sum: doc.md5sum,
+                        md5sum: normalize_md5(doc.md5sum),
                         size: doc.size,
                         updated_at: parse_timestamp(&doc.updated_at)?,
                         rev: doc.rev,
@@ -405,9 +408,44 @@ fn parse_file_response(resp: FileResponse) -> Result<RemoteNode> {
         parent_id: attrs.dir_id.map(RemoteId::new),
         name: attrs.name,
         node_type,
-        md5sum: attrs.md5sum,
+        md5sum: normalize_md5(attrs.md5sum),
         size: attrs.size,
         updated_at,
         rev: data.meta.and_then(|m| m.rev).unwrap_or_default(),
     })
+}
+
+/// Convert an MD5 value to hex if it's base64-encoded.
+///
+/// The Cozy API returns md5sum as base64. We normalize to hex for
+/// consistent comparison with locally computed checksums.
+fn normalize_md5(md5: Option<String>) -> Option<String> {
+    let s = md5?;
+    if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(s);
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(&s)
+        .ok()
+        .map(hex::encode)
+}
+
+/// Deserialize a JSON value that may be a string or a number as `Option<u64>`.
+fn deserialize_string_or_u64<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrU64 {
+        U64(u64),
+        Str(String),
+    }
+
+    let opt: Option<StringOrU64> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(StringOrU64::U64(n)) => Ok(Some(n)),
+        Some(StringOrU64::Str(s)) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+    }
 }
