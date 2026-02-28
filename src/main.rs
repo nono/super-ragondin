@@ -127,16 +127,8 @@ fn cmd_sync() -> Result<()> {
     let mut engine = open_engine(&config)?;
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let last_seq = engine
-            .fetch_and_apply_remote_changes(&client, config.last_seq.as_deref())
-            .await?;
-        config.last_seq = Some(last_seq);
+    run_sync_cycle(&rt, &mut engine, &client, &mut config)?;
 
-        engine.run_cycle_async(&client).await
-    })?;
-
-    config.save(&config_path())?;
     Ok(())
 }
 
@@ -223,17 +215,12 @@ fn run_sync_cycle(
     client: &cozy_desktop::remote::client::CozyClient,
     config: &mut Config,
 ) -> Result<()> {
-    rt.block_on(async {
-        let last_seq = engine
-            .fetch_and_apply_remote_changes(client, config.last_seq.as_deref())
-            .await?;
-        config.last_seq = Some(last_seq);
-
-        engine.run_cycle_async(client).await?;
-        Ok::<_, Error>(())
-    })?;
-
+    let last_seq =
+        rt.block_on(engine.fetch_and_apply_remote_changes(client, config.last_seq.as_deref()))?;
+    config.last_seq = Some(last_seq);
     config.save(&config_path())?;
+
+    rt.block_on(engine.run_cycle_async(client))?;
     Ok(())
 }
 

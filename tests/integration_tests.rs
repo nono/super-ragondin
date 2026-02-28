@@ -127,9 +127,25 @@ impl TestCozy {
 
 impl Drop for TestCozy {
     fn drop(&mut self) {
-        let _ = Command::new("cozy-stack")
+        match Command::new("cozy-stack")
             .args(["instances", "rm", "--force", &self.domain])
-            .output();
+            .output()
+        {
+            Ok(output) if !output.status.success() => {
+                eprintln!(
+                    "Warning: failed to clean up cozy-stack instance `{}`:\n{}",
+                    self.domain,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to run cozy-stack to clean up instance `{}`: {}",
+                    self.domain, e
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -321,10 +337,10 @@ async fn test_second_sync_is_noop() {
 
 #[tokio::test]
 #[ignore = "requires running cozy-stack"]
-async fn test_download_default_directories() {
+async fn test_download_default_directories() -> Result<(), Box<dyn std::error::Error>> {
     if !cozy_stack_available() {
         eprintln!("Skipping: cozy-stack not available");
-        return;
+        return Ok(());
     }
 
     let cozy = TestCozy::setup();
@@ -332,11 +348,8 @@ async fn test_download_default_directories() {
     let mut engine = cozy.engine();
 
     // Fetch remote state (instance comes with default dirs)
-    engine
-        .fetch_and_apply_remote_changes(&client, None)
-        .await
-        .unwrap();
-    let results = engine.run_cycle_async(&client).await.unwrap();
+    engine.fetch_and_apply_remote_changes(&client, None).await?;
+    let results = engine.run_cycle_async(&client).await?;
 
     // Should create the default directories locally
     let created_dirs: Vec<_> = results
@@ -362,6 +375,8 @@ async fn test_download_default_directories() {
             "Directory {name} should exist on disk"
         );
     }
+
+    Ok(())
 }
 
 #[tokio::test]
