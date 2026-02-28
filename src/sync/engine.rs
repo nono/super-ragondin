@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use crate::local::scanner::Scanner;
 use crate::model::{
     LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode, SyncOp, SyncedRecord,
+    TRASH_DIR_ID,
 };
 use crate::planner::Planner;
 use crate::remote::client::CozyClient;
@@ -171,6 +172,16 @@ impl SyncEngine {
         for result in &changes.results {
             if result.deleted {
                 self.store.delete_remote_node(&result.node.id)?;
+            } else if result.node.id.as_str() == TRASH_DIR_ID {
+                // Skip the trash directory itself — it should never be synced
+                tracing::debug!("🗑️ Skipping trash directory");
+            } else if self.is_in_trash(&result.node) {
+                // Nodes moved under the trash are treated as remote deletions
+                tracing::debug!(
+                    id = result.node.id.as_str(),
+                    "🗑️ Node is in trash, treating as deletion"
+                );
+                self.store.delete_remote_node(&result.node.id)?;
             } else {
                 self.ensure_remote_parent_exists(&result.node)?;
                 self.store.insert_remote_node(&result.node)?;
@@ -179,6 +190,25 @@ impl SyncEngine {
 
         self.store.flush()?;
         Ok(changes.last_seq)
+    }
+
+    /// Check whether a remote node is inside the trash directory.
+    ///
+    /// Walks up the parent chain to detect nodes directly or transitively
+    /// under the trash.
+    fn is_in_trash(&self, node: &RemoteNode) -> bool {
+        let trash_id = RemoteId::new(TRASH_DIR_ID);
+        let mut current = node.parent_id.clone();
+        while let Some(ref pid) = current {
+            if *pid == trash_id {
+                return true;
+            }
+            match self.store.get_remote_node(pid) {
+                Ok(Some(parent)) => current.clone_from(&parent.parent_id),
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Ensure that a remote node's parent directory exists in the store.

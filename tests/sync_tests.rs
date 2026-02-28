@@ -1098,3 +1098,166 @@ async fn test_fetch_and_apply_remote_changes_handles_deletions() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_skips_trash_dir() {
+    use cozy_desktop::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "3-abc",
+            "results": [
+                {
+                    "id": "io.cozy.files.trash-dir",
+                    "seq": "1-aaa",
+                    "doc": {
+                        "_id": "io.cozy.files.trash-dir",
+                        "_rev": "1-trash",
+                        "type": "directory",
+                        "name": ".cozy_trash",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "size": null,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "file-1",
+                    "seq": "2-bbb",
+                    "doc": {
+                        "_id": "file-1",
+                        "_rev": "1-rev1",
+                        "type": "file",
+                        "name": "hello.txt",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "md5sum": "d41d8cd98f00b204e9800998ecf8427e",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    engine
+        .fetch_and_apply_remote_changes(&client, None)
+        .await
+        .unwrap();
+
+    // The trash dir should NOT be in the remote tree
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("io.cozy.files.trash-dir"))
+            .unwrap()
+            .is_none(),
+        "Trash directory should not be synced"
+    );
+
+    // The regular file should still be present
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-1"))
+            .unwrap()
+            .is_some(),
+        "Regular files should still be synced"
+    );
+}
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_treats_trashed_node_as_deletion() {
+    use cozy_desktop::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    // A file that was moved to trash (its dir_id is now the trash dir)
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "10-xyz",
+            "results": [
+                {
+                    "id": "file-trashed",
+                    "seq": "10-xyz",
+                    "doc": {
+                        "_id": "file-trashed",
+                        "_rev": "2-trashed",
+                        "type": "file",
+                        "name": "old.txt",
+                        "dir_id": "io.cozy.files.trash-dir",
+                        "md5sum": "d41d8cd98f00b204e9800998ecf8427e",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Pre-populate the node (it existed before being trashed)
+    let existing = RemoteNode {
+        id: RemoteId::new("file-trashed"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "old.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-old".to_string(),
+    };
+    store.insert_remote_node(&existing).unwrap();
+    store.flush().unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    engine
+        .fetch_and_apply_remote_changes(&client, None)
+        .await
+        .unwrap();
+
+    // The trashed node should be removed from the remote tree
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-trashed"))
+            .unwrap()
+            .is_none(),
+        "Trashed file should be removed from the remote tree"
+    );
+}

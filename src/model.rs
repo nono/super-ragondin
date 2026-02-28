@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+/// Well-known remote ID for the Cozy trash directory
+pub const TRASH_DIR_ID: &str = "io.cozy.files.trash-dir";
+
 /// Local filesystem identity (`device_id`, `inode`) - stable across renames
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LocalFileId {
