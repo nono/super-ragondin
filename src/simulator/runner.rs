@@ -1,7 +1,7 @@
 use super::mock_fs::MockFs;
 use super::mock_remote::MockRemote;
 use crate::model::{
-    LocalFileId, LocalNode, NodeInfo, NodeType, RemoteId, RemoteNode, SyncedRecord,
+    LocalFileId, LocalNode, NodeInfo, NodeType, RemoteId, RemoteNode, SyncedRecord, TRASH_DIR_ID,
 };
 use crate::planner::Planner;
 use crate::store::{StoreSnapshot, TreeStore};
@@ -9,8 +9,6 @@ use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-/// Well-known remote ID for the Cozy trash directory
-pub const TRASH_DIR_ID: &str = "io.cozy.files.trash-dir";
 
 fn compute_md5(content: &[u8]) -> String {
     compute_md5_from_bytes(content)
