@@ -421,13 +421,22 @@ fn parse_file_response(resp: FileResponse) -> Result<RemoteNode> {
 /// consistent comparison with locally computed checksums.
 fn normalize_md5(md5: Option<String>) -> Option<String> {
     let s = md5?;
+    if s.is_empty() {
+        return None;
+    }
     if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
         return Some(s);
     }
     base64::engine::general_purpose::STANDARD
         .decode(&s)
         .ok()
-        .map(hex::encode)
+        .and_then(|decoded| {
+            if decoded.is_empty() {
+                None
+            } else {
+                Some(hex::encode(decoded))
+            }
+        })
 }
 
 /// Deserialize a JSON value that may be a string or a number as `Option<u64>`.
@@ -447,5 +456,47 @@ where
         None => Ok(None),
         Some(StringOrU64::U64(n)) => Ok(Some(n)),
         Some(StringOrU64::Str(s)) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_md5_none() {
+        assert_eq!(normalize_md5(None), None);
+    }
+
+    #[test]
+    fn normalize_md5_empty_string() {
+        assert_eq!(normalize_md5(Some(String::new())), None);
+    }
+
+    #[test]
+    fn normalize_md5_hex_string() {
+        let hex = "d41d8cd98f00b204e9800998ecf8427e".to_string();
+        assert_eq!(normalize_md5(Some(hex.clone())), Some(hex));
+    }
+
+    #[test]
+    fn normalize_md5_base64_string() {
+        // base64 of the bytes [0xd4, 0x1d, ...] (MD5 of empty file)
+        let b64 = "1B2M2Y8AsgTpgAmY7PhCfg==".to_string();
+        assert_eq!(
+            normalize_md5(Some(b64)),
+            Some("d41d8cd98f00b204e9800998ecf8427e".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_md5_invalid_base64() {
+        assert_eq!(normalize_md5(Some("not-valid!!!".to_string())), None);
+    }
+
+    #[test]
+    fn normalize_md5_base64_decodes_to_empty() {
+        // Some base64 that decodes to empty bytes (edge case)
+        assert_eq!(normalize_md5(Some(String::new())), None);
     }
 }

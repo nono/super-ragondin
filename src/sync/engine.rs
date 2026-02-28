@@ -1,6 +1,8 @@
 use crate::error::{Error, Result};
 use crate::local::scanner::Scanner;
-use crate::model::{LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, SyncOp, SyncedRecord};
+use crate::model::{
+    LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode, SyncOp, SyncedRecord,
+};
 use crate::planner::Planner;
 use crate::remote::client::CozyClient;
 use crate::store::TreeStore;
@@ -170,12 +172,41 @@ impl SyncEngine {
             if result.deleted {
                 self.store.delete_remote_node(&result.node.id)?;
             } else {
+                self.ensure_remote_parent_exists(&result.node)?;
                 self.store.insert_remote_node(&result.node)?;
             }
         }
 
         self.store.flush()?;
         Ok(changes.last_seq)
+    }
+
+    /// Ensure that a remote node's parent directory exists in the store.
+    ///
+    /// When the parent is the well-known root directory and is not yet in the
+    /// store, a synthetic root node is created so that child nodes are never
+    /// orphaned.
+    fn ensure_remote_parent_exists(&self, node: &RemoteNode) -> Result<()> {
+        let Some(parent_id) = &node.parent_id else {
+            return Ok(());
+        };
+        if self.store.get_remote_node(parent_id)?.is_some() {
+            return Ok(());
+        }
+        if parent_id.as_str() == "io.cozy.files.root-dir" {
+            let root = RemoteNode {
+                id: parent_id.clone(),
+                parent_id: None,
+                name: String::new(),
+                node_type: NodeType::Directory,
+                md5sum: None,
+                size: None,
+                updated_at: 0,
+                rev: String::new(),
+            };
+            self.store.insert_remote_node(&root)?;
+        }
+        Ok(())
     }
 
     /// Run a full sync cycle with async network support: scan, plan, and execute all operations.

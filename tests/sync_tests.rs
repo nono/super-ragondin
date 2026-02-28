@@ -1073,7 +1073,8 @@ fn test_initial_scan_bootstraps_root() {
 }
 
 #[tokio::test]
-async fn test_fetch_and_apply_remote_changes_populates_remote_tree() {
+async fn test_fetch_and_apply_remote_changes_populates_remote_tree()
+-> Result<(), Box<dyn std::error::Error>> {
     use cozy_desktop::remote::client::CozyClient;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1119,11 +1120,11 @@ async fn test_fetch_and_apply_remote_changes_populates_remote_tree() {
         .mount(&mock_server)
         .await;
 
-    let store_dir = tempdir().unwrap();
-    let sync_dir = tempdir().unwrap();
-    let staging_dir = tempdir().unwrap();
+    let store_dir = tempdir()?;
+    let sync_dir = tempdir()?;
+    let staging_dir = tempdir()?;
 
-    let store = TreeStore::open(store_dir.path()).unwrap();
+    let store = TreeStore::open(store_dir.path())?;
     let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
@@ -1133,36 +1134,40 @@ async fn test_fetch_and_apply_remote_changes_populates_remote_tree() {
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
 
     // Remote tree should be empty before
-    assert!(engine.store().list_all_remote().unwrap().is_empty());
+    assert!(engine.store().list_all_remote()?.is_empty());
 
-    let last_seq = engine
-        .fetch_and_apply_remote_changes(&client, None)
-        .await
-        .unwrap();
+    let last_seq = engine.fetch_and_apply_remote_changes(&client, None).await?;
 
     assert_eq!(last_seq, "5-abc");
 
-    // Remote tree should now have 2 nodes
-    let remote_nodes = engine.store().list_all_remote().unwrap();
-    assert_eq!(remote_nodes.len(), 2);
+    // Remote tree should now have 3 nodes (2 children + implicitly created root)
+    let remote_nodes = engine.store().list_all_remote()?;
+    assert_eq!(
+        remote_nodes.len(),
+        3,
+        "The root node should be created along with its children"
+    );
 
-    let file_node = engine
-        .store()
-        .get_remote_node(&RemoteId::new("file-1"))
-        .unwrap();
-    assert!(file_node.is_some());
-    let file_node = file_node.unwrap();
-    assert_eq!(file_node.name, "notes.txt");
-    assert_eq!(file_node.node_type, NodeType::File);
+    let root_exists = remote_nodes
+        .iter()
+        .any(|n| n.id == RemoteId::new("io.cozy.files.root-dir"));
+    assert!(root_exists, "The root node must exist in the remote tree");
 
-    let dir_node = engine
-        .store()
-        .get_remote_node(&RemoteId::new("dir-1"))
-        .unwrap();
-    assert!(dir_node.is_some());
-    let dir_node = dir_node.unwrap();
-    assert_eq!(dir_node.name, "photos");
-    assert_eq!(dir_node.node_type, NodeType::Directory);
+    if let Some(file_node) = engine.store().get_remote_node(&RemoteId::new("file-1"))? {
+        assert_eq!(file_node.name, "notes.txt");
+        assert_eq!(file_node.node_type, NodeType::File);
+    } else {
+        panic!("File node 'file-1' should exist");
+    }
+
+    if let Some(dir_node) = engine.store().get_remote_node(&RemoteId::new("dir-1"))? {
+        assert_eq!(dir_node.name, "photos");
+        assert_eq!(dir_node.node_type, NodeType::Directory);
+    } else {
+        panic!("Directory node 'dir-1' should exist");
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
