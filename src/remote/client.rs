@@ -2,7 +2,8 @@ use base64::Engine;
 
 use crate::error::{Error, Result};
 use crate::model::{NodeType, RemoteId, RemoteNode};
-use serde::{Deserialize, Deserializer};
+use crate::util::deserialize_string_or_u64;
+use serde::Deserialize;
 
 pub struct CozyClient {
     instance_url: String,
@@ -437,26 +438,6 @@ fn normalize_md5(md5: Option<String>) -> Option<String> {
                 Some(hex::encode(decoded))
             }
         })
-}
-
-/// Deserialize a JSON value that may be a string or a number as `Option<u64>`.
-fn deserialize_string_or_u64<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrU64 {
-        U64(u64),
-        Str(String),
-    }
-
-    let opt: Option<StringOrU64> = Option::deserialize(deserializer)?;
-    match opt {
-        None => Ok(None),
-        Some(StringOrU64::U64(n)) => Ok(Some(n)),
-        Some(StringOrU64::Str(s)) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
-    }
 }
 
 #[cfg(test)]

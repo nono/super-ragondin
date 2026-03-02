@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::model::{
-    Conflict, ConflictKind, LocalFileId, LocalNode, NodeInfo, PlanResult, RemoteId, RemoteNode,
-    SyncOp, SyncedRecord, content_matches,
+    Conflict, ConflictKind, LocalFileId, LocalNode, NodeInfo, NodeType, PlanResult, RemoteId,
+    RemoteNode, SyncOp, SyncedRecord, content_matches,
 };
 use crate::store::TreeStore;
 use std::collections::{HashMap, HashSet};
@@ -143,11 +143,17 @@ impl<'a> Planner<'a> {
             .map(|r| r.local_id)
             .collect();
 
-        let unbound_by_location: HashMap<(Option<&LocalFileId>, &str), &LocalNode> = local_nodes
-            .iter()
-            .filter(|n| !synced_local_ids.contains(&n.id))
-            .map(|n| ((n.parent_id.as_ref(), n.name.as_str()), n))
-            .collect();
+        let mut unbound_by_location: HashMap<(Option<LocalFileId>, String, NodeType), LocalFileId> =
+            local_nodes
+                .iter()
+                .filter(|n| !synced_local_ids.contains(&n.id))
+                .map(|n| {
+                    (
+                        (n.parent_id.clone(), n.name.clone(), n.node_type),
+                        n.id.clone(),
+                    )
+                })
+                .collect();
 
         for synced in self.store.list_all_synced()? {
             if local_by_id.contains_key(&synced.local_id) {
@@ -157,19 +163,23 @@ impl<'a> Planner<'a> {
             let Some(synced_name) = &synced.local_name else {
                 continue;
             };
-            let synced_parent = synced.local_parent_id.as_ref();
 
-            if let Some(new_local) = unbound_by_location.get(&(synced_parent, synced_name.as_str()))
-            {
+            let key = (
+                synced.local_parent_id.clone(),
+                synced_name.clone(),
+                synced.node_type,
+            );
+
+            if let Some(new_local_id) = unbound_by_location.remove(&key) {
                 tracing::info!(
                     old_inode = %synced.local_id,
-                    new_inode = %new_local.id,
+                    new_inode = %new_local_id,
                     name = synced_name,
                     "🔄 Atomic save detected, rebinding inode"
                 );
 
                 let new_synced = SyncedRecord {
-                    local_id: new_local.id.clone(),
+                    local_id: new_local_id,
                     ..synced.clone()
                 };
                 self.store.delete_synced(&synced.local_id)?;

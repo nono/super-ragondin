@@ -1,4 +1,4 @@
-use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, TRASH_DIR_ID};
+use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode};
 use cozy_desktop::simulator::mock_fs::MockFs;
 use cozy_desktop::simulator::mock_remote::MockRemote;
 use cozy_desktop::simulator::runner::{ConcurrentRemoteOp, SimAction, SimulationRunner};
@@ -2603,6 +2603,80 @@ fn remote_cycle_self_parent_does_not_infinite_loop() {
 
     // Sync must not infinite-loop
     runner.apply(SimAction::Sync).unwrap();
+}
+
+#[test]
+fn local_file_and_dir_same_name_converges() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Setup: create root on remote and sync
+    let root_id = RemoteId::new("root");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id,
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Create a local file "📊 report.pdf"
+    let file_id = LocalFileId::new(1, 50_001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_id.clone(),
+            parent_local_id: Some(root_local_id.clone()),
+            name: "📊 report.pdf".to_string(),
+            content: vec![0],
+        })
+        .unwrap();
+
+    // Create a local dir with the SAME name "📊 report.pdf"
+    let dir_id = LocalFileId::new(1, 50_002);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: dir_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "📊 report.pdf".to_string(),
+        })
+        .unwrap();
+
+    // Sync uploads both (file + dir) to remote
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Stop client
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Atomic save on the file (changes inode) — not recorded in store (stopped)
+    runner
+        .apply(SimAction::LocalAtomicSave {
+            local_id: file_id,
+            content: vec![105, 213, 174],
+        })
+        .unwrap();
+
+    // Delete the dir locally — not recorded in store (stopped)
+    runner
+        .apply(SimAction::LocalDeleteFile { local_id: dir_id })
+        .unwrap();
+
+    // Restart reconciles local_fs with store, then sync
+    runner.apply(SimAction::RestartClient).unwrap();
+    for _ in 0..3 {
+        runner.apply(SimAction::Sync).unwrap();
+    }
+
+    runner.check_convergence().unwrap();
 }
 
 #[derive(Debug, Clone)]
