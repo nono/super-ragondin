@@ -599,20 +599,8 @@ impl SimulationRunner {
         Ok(())
     }
 
-    fn ensure_trash_dir_exists(&mut self) {
-        let trash_id = RemoteId::new(TRASH_DIR_ID);
-        if self.remote.get_node(&trash_id).is_none() {
-            self.apply_remote_create_dir(&trash_id, None, ".cozy_trash".to_string());
-        }
-    }
-
     fn apply_remote_trash(&mut self, id: &RemoteId) {
-        self.ensure_trash_dir_exists();
-        let trash_id = RemoteId::new(TRASH_DIR_ID);
-        if let Some(node) = self.remote.get_node(id) {
-            let name = node.name.clone();
-            self.remote.move_node(id, trash_id, name);
-        }
+        self.remote.trash_node(id);
     }
 
     /// Check whether a remote node is under the trash directory

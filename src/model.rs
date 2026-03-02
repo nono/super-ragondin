@@ -1,3 +1,4 @@
+use crate::util::deserialize_string_or_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
@@ -70,7 +71,7 @@ impl fmt::Display for RemoteId {
 }
 
 /// Type of filesystem node
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeType {
     File,
@@ -156,6 +157,7 @@ pub struct RemoteNode {
     /// MD5 checksum (files only)
     pub md5sum: Option<String>,
     /// Size in bytes (files only)
+    #[serde(default, deserialize_with = "deserialize_string_or_u64")]
     pub size: Option<u64>,
     /// Last modification timestamp (Unix epoch seconds)
     pub updated_at: i64,
@@ -193,6 +195,7 @@ pub struct SyncedRecord {
     /// Content hash at last sync
     pub md5sum: Option<String>,
     /// Size at last sync
+    #[serde(default, deserialize_with = "deserialize_string_or_u64")]
     pub size: Option<u64>,
     /// Remote `CouchDB` revision at last sync
     pub rev: String,

@@ -110,6 +110,66 @@ impl MockRemote {
             .collect()
     }
 
+    /// Trash a node by moving it to the trash directory, emitting change
+    /// records for all descendants (matching cozy-stack behavior).
+    ///
+    /// # Panics
+    ///
+    /// Panics if a descendant node has no parent ID.
+    pub fn trash_node(&mut self, id: &RemoteId) {
+        let trash_id = RemoteId::new("io.cozy.files.trash-dir");
+        if self.get_node(&trash_id).is_none() {
+            let trash_node = RemoteNode {
+                id: trash_id.clone(),
+                parent_id: None,
+                name: ".cozy_trash".to_string(),
+                node_type: crate::model::NodeType::Directory,
+                md5sum: None,
+                size: None,
+                updated_at: 1000,
+                rev: "1-trash".to_string(),
+            };
+            self.add_node(trash_node, None);
+        }
+
+        // Collect all descendant IDs before moving (cozy-stack emits changes for all)
+        let descendant_ids = self.collect_descendants(id);
+
+        // Move the trashed node to trash dir
+        if let Some(node) = self.nodes.get(id) {
+            let name = node.name.clone();
+            self.move_node(id, trash_id, name);
+        }
+
+        // Cozy-stack also emits change records for all descendants
+        // (their data is unchanged, but they appear in the changes feed).
+        for child_id in &descendant_ids {
+            if let Some(node) = self.nodes.get(child_id) {
+                let parent = node.parent_id.clone().unwrap();
+                let child_name = node.name.clone();
+                self.move_node(child_id, parent, child_name);
+            }
+        }
+    }
+
+    /// Collect all descendant IDs of a node (children, grandchildren, etc.)
+    fn collect_descendants(&self, id: &RemoteId) -> Vec<RemoteId> {
+        let mut descendants = Vec::new();
+        let mut stack = vec![id.clone()];
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(id.clone());
+
+        while let Some(current) = stack.pop() {
+            for node in self.nodes.values() {
+                if node.parent_id.as_ref() == Some(&current) && visited.insert(node.id.clone()) {
+                    descendants.push(node.id.clone());
+                    stack.push(node.id.clone());
+                }
+            }
+        }
+        descendants
+    }
+
     pub fn move_node(&mut self, id: &RemoteId, new_parent_id: RemoteId, new_name: String) {
         if let Some(node) = self.nodes.get_mut(id) {
             node.parent_id = Some(new_parent_id);
