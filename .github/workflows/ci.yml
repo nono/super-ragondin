@@ -36,3 +36,37 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      COUCHDB_USER: admin
+      COUCHDB_PASSWORD: password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Setup CouchDB
+        id: setup-couchdb
+        uses: taratatach/couchdb-action@v4.6-dev
+        with:
+          couchdb version: '3.4.2'
+          couchdb user: ${{ env.COUCHDB_USER }}
+          couchdb password: ${{ env.COUCHDB_PASSWORD }}
+      - name: Install cozy-stack
+        run: go install github.com/cozy/cozy-stack@latest
+      - name: Start cozy-stack
+        env:
+          COZY_COUCHDB_URL: ${{ steps.setup-couchdb.outputs.couchdb-url }}
+        run: |
+          mkdir -p /tmp/cozy-storage
+          cozy-stack serve --fs-url "file:///tmp/cozy-storage" --log-level warning &
+          until cozy-stack instances ls 2>/dev/null; do
+            echo "Waiting for cozy-stack..."
+            sleep 1
+          done
+      - name: Run integration tests
+        run: cargo test --test integration_tests -- --ignored
