@@ -1,8 +1,8 @@
 use crate::error::{Error, Result};
 use crate::local::scanner::Scanner;
 use crate::model::{
-    Conflict, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode, SyncOp,
-    SyncedRecord, TRASH_DIR_ID,
+    Conflict, ConflictKind, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode,
+    SyncOp, SyncedRecord, TRASH_DIR_ID,
 };
 use crate::planner::Planner;
 use crate::remote::client::CozyClient;
@@ -260,7 +260,7 @@ impl SyncEngine {
 
         for result in &results {
             if let PlanResult::Conflict(conflict) = result {
-                self.resolve_conflict(conflict)?;
+                self.resolve_conflict_async(client, conflict).await?;
             }
         }
 
@@ -874,6 +874,76 @@ impl SyncEngine {
     }
 
     // ==================== Conflict resolution ====================
+
+    /// Resolve a conflict with versioning awareness.
+    ///
+    /// For `BothModified` conflicts: checks whether the local file's content
+    /// was already stored as an old version on the remote. If so, the conflict
+    /// is a false positive (e.g., edit-save-edit-before-sync-completes) and
+    /// the remote version is silently accepted without creating a conflict copy.
+    ///
+    /// Falls back to `resolve_conflict` (rename to conflict copy) when no
+    /// version match is found or for non-`BothModified` conflicts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if network requests or file operations fail.
+    pub async fn resolve_conflict_async(
+        &self,
+        client: &CozyClient,
+        conflict: &Conflict,
+    ) -> Result<()> {
+        if conflict.kind != ConflictKind::BothModified {
+            return self.resolve_conflict(conflict);
+        }
+
+        let (Some(local_path), Some(remote_id)) = (&conflict.local_path, &conflict.remote_id)
+        else {
+            return self.resolve_conflict(conflict);
+        };
+
+        if !local_path.is_file() {
+            return self.resolve_conflict(conflict);
+        }
+
+        let Ok(local_md5) = compute_md5_from_path(local_path) else {
+            return self.resolve_conflict(conflict);
+        };
+
+        let old_md5sums = match client.fetch_old_version_md5sums(remote_id).await {
+            Ok(sums) => sums,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "⚠️ Failed to fetch old versions, falling back to conflict copy"
+                );
+                return self.resolve_conflict(conflict);
+            }
+        };
+
+        if old_md5sums.iter().any(|md5| md5 == &local_md5) {
+            tracing::info!(
+                path = %local_path.display(),
+                local_md5 = &local_md5,
+                "✅ Local content matches an old remote version, accepting remote"
+            );
+
+            if let Some(local_id) = &conflict.local_id {
+                self.store.delete_synced(local_id)?;
+                self.store.delete_local_node(local_id)?;
+                self.store.flush()?;
+            }
+
+            // Delete the local file so the next cycle downloads the remote version
+            if local_path.is_file() {
+                fs::remove_file(local_path)?;
+            }
+
+            return Ok(());
+        }
+
+        self.resolve_conflict(conflict)
+    }
 
     /// Resolve a conflict by creating a renamed copy of the local file.
     ///
