@@ -75,6 +75,7 @@ impl<'a> Planner<'a> {
                 results.push(PlanResult::Conflict(Conflict {
                     local_id: None,
                     remote_id: Some(remote.id.clone()),
+                    local_path: None,
                     reason: "Parent chain forms a cycle".to_string(),
                     kind: ConflictKind::CycleDetected,
                 }));
@@ -205,6 +206,7 @@ impl<'a> Planner<'a> {
             return vec![PlanResult::Conflict(Conflict {
                 local_id: None,
                 remote_id: Some(remote.id.clone()),
+                local_path: None,
                 reason: format!("Unsafe remote file name: {:?}", remote.name),
                 kind: ConflictKind::InvalidName,
             })];
@@ -239,6 +241,7 @@ impl<'a> Planner<'a> {
                 ops.push(PlanResult::Conflict(Conflict {
                     local_id: Some(local.id.clone()),
                     remote_id: Some(remote.id.clone()),
+                    local_path: Some(self.compute_local_path_from_local(local)),
                     reason: "Moved on both sides to different locations".to_string(),
                     kind: ConflictKind::BothMoved,
                 }));
@@ -257,6 +260,7 @@ impl<'a> Planner<'a> {
                 ops.push(PlanResult::Conflict(Conflict {
                     local_id: Some(local.id.clone()),
                     remote_id: Some(remote.id.clone()),
+                    local_path: Some(self.compute_local_path_from_local(local)),
                     reason: "Parent directory not synced for move".to_string(),
                     kind: ConflictKind::ParentMissing,
                 }));
@@ -291,6 +295,7 @@ impl<'a> Planner<'a> {
                     ops.push(PlanResult::Conflict(Conflict {
                         local_id: Some(local.id.clone()),
                         remote_id: Some(remote.id.clone()),
+                        local_path: Some(self.compute_local_path_from_local(local)),
                         reason: "Modified on both sides".to_string(),
                         kind: ConflictKind::BothModified,
                     }));
@@ -351,6 +356,7 @@ impl<'a> Planner<'a> {
             vec![PlanResult::Conflict(Conflict {
                 local_id: Some(local.id.clone()),
                 remote_id: Some(remote.id.clone()),
+                local_path: None,
                 reason: "Created on both sides with different content".to_string(),
                 kind: ConflictKind::NameCollision,
             })]
@@ -400,6 +406,7 @@ impl<'a> Planner<'a> {
             return vec![PlanResult::Conflict(Conflict {
                 local_id: Some(local.id.clone()),
                 remote_id: None,
+                local_path: None,
                 reason: format!("Unsafe local file name: {:?}", local.name),
                 kind: ConflictKind::InvalidName,
             })];
@@ -431,6 +438,7 @@ impl<'a> Planner<'a> {
                 None => vec![PlanResult::Conflict(Conflict {
                     local_id: Some(local.id.clone()),
                     remote_id: None,
+                    local_path: Some(local_path),
                     reason: "Parent directory not synced".to_string(),
                     kind: ConflictKind::ParentMissing,
                 })],
@@ -451,6 +459,7 @@ impl<'a> Planner<'a> {
             PlanResult::Conflict(Conflict {
                 local_id: Some(local.id.clone()),
                 remote_id: Some(synced.remote_id.clone()),
+                local_path: Some(self.compute_local_path_from_local(local)),
                 reason: "Remote deleted but local modified".to_string(),
                 kind: ConflictKind::LocalModifyRemoteDelete,
             })
@@ -474,6 +483,7 @@ impl<'a> Planner<'a> {
             PlanResult::Conflict(Conflict {
                 local_id: Some(synced.local_id.clone()),
                 remote_id: Some(remote.id.clone()),
+                local_path: None,
                 reason: "Local deleted but remote modified".to_string(),
                 kind: ConflictKind::LocalDeleteRemoteModify,
             })

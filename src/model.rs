@@ -338,6 +338,8 @@ pub struct Conflict {
     pub local_id: Option<LocalFileId>,
     /// Remote identity if known
     pub remote_id: Option<RemoteId>,
+    /// Local filesystem path (for conflict file renaming)
+    pub local_path: Option<PathBuf>,
     /// Human-readable reason
     pub reason: String,
     /// Type of conflict
@@ -619,6 +621,7 @@ mod tests {
         let conflict = Conflict {
             local_id: Some(LocalFileId::new(1, 100)),
             remote_id: Some(RemoteId::new("remote-1")),
+            local_path: None,
             reason: "Both modified".to_string(),
             kind: ConflictKind::BothModified,
         };
@@ -640,6 +643,7 @@ mod tests {
         let conflict = PlanResult::Conflict(Conflict {
             local_id: None,
             remote_id: Some(RemoteId::new("file-1")),
+            local_path: None,
             reason: "test".to_string(),
             kind: ConflictKind::ParentMissing,
         });

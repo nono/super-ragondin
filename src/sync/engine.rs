@@ -1,12 +1,13 @@
 use crate::error::{Error, Result};
 use crate::local::scanner::Scanner;
 use crate::model::{
-    LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode, SyncOp, SyncedRecord,
-    TRASH_DIR_ID,
+    Conflict, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode, SyncOp,
+    SyncedRecord, TRASH_DIR_ID,
 };
 use crate::planner::Planner;
 use crate::remote::client::CozyClient;
 use crate::store::TreeStore;
+use crate::sync::conflict_name::generate_conflict_name;
 use crate::util::{compute_md5_from_bytes, compute_md5_from_path};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -144,7 +145,7 @@ impl SyncEngine {
                     self.execute_op(sync_op)?;
                 }
                 PlanResult::Conflict(conflict) => {
-                    tracing::warn!(conflict = ?conflict, "⚠️ Conflict");
+                    self.resolve_conflict(conflict)?;
                 }
                 PlanResult::NoOp => {}
             }
@@ -257,15 +258,17 @@ impl SyncEngine {
             .count();
         tracing::info!(operations = op_count, "📋 Planned operations");
 
+        for result in &results {
+            if let PlanResult::Conflict(conflict) = result {
+                self.resolve_conflict(conflict)?;
+            }
+        }
+
         let ops: Vec<&SyncOp> = results
             .iter()
             .filter_map(|r| match r {
                 PlanResult::Op(op) => Some(op),
-                PlanResult::Conflict(conflict) => {
-                    tracing::warn!(conflict = ?conflict, "⚠️ Conflict");
-                    None
-                }
-                PlanResult::NoOp => None,
+                _ => None,
             })
             .collect();
 
@@ -867,6 +870,55 @@ impl SyncEngine {
         };
         self.store.insert_synced(&synced)?;
         self.store.flush()?;
+        Ok(())
+    }
+
+    // ==================== Conflict resolution ====================
+
+    /// Resolve a conflict by creating a renamed copy of the local file.
+    ///
+    /// For `BothModified` conflicts: renames the local file to a conflict copy
+    /// (e.g., `file-conflict-2024-01-15T12_30_45.123Z.ext`), freeing the
+    /// original path for the remote version to be downloaded on the next cycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file rename fails.
+    pub fn resolve_conflict(&self, conflict: &Conflict) -> Result<()> {
+        let Some(local_path) = &conflict.local_path else {
+            tracing::warn!(conflict = ?conflict, "⚠️ Conflict (no local path to resolve)");
+            return Ok(());
+        };
+
+        if !local_path.is_file() {
+            tracing::warn!(
+                path = %local_path.display(),
+                kind = ?conflict.kind,
+                "⚠️ Conflict local path is not a file, skipping rename"
+            );
+            return Ok(());
+        }
+
+        let conflict_filename = generate_conflict_name(local_path);
+        let conflict_path = local_path.with_file_name(&conflict_filename);
+
+        tracing::info!(
+            from = %local_path.display(),
+            to = %conflict_path.display(),
+            kind = ?conflict.kind,
+            "📝 Creating conflict copy"
+        );
+
+        fs::rename(local_path, &conflict_path)?;
+
+        // Remove the synced record so the next planning cycle treats the
+        // original path as missing locally and re-downloads from the remote.
+        if let Some(local_id) = &conflict.local_id {
+            self.store.delete_synced(local_id)?;
+            self.store.delete_local_node(local_id)?;
+            self.store.flush()?;
+        }
+
         Ok(())
     }
 
