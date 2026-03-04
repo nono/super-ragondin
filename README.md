@@ -105,4 +105,4 @@ PROPTEST_CASES=100 cargo test -q prop_
 
 The code is licensed as GNU AGPLv3. See the LICENSE file for the full license.
 
-♡2021 by Bruno Michel. Copying is an act of love. Please copy and share.
+♡2026 by Bruno Michel. Copying is an act of love. Please copy and share.

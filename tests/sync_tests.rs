@@ -1,4 +1,6 @@
-use cozy_desktop::model::{LocalFileId, NodeType, RemoteId, RemoteNode, SyncedRecord};
+use cozy_desktop::model::{
+    ConflictKind, LocalFileId, NodeType, RemoteId, RemoteNode, SyncedRecord,
+};
 use cozy_desktop::planner::Planner;
 use cozy_desktop::store::TreeStore;
 use cozy_desktop::sync::engine::SyncEngine;
@@ -1409,4 +1411,137 @@ async fn test_fetch_and_apply_remote_changes_treats_trashed_node_as_deletion() {
             .is_none(),
         "Trashed file should be removed from the remote tree"
     );
+}
+
+#[test]
+fn test_resolve_both_modified_renames_local_file() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    // Create a local file at sync_dir/report.txt with "local content"
+    let local_path = sync_dir.path().join("report.txt");
+    std::fs::write(&local_path, b"local modified content").unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Set up the synced record as if this file was previously synced
+    let local_id = LocalFileId::new(1, 100);
+    let remote_id = RemoteId::new("remote-report");
+
+    let synced = SyncedRecord {
+        local_id: local_id.clone(),
+        remote_id: remote_id.clone(),
+        rel_path: "report.txt".to_string(),
+        md5sum: Some("old-md5".to_string()),
+        size: Some(10),
+        rev: "1-old".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("report.txt".to_string()),
+        local_parent_id: Some(LocalFileId::new(1, 1)),
+        remote_name: Some("report.txt".to_string()),
+        remote_parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+    };
+    store.insert_synced(&synced).unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    // Simulate a BothModified conflict
+    let conflict = cozy_desktop::model::Conflict {
+        local_id: Some(local_id),
+        remote_id: Some(remote_id),
+        local_path: Some(local_path.clone()),
+        reason: "Modified on both sides".to_string(),
+        kind: ConflictKind::BothModified,
+    };
+
+    // Resolve the conflict
+    let result = engine.resolve_conflict(&conflict);
+    assert!(
+        result.is_ok(),
+        "resolve_conflict should succeed: {result:?}"
+    );
+
+    // The original file should still exist (unchanged for now)
+    // A conflict copy should have been created
+    let entries: Vec<_> = std::fs::read_dir(sync_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    let conflict_file = entries
+        .iter()
+        .find(|name| name.contains("-conflict-"))
+        .expect("Should have created a conflict copy");
+
+    assert!(
+        conflict_file.starts_with("report-conflict-"),
+        "Conflict file should start with 'report-conflict-': {conflict_file}"
+    );
+    assert!(
+        conflict_file.ends_with(".txt"),
+        "Conflict file should preserve extension: {conflict_file}"
+    );
+
+    // Conflict copy should contain the local content
+    let conflict_path = sync_dir.path().join(conflict_file);
+    let conflict_content = std::fs::read_to_string(&conflict_path).unwrap();
+    assert_eq!(conflict_content, "local modified content");
+}
+
+#[test]
+fn test_resolve_conflict_no_local_path_is_noop() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    // Conflict without local_path should be a no-op (just logged)
+    let conflict = cozy_desktop::model::Conflict {
+        local_id: None,
+        remote_id: Some(RemoteId::new("r1")),
+        local_path: None,
+        reason: "test".to_string(),
+        kind: ConflictKind::CycleDetected,
+    };
+
+    let result = engine.resolve_conflict(&conflict);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_resolve_conflict_missing_local_file_is_noop() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    // Conflict pointing to a non-existent file should succeed (no-op)
+    let conflict = cozy_desktop::model::Conflict {
+        local_id: Some(LocalFileId::new(1, 100)),
+        remote_id: Some(RemoteId::new("r1")),
+        local_path: Some(sync_dir.path().join("nonexistent.txt")),
+        reason: "Modified on both sides".to_string(),
+        kind: ConflictKind::BothModified,
+    };
+
+    let result = engine.resolve_conflict(&conflict);
+    assert!(result.is_ok());
 }
