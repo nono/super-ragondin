@@ -321,6 +321,30 @@ impl CozyClient {
         parse_file_response(resp)
     }
 
+    /// Fetch the MD5 checksums of old versions of a remote file.
+    ///
+    /// Uses `GET /files/:file-id` which includes old versions in the
+    /// `included` array. Returns a list of hex-encoded MD5 checksums.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response is invalid.
+    pub async fn fetch_old_version_md5sums(&self, file_id: &RemoteId) -> Result<Vec<String>> {
+        tracing::info!(file_id = file_id.as_str(), "📜 Fetching old versions");
+        let url = format!("{}/files/{}", self.instance_url, file_id.as_str());
+        let json: serde_json::Value = self
+            .http
+            .get(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(parse_old_version_md5sums(&json))
+    }
+
     /// Trash a file or directory on Cozy.
     ///
     /// # Errors
@@ -416,6 +440,34 @@ fn parse_file_response(resp: FileResponse) -> Result<RemoteNode> {
     })
 }
 
+/// Extract MD5 checksums from old versions in a file metadata response.
+///
+/// The `GET /files/:file-id` response includes old versions in the `included`
+/// array as `io.cozy.files.versions` objects, each with an `md5sum` attribute.
+/// Returns a list of hex-encoded MD5 checksums (normalized from base64).
+fn parse_old_version_md5sums(json: &serde_json::Value) -> Vec<String> {
+    let Some(included) = json.get("included").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    included
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t == "io.cozy.files.versions")
+        })
+        .filter_map(|entry| {
+            let md5_raw = entry
+                .get("attributes")
+                .and_then(|a| a.get("md5sum"))
+                .and_then(|v| v.as_str())?;
+            normalize_md5(Some(md5_raw.to_string()))
+        })
+        .collect()
+}
+
 /// Convert an MD5 value to hex if it's base64-encoded.
 ///
 /// The Cozy API returns md5sum as base64. We normalize to hex for
@@ -479,5 +531,116 @@ mod tests {
     fn normalize_md5_base64_decodes_to_empty() {
         // Some base64 that decodes to empty bytes (edge case)
         assert_eq!(normalize_md5(Some(String::new())), None);
+    }
+
+    #[test]
+    fn parse_old_version_md5sums_extracts_hashes() {
+        let json = serde_json::json!({
+            "data": {
+                "type": "io.cozy.files",
+                "id": "file-123",
+                "meta": { "rev": "3-abc" },
+                "attributes": {
+                    "type": "file",
+                    "name": "hello.txt",
+                    "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
+                    "size": 12,
+                    "updated_at": "2016-09-19T12:38:04Z"
+                },
+                "relationships": {
+                    "old_versions": {
+                        "data": [
+                            { "type": "io.cozy.files.versions", "id": "file-123/2-bbb" },
+                            { "type": "io.cozy.files.versions", "id": "file-123/1-aaa" }
+                        ]
+                    }
+                }
+            },
+            "included": [
+                {
+                    "type": "io.cozy.files.versions",
+                    "id": "file-123/2-bbb",
+                    "attributes": {
+                        "file_id": "file-123",
+                        "md5sum": "a2lth5syMW+4r7jwNhdk3A==",
+                        "size": 100,
+                        "updated_at": "2016-09-20T10:00:00Z"
+                    }
+                },
+                {
+                    "type": "io.cozy.files.versions",
+                    "id": "file-123/1-aaa",
+                    "attributes": {
+                        "file_id": "file-123",
+                        "md5sum": "FBA89XXOZKFhdv37iILb2Q==",
+                        "size": 200,
+                        "updated_at": "2016-09-18T20:38:04Z"
+                    }
+                }
+            ]
+        });
+
+        let result = parse_old_version_md5sums(&json);
+        assert_eq!(result.len(), 2);
+        // MD5s should be normalized to hex
+        assert!(result.iter().all(|h| h.len() == 32));
+        assert!(
+            result
+                .iter()
+                .all(|h| h.chars().all(|c| c.is_ascii_hexdigit()))
+        );
+    }
+
+    #[test]
+    fn parse_old_version_md5sums_empty_when_no_versions() {
+        let json = serde_json::json!({
+            "data": {
+                "type": "io.cozy.files",
+                "id": "file-456",
+                "meta": { "rev": "1-abc" },
+                "attributes": {
+                    "type": "file",
+                    "name": "new.txt",
+                    "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
+                    "size": 5,
+                    "updated_at": "2016-09-19T12:38:04Z"
+                }
+            }
+        });
+
+        let result = parse_old_version_md5sums(&json);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_old_version_md5sums_skips_entries_without_md5() {
+        let json = serde_json::json!({
+            "data": {
+                "type": "io.cozy.files",
+                "id": "file-789",
+                "meta": { "rev": "2-abc" },
+                "attributes": {
+                    "type": "file",
+                    "name": "partial.txt",
+                    "md5sum": "ODZmYjI2OWQxOTBkMmM4NQo=",
+                    "size": 5,
+                    "updated_at": "2016-09-19T12:38:04Z"
+                }
+            },
+            "included": [
+                {
+                    "type": "io.cozy.files.versions",
+                    "id": "file-789/1-aaa",
+                    "attributes": {
+                        "file_id": "file-789",
+                        "size": 100,
+                        "updated_at": "2016-09-18T20:38:04Z"
+                    }
+                }
+            ]
+        });
+
+        let result = parse_old_version_md5sums(&json);
+        assert!(result.is_empty());
     }
 }
