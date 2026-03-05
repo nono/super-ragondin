@@ -891,19 +891,65 @@ impl SimulationRunner {
         }
     }
 
-    fn plan_sync_ops(&self) -> Result<Vec<crate::model::SyncOp>, String> {
+    fn plan_sync_ops(&mut self) -> Result<Vec<crate::model::SyncOp>, String> {
         let planner = Planner::new(&self.store, self.sync_root.clone());
         let results = planner.plan().map_err(|e| e.to_string())?;
-        Ok(results
-            .into_iter()
-            .filter_map(|r| {
-                if let crate::model::PlanResult::Op(op) = r {
-                    Some(op)
-                } else {
-                    None
+        let mut ops = Vec::new();
+        for r in results {
+            match r {
+                crate::model::PlanResult::Op(op) => ops.push(op),
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::NameCollision =>
+                {
+                    self.resolve_name_collision(conflict)?;
                 }
-            })
-            .collect())
+                _ => {}
+            }
+        }
+        Ok(ops)
+    }
+
+    /// Resolve a `NameCollision` conflict by renaming the local file to a
+    /// conflict copy (simulated by deleting and re-creating with a different
+    /// name). This frees the path for the remote version to be downloaded.
+    fn resolve_name_collision(&mut self, conflict: &crate::model::Conflict) -> Result<(), String> {
+        let Some(local_id) = &conflict.local_id else {
+            return Ok(());
+        };
+        let Some(node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        let content = self
+            .local_fs
+            .read_file(local_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Create a conflict copy with a renamed name
+        let conflict_local_id = self.next_local_id();
+        let conflict_name = format!("{}-conflict", node.name);
+        let conflict_node = LocalNode {
+            id: conflict_local_id.clone(),
+            parent_id: node.parent_id.clone(),
+            name: conflict_name,
+            node_type: node.node_type,
+            md5sum: node.md5sum.clone(),
+            size: node.size,
+            mtime: node.mtime,
+        };
+        self.local_fs
+            .create_file(conflict_local_id, conflict_node.clone(), content);
+        self.store
+            .insert_local_node(&conflict_node)
+            .map_err(|e| e.to_string())?;
+
+        // Delete the original local file
+        self.local_fs.delete(local_id);
+        self.store
+            .delete_local_node(local_id)
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
     }
 
     fn partition_ops(

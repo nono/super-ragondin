@@ -1437,3 +1437,200 @@ fn test_atomic_save_does_not_rebind_when_name_differs() {
         ops
     );
 }
+
+// ==================== Overwrite detection tests ====================
+
+#[test]
+fn test_new_remote_and_local_same_path_same_content_is_noop() {
+    // When a new remote file and a new local file appear at the same path
+    // with the same content, the planner should NOT produce both a DownloadNew
+    // and an UploadNew. Instead it should recognize them as the same file.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+
+    let synced_root = make_synced(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    // New remote file at "doc.txt" with hash "abc123"
+    let remote_file =
+        make_remote_file(remote_id("f1"), Some(root_rid.clone()), "doc.txt", "abc123");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    // New local file at "doc.txt" with the SAME hash "abc123"
+    let local_file = make_local_file(
+        local_id(1, 100),
+        Some(root_lid.clone()),
+        "doc.txt",
+        "abc123",
+    );
+    store.insert_local_node(&local_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    // Should NOT have both DownloadNew and UploadNew
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
+    let has_upload = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadNew { .. })));
+    let has_conflict = ops.iter().any(|r| matches!(r, PlanResult::Conflict(_)));
+
+    assert!(
+        !has_download,
+        "Should NOT download when local already has same content, got: {:?}",
+        ops
+    );
+    assert!(
+        !has_upload,
+        "Should NOT upload when remote already has same content, got: {:?}",
+        ops
+    );
+    assert!(
+        !has_conflict,
+        "Should NOT conflict when content matches, got: {:?}",
+        ops
+    );
+}
+
+#[test]
+fn test_new_remote_and_local_same_path_different_content_is_conflict() {
+    // When a new remote file and a new local file appear at the same path
+    // with different content, it's a genuine NameCollision conflict.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+
+    let synced_root = make_synced(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    // New remote file at "doc.txt" with hash "remote_hash"
+    let remote_file = make_remote_file(
+        remote_id("f1"),
+        Some(root_rid.clone()),
+        "doc.txt",
+        "remote_hash",
+    );
+    store.insert_remote_node(&remote_file).unwrap();
+
+    // New local file at "doc.txt" with DIFFERENT hash "local_hash"
+    let local_file = make_local_file(
+        local_id(1, 100),
+        Some(root_lid.clone()),
+        "doc.txt",
+        "local_hash",
+    );
+    store.insert_local_node(&local_file).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    // Should produce a NameCollision conflict
+    let collision = ops.iter().find(|r| {
+        matches!(
+            r,
+            PlanResult::Conflict(Conflict {
+                kind: ConflictKind::NameCollision,
+                ..
+            })
+        )
+    });
+    assert!(
+        collision.is_some(),
+        "Should produce NameCollision conflict for different content at same path, got: {:?}",
+        ops
+    );
+
+    // Should NOT have both DownloadNew and UploadNew
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
+    let has_upload = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadNew { .. })));
+    assert!(
+        !(has_download && has_upload),
+        "Should NOT produce both DownloadNew and UploadNew, got: {:?}",
+        ops
+    );
+}
+
+#[test]
+fn test_new_remote_and_local_same_dir_same_path_is_noop() {
+    // When a new remote dir and a new local dir appear at the same path,
+    // the planner should detect the collision and suppress both ops.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+
+    let synced_root = make_synced(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    // New remote dir "photos"
+    let remote_dir = make_remote_dir(remote_id("d1"), Some(root_rid.clone()), "photos");
+    store.insert_remote_node(&remote_dir).unwrap();
+
+    // New local dir "photos"
+    let local_dir = make_local_dir(local_id(1, 200), Some(root_lid.clone()), "photos");
+    store.insert_local_node(&local_dir).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    let has_create_local = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::CreateLocalDir { .. })));
+    let has_create_remote = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::CreateRemoteDir { .. })));
+
+    assert!(
+        !(has_create_local && has_create_remote),
+        "Should NOT produce both CreateLocalDir and CreateRemoteDir for same path, got: {:?}",
+        ops
+    );
+}
