@@ -109,6 +109,8 @@ impl<'a> Planner<'a> {
             }
         }
 
+        self.resolve_path_collisions(&mut results, &remote_by_id, &local_by_id);
+
         Self::sort_operations(&mut results);
         let op_count = results
             .iter()
@@ -650,6 +652,108 @@ impl<'a> Planner<'a> {
             return false;
         }
         true
+    }
+
+    /// Detect and resolve path collisions where a `DownloadNew` and an
+    /// `UploadNew` target the same local path.
+    ///
+    /// When a new remote file and a new local file appear at the same path:
+    /// - Same content → both ops are removed (the files are already identical,
+    ///   only a synced record needs to be created on the next cycle).
+    /// - Different content → both ops are replaced with a `NameCollision`
+    ///   conflict.
+    #[allow(clippy::unused_self)]
+    fn resolve_path_collisions(
+        &self,
+        results: &mut Vec<PlanResult>,
+        remote_by_id: &HashMap<RemoteId, &RemoteNode>,
+        local_by_id: &HashMap<LocalFileId, &LocalNode>,
+    ) {
+        // Build index: local_path → index for remote-side and local-side new ops
+        let mut remote_new_by_path: HashMap<&PathBuf, usize> = HashMap::new();
+        let mut local_new_by_path: HashMap<&PathBuf, usize> = HashMap::new();
+
+        for (i, result) in results.iter().enumerate() {
+            match result {
+                PlanResult::Op(
+                    SyncOp::DownloadNew { local_path, .. }
+                    | SyncOp::CreateLocalDir { local_path, .. },
+                ) => {
+                    remote_new_by_path.insert(local_path, i);
+                }
+                PlanResult::Op(
+                    SyncOp::UploadNew { local_path, .. }
+                    | SyncOp::CreateRemoteDir { local_path, .. },
+                ) => {
+                    local_new_by_path.insert(local_path, i);
+                }
+                _ => {}
+            }
+        }
+
+        // Find paths that appear in both maps
+        let mut indices_to_remove = Vec::new();
+        let mut replacements: Vec<(usize, PlanResult)> = Vec::new();
+
+        for (path, &remote_idx) in &remote_new_by_path {
+            if let Some(&local_idx) = local_new_by_path.get(path) {
+                let (remote_id, local_id) = match (&results[remote_idx], &results[local_idx]) {
+                    (
+                        PlanResult::Op(SyncOp::DownloadNew { remote_id, .. }),
+                        PlanResult::Op(SyncOp::UploadNew { local_id, .. }),
+                    )
+                    | (
+                        PlanResult::Op(SyncOp::CreateLocalDir { remote_id, .. }),
+                        PlanResult::Op(SyncOp::CreateRemoteDir { local_id, .. }),
+                    ) => (remote_id.clone(), local_id.clone()),
+                    _ => continue,
+                };
+
+                let remote = remote_by_id.get(&remote_id);
+                let local = local_by_id.get(&local_id);
+
+                match (remote, local) {
+                    (Some(remote), Some(local)) if Self::remote_equals_local(remote, local) => {
+                        tracing::info!(
+                            path = %path.display(),
+                            "✅ New remote and local at same path with same content, treating as match"
+                        );
+                        indices_to_remove.push(remote_idx);
+                        indices_to_remove.push(local_idx);
+                    }
+                    (Some(_), Some(_)) => {
+                        tracing::debug!(
+                            path = %path.display(),
+                            "⚠️ New remote and local at same path with different content"
+                        );
+                        indices_to_remove.push(local_idx);
+                        replacements.push((
+                            remote_idx,
+                            PlanResult::Conflict(Conflict {
+                                local_id: Some(local_id),
+                                remote_id: Some(remote_id),
+                                local_path: Some((*path).clone()),
+                                reason: "Created on both sides with different content".to_string(),
+                                kind: ConflictKind::NameCollision,
+                            }),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Apply replacements first (before removing)
+        for (idx, replacement) in replacements {
+            results[idx] = replacement;
+        }
+
+        // Remove colliding ops (in reverse order to preserve indices)
+        indices_to_remove.sort_unstable();
+        indices_to_remove.dedup();
+        for idx in indices_to_remove.into_iter().rev() {
+            results.remove(idx);
+        }
     }
 
     fn sort_operations(results: &mut [PlanResult]) {
