@@ -1,20 +1,20 @@
-use cozy_desktop::config::Config;
-use cozy_desktop::error::{Error, Result};
-use cozy_desktop::local::watcher::{WatchEvent, Watcher};
-use cozy_desktop::model::PlanResult;
-use cozy_desktop::planner::Planner;
-use cozy_desktop::remote::auth::OAuthClient;
-use cozy_desktop::store::TreeStore;
-use cozy_desktop::sync::engine::SyncEngine;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+use super_ragondin_sync::config::Config;
+use super_ragondin_sync::error::{Error, Result};
+use super_ragondin_sync::local::watcher::{WatchEvent, Watcher};
+use super_ragondin_sync::model::PlanResult;
+use super_ragondin_sync::planner::Planner;
+use super_ragondin_sync::remote::auth::OAuthClient;
+use super_ragondin_sync::store::TreeStore;
+use super_ragondin_sync::sync::engine::SyncEngine;
 
 fn main() -> Result<()> {
-    cozy_desktop::logging::init();
+    super_ragondin_sync::logging::init();
 
     let args: Vec<String> = env::args().collect();
 
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
         Some("watch") => cmd_watch(),
         Some("status") => cmd_status(),
         _ => {
-            println!("Usage: cozy-desktop <command>");
+            println!("Usage: super-ragondin <command>");
             println!();
             println!("Commands:");
             println!("  init <instance-url> <sync-dir>  Initialize configuration");
@@ -41,13 +41,13 @@ fn main() -> Result<()> {
 fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("cozy-desktop")
+        .join("super-ragondin")
         .join("config.json")
 }
 
 fn cmd_init(args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        println!("Usage: cozy-desktop init <instance-url> <sync-dir>");
+        println!("Usage: super-ragondin init <instance-url> <sync-dir>");
         return Ok(());
     }
 
@@ -56,7 +56,7 @@ fn cmd_init(args: &[String]) -> Result<()> {
 
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("cozy-desktop");
+        .join("super-ragondin");
 
     let config = Config {
         instance_url: instance_url.clone(),
@@ -76,7 +76,7 @@ fn cmd_init(args: &[String]) -> Result<()> {
         instance_url,
         sync_dir = %sync_dir.display(),
         data_dir = %data_dir.display(),
-        "⚙️ Initialized cozy-desktop, run 'cozy-desktop auth' to authenticate"
+        "⚙️ Initialized super-ragondin, run 'super-ragondin auth' to authenticate"
     );
 
     Ok(())
@@ -90,8 +90,7 @@ fn cmd_auth() -> Result<()> {
 
     rt.block_on(async {
         let oauth =
-            OAuthClient::register(&config.instance_url, "Cozy Desktop NG", "cozy-desktop-ng")
-                .await?;
+            OAuthClient::register(&config.instance_url, "Super Ragondin", "super-ragondin").await?;
 
         let state = uuid::Uuid::new_v4().to_string();
         let auth_url = oauth.authorization_url(&state);
@@ -132,7 +131,7 @@ fn cmd_sync() -> Result<()> {
     Ok(())
 }
 
-fn open_client(config: &Config) -> Result<cozy_desktop::remote::client::CozyClient> {
+fn open_client(config: &Config) -> Result<super_ragondin_sync::remote::client::CozyClient> {
     let oauth = config
         .oauth_client
         .as_ref()
@@ -142,7 +141,7 @@ fn open_client(config: &Config) -> Result<cozy_desktop::remote::client::CozyClie
         .access_token()
         .ok_or_else(|| Error::NotFound("No access token".to_string()))?;
 
-    Ok(cozy_desktop::remote::client::CozyClient::new(
+    Ok(super_ragondin_sync::remote::client::CozyClient::new(
         &config.instance_url,
         access_token,
     ))
@@ -212,7 +211,7 @@ fn cmd_watch() -> Result<()> {
 fn run_sync_cycle(
     rt: &tokio::runtime::Runtime,
     engine: &mut SyncEngine,
-    client: &cozy_desktop::remote::client::CozyClient,
+    client: &super_ragondin_sync::remote::client::CozyClient,
     config: &mut Config,
 ) -> Result<()> {
     let last_seq =
@@ -228,7 +227,7 @@ fn cmd_status() -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
-    println!("Cozy Desktop Status");
+    println!("Super Ragondin Status");
     println!("-------------------");
     println!("Instance:   {}", config.instance_url);
     println!("Sync dir:   {}", config.sync_dir.display());

@@ -156,36 +156,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cozy-desktop"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "chrono",
- "dirs",
- "fjall",
- "futures",
- "hex",
- "inotify",
- "md-5",
- "proptest",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-test",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "uuid",
- "wiremock",
-]
-
-[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1652,6 +1622,54 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "super-ragondin"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "super-ragondin-rag",
+ "super-ragondin-sync",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "super-ragondin-rag"
+version = "0.1.0"
+dependencies = [
+ "super-ragondin-sync",
+]
+
+[[package]]
+name = "super-ragondin-sync"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "chrono",
+ "fjall",
+ "futures",
+ "hex",
+ "inotify",
+ "md-5",
+ "proptest",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+ "wiremock",
+]
 
 [[package]]
 name = "syn"

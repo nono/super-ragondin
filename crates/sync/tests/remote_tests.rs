@@ -1,6 +1,6 @@
-use cozy_desktop::model::NodeType;
-use cozy_desktop::remote::auth::OAuthClient;
-use cozy_desktop::remote::client::CozyClient;
+use super_ragondin_sync::model::NodeType;
+use super_ragondin_sync::remote::auth::OAuthClient;
+use super_ragondin_sync::remote::client::CozyClient;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -133,7 +133,7 @@ async fn test_update_file() {
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
     let content = b"HELLO WORLD!".to_vec();
     let md5sum = "86fb269d190d2c85f6e0468ceca42a20";
-    let remote_id = cozy_desktop::model::RemoteId::new("file-123");
+    let remote_id = super_ragondin_sync::model::RemoteId::new("file-123");
 
     let node = client
         .update_file(&remote_id, content, md5sum, "1-oldrev")

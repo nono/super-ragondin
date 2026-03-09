@@ -1,8 +1,9 @@
-# Experiments with cozy-desktop
+# Super Ragondin
 
-This repository is a place where I can put ideas and experiments on how to
-improve the desktop client for Cozy Cloud. Currently, I am trying to vibecode a
-client in Rust.
+![Logo](docs/logo_Super_Ragondin.jpeg)
+
+This repository is a place where I can put ideas and experiments on a new
+desktop client for Cozy Cloud.
 
 ## Usage
 
@@ -17,7 +18,7 @@ client in Rust.
 cargo build --release
 ```
 
-The binary will be available at `target/release/cozy-desktop`.
+The binary will be available at `target/release/super-ragondin`.
 
 ### Getting started
 
@@ -25,16 +26,16 @@ The binary will be available at `target/release/cozy-desktop`.
    local directory to sync:
 
    ```bash
-   cozy-desktop init https://yourname.mycozy.cloud ~/Cozy
+   super-ragondin init https://yourname.mycozy.cloud ~/Cozy
    ```
 
-   This creates the config file (`~/.config/cozy-desktop/config.json`), the
-   sync directory, and the data directory (`~/.local/share/cozy-desktop/`).
+   This creates the config file (`~/.config/super-ragondin/config.json`), the
+   sync directory, and the data directory (`~/.local/share/super-ragondin/`).
 
 2. **Authenticate** with your Cozy:
 
    ```bash
-   cozy-desktop auth
+   super-ragondin auth
    ```
 
    This registers an OAuth client, then prints an authorization URL to open in
@@ -43,14 +44,14 @@ The binary will be available at `target/release/cozy-desktop`.
 3. **Sync** your files:
 
    ```bash
-   cozy-desktop sync    # Run a single sync cycle
-   cozy-desktop watch   # Watch for changes and sync continuously (Ctrl+C to stop)
+   super-ragondin sync    # Run a single sync cycle
+   super-ragondin watch   # Watch for changes and sync continuously (Ctrl+C to stop)
    ```
 
 4. **Check status** at any time:
 
    ```bash
-   cozy-desktop status
+   super-ragondin status
    ```
 
    Shows the instance URL, sync directory, authentication state, tree sizes,
@@ -62,8 +63,8 @@ Logging is controlled via the `RUST_LOG` environment variable (using
 [`tracing-subscriber`](https://docs.rs/tracing-subscriber)):
 
 ```bash
-RUST_LOG=info cozy-desktop watch
-RUST_LOG=debug cozy-desktop sync
+RUST_LOG=info super-ragondin watch
+RUST_LOG=debug super-ragondin sync
 ```
 
 ## What would be needed for a full client

@@ -5,12 +5,12 @@
 //! cargo test --test changes_feed_conformance -- --ignored
 //! ```
 
-use cozy_desktop::model::{NodeType, RemoteId, RemoteNode};
-use cozy_desktop::remote::client::CozyClient;
-use cozy_desktop::simulator::mock_remote::MockRemote;
-use cozy_desktop::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashMap};
 use std::process::Command;
+use super_ragondin_sync::model::{NodeType, RemoteId, RemoteNode};
+use super_ragondin_sync::remote::client::CozyClient;
+use super_ragondin_sync::simulator::mock_remote::MockRemote;
+use super_ragondin_sync::util::compute_md5_from_bytes;
 use tempfile::TempDir;
 
 /// A remote mutation that can be replayed against both `MockRemote` and `CozyClient`.
@@ -1165,7 +1165,7 @@ async fn replay_actions_on_cozy(
 }
 
 fn collect_cozy_result(
-    results: &[cozy_desktop::remote::client::ChangeResult],
+    results: &[super_ragondin_sync::remote::client::ChangeResult],
     id_to_ref: &HashMap<String, String>,
 ) -> ReplayResult {
     let changes = results

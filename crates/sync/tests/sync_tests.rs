@@ -1,9 +1,9 @@
-use cozy_desktop::model::{
+use super_ragondin_sync::model::{
     ConflictKind, LocalFileId, NodeType, RemoteId, RemoteNode, SyncedRecord,
 };
-use cozy_desktop::planner::Planner;
-use cozy_desktop::store::TreeStore;
-use cozy_desktop::sync::engine::SyncEngine;
+use super_ragondin_sync::planner::Planner;
+use super_ragondin_sync::store::TreeStore;
+use super_ragondin_sync::sync::engine::SyncEngine;
 use tempfile::tempdir;
 
 fn insert_root_synced(store: &TreeStore) {
@@ -67,8 +67,8 @@ fn test_sync_engine_plans_download_for_new_remote_file() {
 
     // Find the download operation for our file
     let has_download = results.iter().any(|r| {
-        matches!(r, cozy_desktop::model::PlanResult::Op(
-            cozy_desktop::model::SyncOp::DownloadNew { remote_id, .. }
+        matches!(r, super_ragondin_sync::model::PlanResult::Op(
+            super_ragondin_sync::model::SyncOp::DownloadNew { remote_id, .. }
         ) if remote_id.as_str() == "remote-file-1")
     });
     assert!(has_download, "Should plan to download the new remote file");
@@ -156,7 +156,7 @@ fn test_sync_engine_plan() {
 
 #[test]
 fn test_sync_engine_execute_create_local_dir() {
-    use cozy_desktop::model::SyncOp;
+    use super_ragondin_sync::model::SyncOp;
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -177,7 +177,7 @@ fn test_sync_engine_execute_create_local_dir() {
     store.insert_remote_node(&remote_dir).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -213,10 +213,10 @@ fn test_sync_engine_execute_create_local_dir() {
 
 #[test]
 fn test_sync_engine_execute_delete_local() {
-    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
     use md5::{Digest, Md5};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalFileId, LocalNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -248,7 +248,7 @@ fn test_sync_engine_execute_delete_local() {
     store.insert_local_node(&local_node).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -277,7 +277,7 @@ fn test_sync_engine_execute_delete_local() {
 
 #[test]
 fn test_planner_computes_nested_paths() {
-    use cozy_desktop::model::PlanResult;
+    use super_ragondin_sync::model::PlanResult;
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -344,15 +344,17 @@ fn test_planner_computes_nested_paths() {
 
     // Find the download operation for file.txt
     let download_op = results.iter().find(|r| {
-        matches!(r, PlanResult::Op(cozy_desktop::model::SyncOp::DownloadNew { remote_id, .. })
+        matches!(r, PlanResult::Op(super_ragondin_sync::model::SyncOp::DownloadNew { remote_id, .. })
             if remote_id.as_str() == "file-1")
     });
 
     assert!(download_op.is_some(), "Should plan to download file.txt");
 
     // Verify the path includes the parent directory
-    if let Some(PlanResult::Op(cozy_desktop::model::SyncOp::DownloadNew { local_path, .. })) =
-        download_op
+    if let Some(PlanResult::Op(super_ragondin_sync::model::SyncOp::DownloadNew {
+        local_path,
+        ..
+    })) = download_op
     {
         let expected_path = sync_dir.path().join("docs").join("file.txt");
         assert_eq!(
@@ -364,7 +366,7 @@ fn test_planner_computes_nested_paths() {
 
     // Root should NOT be planned as CreateLocalDir
     let root_create = results.iter().find(|r| {
-        matches!(r, PlanResult::Op(cozy_desktop::model::SyncOp::CreateLocalDir { remote_id, .. })
+        matches!(r, PlanResult::Op(super_ragondin_sync::model::SyncOp::CreateLocalDir { remote_id, .. })
             if remote_id.as_str() == "io.cozy.files.root-dir")
     });
     assert!(
@@ -375,9 +377,9 @@ fn test_planner_computes_nested_paths() {
 
 #[test]
 fn test_sync_engine_execute_move_local() {
-    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalFileId, LocalNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -406,7 +408,7 @@ fn test_sync_engine_execute_move_local() {
     store.insert_local_node(&local_node).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -430,9 +432,9 @@ fn test_sync_engine_execute_move_local() {
 
 #[test]
 fn test_delete_local_refuses_when_md5_changed() {
-    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalFileId, LocalNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -456,7 +458,7 @@ fn test_delete_local_refuses_when_md5_changed() {
     store.insert_local_node(&local_node).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -482,10 +484,10 @@ fn test_delete_local_refuses_when_md5_changed() {
 
 #[test]
 fn test_delete_local_succeeds_when_md5_matches() {
-    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
     use md5::{Digest, Md5};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalFileId, LocalNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -514,7 +516,7 @@ fn test_delete_local_succeeds_when_md5_matches() {
     store.insert_local_node(&local_node).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -535,9 +537,9 @@ fn test_delete_local_succeeds_when_md5_matches() {
 
 #[test]
 fn test_move_local_refuses_when_inode_mismatches() {
-    use cozy_desktop::model::{LocalFileId, LocalNode, SyncOp};
     use std::fs;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalFileId, LocalNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -565,7 +567,7 @@ fn test_move_local_refuses_when_inode_mismatches() {
     store.insert_local_node(&local_node).unwrap();
     store.flush().unwrap();
 
-    let mut engine = SyncEngine::new(
+    let engine = SyncEngine::new(
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
@@ -595,7 +597,7 @@ fn test_move_local_refuses_when_inode_mismatches() {
 
 #[test]
 fn test_sync_engine_run_cycle() {
-    use cozy_desktop::model::{PlanResult, RemoteNode, SyncOp};
+    use super_ragondin_sync::model::{PlanResult, RemoteNode, SyncOp};
 
     let store_dir = tempdir().unwrap();
     let sync_dir = tempdir().unwrap();
@@ -658,9 +660,9 @@ fn test_sync_engine_run_cycle() {
 
 #[tokio::test]
 async fn test_sync_engine_download_new_via_async() -> Result<(), Box<dyn std::error::Error>> {
-    use cozy_desktop::model::{PlanResult, SyncOp};
-    use cozy_desktop::remote::client::CozyClient;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{PlanResult, SyncOp};
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -711,7 +713,7 @@ async fn test_sync_engine_download_new_via_async() -> Result<(), Box<dyn std::er
     store.insert_remote_node(&root)?;
 
     // Also insert root local node so planner doesn't think it was deleted
-    let root_local = cozy_desktop::model::LocalNode {
+    let root_local = super_ragondin_sync::model::LocalNode {
         id: root_local_id,
         parent_id: None,
         name: String::new(),
@@ -774,9 +776,9 @@ async fn test_sync_engine_download_new_via_async() -> Result<(), Box<dyn std::er
 
 #[tokio::test]
 async fn test_sync_engine_upload_new_via_async() -> Result<(), Box<dyn std::error::Error>> {
-    use cozy_desktop::model::{PlanResult, SyncOp};
-    use cozy_desktop::remote::client::CozyClient;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{PlanResult, SyncOp};
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -843,7 +845,7 @@ async fn test_sync_engine_upload_new_via_async() -> Result<(), Box<dyn std::erro
     };
     store.insert_remote_node(&root)?;
 
-    let root_local = cozy_desktop::model::LocalNode {
+    let root_local = super_ragondin_sync::model::LocalNode {
         id: root_local_id,
         parent_id: None,
         name: String::new(),
@@ -881,10 +883,10 @@ async fn test_sync_engine_upload_new_via_async() -> Result<(), Box<dyn std::erro
 
 #[tokio::test]
 async fn test_sync_engine_parallel_downloads() -> Result<(), Box<dyn std::error::Error>> {
-    use cozy_desktop::model::{PlanResult, SyncOp};
-    use cozy_desktop::remote::client::CozyClient;
     use md5::Digest;
     use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{PlanResult, SyncOp};
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -947,7 +949,7 @@ async fn test_sync_engine_parallel_downloads() -> Result<(), Box<dyn std::error:
     };
     store.insert_remote_node(&root)?;
 
-    let root_local = cozy_desktop::model::LocalNode {
+    let root_local = super_ragondin_sync::model::LocalNode {
         id: root_local_id,
         parent_id: None,
         name: String::new(),
@@ -1077,7 +1079,7 @@ fn test_initial_scan_bootstraps_root() {
 #[tokio::test]
 async fn test_fetch_and_apply_remote_changes_populates_remote_tree()
 -> Result<(), Box<dyn std::error::Error>> {
-    use cozy_desktop::remote::client::CozyClient;
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1174,7 +1176,7 @@ async fn test_fetch_and_apply_remote_changes_populates_remote_tree()
 
 #[tokio::test]
 async fn test_fetch_and_apply_remote_changes_handles_deletions() {
-    use cozy_desktop::remote::client::CozyClient;
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1252,7 +1254,7 @@ async fn test_fetch_and_apply_remote_changes_handles_deletions() {
 
 #[tokio::test]
 async fn test_fetch_and_apply_remote_changes_skips_trash_dir() {
-    use cozy_desktop::remote::client::CozyClient;
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1337,7 +1339,7 @@ async fn test_fetch_and_apply_remote_changes_skips_trash_dir() {
 
 #[tokio::test]
 async fn test_fetch_and_apply_remote_changes_treats_trashed_node_as_deletion() {
-    use cozy_desktop::remote::client::CozyClient;
+    use super_ragondin_sync::remote::client::CozyClient;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1451,7 +1453,7 @@ fn test_resolve_both_modified_renames_local_file() {
     );
 
     // Simulate a BothModified conflict
-    let conflict = cozy_desktop::model::Conflict {
+    let conflict = super_ragondin_sync::model::Conflict {
         local_id: Some(local_id),
         remote_id: Some(remote_id),
         local_path: Some(local_path.clone()),
@@ -1508,7 +1510,7 @@ fn test_resolve_conflict_no_local_path_is_noop() {
     );
 
     // Conflict without local_path should be a no-op (just logged)
-    let conflict = cozy_desktop::model::Conflict {
+    let conflict = super_ragondin_sync::model::Conflict {
         local_id: None,
         remote_id: Some(RemoteId::new("r1")),
         local_path: None,
@@ -1534,7 +1536,7 @@ fn test_resolve_conflict_missing_local_file_is_noop() {
     );
 
     // Conflict pointing to a non-existent file should succeed (no-op)
-    let conflict = cozy_desktop::model::Conflict {
+    let conflict = super_ragondin_sync::model::Conflict {
         local_id: Some(LocalFileId::new(1, 100)),
         remote_id: Some(RemoteId::new("r1")),
         local_path: Some(sync_dir.path().join("nonexistent.txt")),
@@ -1567,7 +1569,7 @@ fn test_resolve_conflict_parent_missing_is_noop() {
 
     // ParentMissing conflict should NOT rename the file — it's a transient
     // condition that resolves on the next cycle when the parent is synced.
-    let conflict = cozy_desktop::model::Conflict {
+    let conflict = super_ragondin_sync::model::Conflict {
         local_id: Some(LocalFileId::new(1, 200)),
         remote_id: None,
         local_path: Some(local_path.clone()),
