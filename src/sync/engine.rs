@@ -981,15 +981,17 @@ impl SyncEngine {
                 "✅ Local content matches an old remote version, accepting remote"
             );
 
+            // Delete the local file first so the next cycle downloads the remote version.
+            // We do this before updating the store: if the fs operation fails, the store
+            // remains consistent and we avoid spurious uploads of a still-existing file.
+            if local_path.is_file() {
+                fs::remove_file(local_path)?;
+            }
+
             if let Some(local_id) = &conflict.local_id {
                 self.store.delete_synced(local_id)?;
                 self.store.delete_local_node(local_id)?;
                 self.store.flush()?;
-            }
-
-            // Delete the local file so the next cycle downloads the remote version
-            if local_path.is_file() {
-                fs::remove_file(local_path)?;
             }
 
             return Ok(());
