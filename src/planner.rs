@@ -699,12 +699,14 @@ impl<'a> Planner<'a> {
             if let Some(&local_idx) = local_new_by_path.get(path) {
                 let (remote_id, local_id) = match (&results[remote_idx], &results[local_idx]) {
                     (
-                        PlanResult::Op(SyncOp::DownloadNew { remote_id, .. }),
-                        PlanResult::Op(SyncOp::UploadNew { local_id, .. }),
-                    )
-                    | (
-                        PlanResult::Op(SyncOp::CreateLocalDir { remote_id, .. }),
-                        PlanResult::Op(SyncOp::CreateRemoteDir { local_id, .. }),
+                        PlanResult::Op(
+                            SyncOp::DownloadNew { remote_id, .. }
+                            | SyncOp::CreateLocalDir { remote_id, .. },
+                        ),
+                        PlanResult::Op(
+                            SyncOp::UploadNew { local_id, .. }
+                            | SyncOp::CreateRemoteDir { local_id, .. },
+                        ),
                     ) => (remote_id.clone(), local_id.clone()),
                     _ => continue,
                 };
