@@ -415,6 +415,67 @@ fn simulation_runner_remote_delete_propagates() {
     assert_eq!(local_files.len(), 0);
 }
 
+// ==================== Both-sides-deleted cleanup ====================
+
+#[test]
+fn both_sides_deleted_cleans_orphaned_synced_record() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    // Create root on remote
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    // Create a dir on remote
+    let dir_id = RemoteId::new("dir-both-deleted");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: dir_id.clone(),
+            parent_id: Some(root_id),
+            name: "shared-dir".to_string(),
+        })
+        .unwrap();
+
+    // Sync - dir appears locally and a synced record is created
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Delete locally (simulates user removing from filesystem)
+    let local_dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "shared-dir")
+        .collect();
+    assert_eq!(local_dirs.len(), 1, "dir should exist locally after sync");
+    let local_id = local_dirs[0].id.clone();
+
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: local_id.clone(),
+        })
+        .unwrap();
+
+    // Trash on remote (simulates remote user trashing)
+    runner.apply(SimAction::RemoteTrash { id: dir_id }).unwrap();
+
+    // Sync multiple rounds to let cleanup happen
+    for _ in 0..3 {
+        runner.apply(SimAction::Sync).unwrap();
+    }
+
+    // The synced record should be cleaned up - store must be consistent
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+    runner.check_store_consistency().unwrap();
+}
+
 // ==================== Convergence Path Tests ====================
 
 #[test]
