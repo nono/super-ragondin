@@ -258,16 +258,30 @@ impl SyncEngine {
             .count();
         tracing::info!(operations = op_count, "📋 Planned operations");
 
-        for result in &results {
-            if let PlanResult::Conflict(conflict) = result {
-                self.resolve_conflict_async(client, conflict).await?;
+        let mut plan_results = results;
+        let conflicts: Vec<_> = plan_results
+            .iter()
+            .filter_map(|r| {
+                if let PlanResult::Conflict(c) = r {
+                    Some(c.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !conflicts.is_empty() {
+            for conflict in conflicts {
+                self.resolve_conflict_async(client, &conflict).await?;
             }
+            // Re-plan after resolving conflicts to ensure the operation list is not stale.
+            plan_results = self.plan()?;
         }
 
-        let ops: Vec<&SyncOp> = results
+        let ops: Vec<SyncOp> = plan_results
             .iter()
             .filter_map(|r| match r {
-                PlanResult::Op(op) => Some(op),
+                PlanResult::Op(op) => Some(op.clone()),
                 _ => None,
             })
             .collect();
@@ -280,20 +294,20 @@ impl SyncEngine {
                     i += 1;
                 }
                 let engine_ref = &*self;
-                let mut stream = stream::iter(&ops[start..i])
+                let mut stream = stream::iter(ops[start..i].iter())
                     .map(|op| engine_ref.execute_op_async(client, op))
                     .buffer_unordered(2);
                 while let Some(result) = stream.next().await {
                     result?;
                 }
             } else {
-                self.execute_op_async(client, ops[i]).await?;
+                self.execute_op_async(client, &ops[i]).await?;
                 i += 1;
             }
         }
 
         tracing::info!("🔄 Async sync cycle complete");
-        Ok(results)
+        Ok(plan_results)
     }
 
     /// Execute a single sync operation, using the client for network ops.
