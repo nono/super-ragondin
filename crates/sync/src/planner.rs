@@ -100,12 +100,22 @@ impl<'a> Planner<'a> {
             let local = local_by_id.get(&synced.local_id);
             let remote = remote_by_id.get(&synced.remote_id);
 
-            if let (None, Some(local_node)) = (remote, local) {
-                results.push(self.plan_remote_deleted(synced, local_node));
-            }
-
-            if let (None, Some(remote_node)) = (local, remote) {
-                results.push(Self::plan_local_deleted(synced, remote_node));
+            match (local, remote) {
+                (Some(local_node), None) => {
+                    results.push(self.plan_remote_deleted(synced, local_node));
+                }
+                (None, Some(remote_node)) => {
+                    results.push(Self::plan_local_deleted(synced, remote_node));
+                }
+                (None, None) => {
+                    // Both sides deleted — clean up the orphaned synced record
+                    tracing::debug!(
+                        rel_path = &synced.rel_path,
+                        "🧹 Both local and remote deleted, removing orphaned synced record"
+                    );
+                    self.store.delete_synced(&synced.local_id)?;
+                }
+                (Some(_), Some(_)) => {}
             }
         }
 
