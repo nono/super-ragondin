@@ -1441,10 +1441,10 @@ fn test_atomic_save_does_not_rebind_when_name_differs() {
 // ==================== Overwrite detection tests ====================
 
 #[test]
-fn test_new_remote_and_local_same_path_same_content_is_noop() {
+fn test_new_remote_and_local_same_path_same_content_emits_bind() {
     // When a new remote file and a new local file appear at the same path
-    // with the same content, the planner should NOT produce both a DownloadNew
-    // and an UploadNew. Instead it should recognize them as the same file.
+    // with the same content, the planner should emit a BindExisting op
+    // so that a SyncedRecord is created and the planner converges.
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
 
@@ -1483,7 +1483,7 @@ fn test_new_remote_and_local_same_path_same_content_is_noop() {
     let planner = Planner::new(&store, PathBuf::from("/sync"));
     let ops = planner.plan().unwrap();
 
-    // Should NOT have both DownloadNew and UploadNew
+    // Should NOT have DownloadNew, UploadNew, or a conflict
     let has_download = ops
         .iter()
         .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })));
@@ -1492,21 +1492,28 @@ fn test_new_remote_and_local_same_path_same_content_is_noop() {
         .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadNew { .. })));
     let has_conflict = ops.iter().any(|r| matches!(r, PlanResult::Conflict(_)));
 
+    assert!(!has_download, "Should NOT download, got: {:?}", ops);
+    assert!(!has_upload, "Should NOT upload, got: {:?}", ops);
+    assert!(!has_conflict, "Should NOT conflict, got: {:?}", ops);
+
+    // Should emit a BindExisting op to create the SyncedRecord
+    let bind = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::BindExisting { .. })));
     assert!(
-        !has_download,
-        "Should NOT download when local already has same content, got: {:?}",
+        bind.is_some(),
+        "Should produce BindExisting to link local and remote, got: {:?}",
         ops
     );
-    assert!(
-        !has_upload,
-        "Should NOT upload when remote already has same content, got: {:?}",
-        ops
-    );
-    assert!(
-        !has_conflict,
-        "Should NOT conflict when content matches, got: {:?}",
-        ops
-    );
+    if let Some(PlanResult::Op(SyncOp::BindExisting {
+        local_id: lid,
+        remote_id: rid,
+        ..
+    })) = bind
+    {
+        assert_eq!(lid.inode, 100);
+        assert_eq!(rid.as_str(), "f1");
+    }
 }
 
 #[test]
@@ -1586,9 +1593,9 @@ fn test_new_remote_and_local_same_path_different_content_is_conflict() {
 }
 
 #[test]
-fn test_new_remote_and_local_same_dir_same_path_is_noop() {
+fn test_new_remote_and_local_same_dir_same_path_emits_bind() {
     // When a new remote dir and a new local dir appear at the same path,
-    // the planner should detect the collision and suppress both ops.
+    // the planner should emit a BindExisting op to create a SyncedRecord.
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
 
@@ -1629,8 +1636,22 @@ fn test_new_remote_and_local_same_dir_same_path_is_noop() {
         .any(|r| matches!(r, PlanResult::Op(SyncOp::CreateRemoteDir { .. })));
 
     assert!(
-        !(has_create_local && has_create_remote),
-        "Should NOT produce both CreateLocalDir and CreateRemoteDir for same path, got: {:?}",
+        !has_create_local,
+        "Should NOT create local dir, got: {:?}",
+        ops
+    );
+    assert!(
+        !has_create_remote,
+        "Should NOT create remote dir, got: {:?}",
+        ops
+    );
+
+    let bind = ops
+        .iter()
+        .find(|r| matches!(r, PlanResult::Op(SyncOp::BindExisting { .. })));
+    assert!(
+        bind.is_some(),
+        "Should produce BindExisting for matching dirs, got: {:?}",
         ops
     );
 }
