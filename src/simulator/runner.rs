@@ -1023,6 +1023,11 @@ impl SimulationRunner {
                 remote_id,
                 ..
             } => self.execute_upload_update(&local_id, &remote_id),
+            SyncOp::BindExisting {
+                local_id,
+                remote_id,
+                ..
+            } => self.execute_bind_existing(&local_id, &remote_id),
         }
     }
 
@@ -1390,6 +1395,43 @@ impl SimulationRunner {
                 .insert_synced(&synced)
                 .map_err(|e| e.to_string())?;
         }
+        Ok(())
+    }
+
+    fn execute_bind_existing(
+        &self,
+        local_id: &LocalFileId,
+        remote_id: &RemoteId,
+    ) -> Result<(), String> {
+        let local_node = self
+            .local_fs
+            .get_node(local_id)
+            .cloned()
+            .ok_or_else(|| format!("BindExisting: local node {local_id} not found"))?;
+        let remote_node = self
+            .remote
+            .get_node(remote_id)
+            .cloned()
+            .ok_or_else(|| format!("BindExisting: remote node {remote_id} not found"))?;
+
+        let rel_path = self.local_path(&local_node);
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path,
+            md5sum: remote_node.md5sum.clone(),
+            size: remote_node.size,
+            rev: remote_node.rev.clone(),
+            node_type: remote_node.node_type,
+            local_name: Some(local_node.name.clone()),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name.clone()),
+            remote_parent_id: remote_node.parent_id,
+        };
+
+        self.store
+            .insert_synced(&synced)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 

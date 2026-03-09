@@ -716,10 +716,17 @@ impl<'a> Planner<'a> {
                     (Some(remote), Some(local)) if Self::remote_equals_local(remote, local) => {
                         tracing::info!(
                             path = %path.display(),
-                            "✅ New remote and local at same path with same content, treating as match"
+                            "✅ New remote and local at same path with same content, binding"
                         );
-                        indices_to_remove.push(remote_idx);
                         indices_to_remove.push(local_idx);
+                        replacements.push((
+                            remote_idx,
+                            PlanResult::Op(SyncOp::BindExisting {
+                                local_id,
+                                remote_id,
+                                local_path: (*path).clone(),
+                            }),
+                        ));
                     }
                     (Some(_), Some(_)) => {
                         tracing::debug!(
@@ -759,16 +766,17 @@ impl<'a> Planner<'a> {
     fn sort_operations(results: &mut [PlanResult]) {
         results.sort_by_key(|r| match r {
             PlanResult::Op(SyncOp::CreateLocalDir { .. } | SyncOp::CreateRemoteDir { .. }) => 0,
-            PlanResult::Op(SyncOp::MoveLocal { .. } | SyncOp::MoveRemote { .. }) => 1,
+            PlanResult::Op(SyncOp::BindExisting { .. }) => 1,
+            PlanResult::Op(SyncOp::MoveLocal { .. } | SyncOp::MoveRemote { .. }) => 2,
             PlanResult::Op(
                 SyncOp::DownloadNew { .. }
                 | SyncOp::DownloadUpdate { .. }
                 | SyncOp::UploadNew { .. }
                 | SyncOp::UploadUpdate { .. },
-            ) => 2,
-            PlanResult::Op(SyncOp::DeleteLocal { .. } | SyncOp::DeleteRemote { .. }) => 3,
-            PlanResult::Conflict(_) => 4,
-            PlanResult::NoOp => 5,
+            ) => 3,
+            PlanResult::Op(SyncOp::DeleteLocal { .. } | SyncOp::DeleteRemote { .. }) => 4,
+            PlanResult::Conflict(_) => 5,
+            PlanResult::NoOp => 6,
         });
     }
 }

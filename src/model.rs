@@ -315,6 +315,13 @@ pub enum SyncOp {
         new_name: String,
         expected_rev: String,
     },
+    /// Bind a local node to a remote node by creating a `SyncedRecord`
+    /// without any file transfer (both sides already have identical content).
+    BindExisting {
+        local_id: LocalFileId,
+        remote_id: RemoteId,
+        local_path: PathBuf,
+    },
 }
 
 impl SyncOp {

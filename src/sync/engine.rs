@@ -305,7 +305,8 @@ impl SyncEngine {
         match op {
             SyncOp::CreateLocalDir { .. }
             | SyncOp::DeleteLocal { .. }
-            | SyncOp::MoveLocal { .. } => self.execute_op(op),
+            | SyncOp::MoveLocal { .. }
+            | SyncOp::BindExisting { .. } => self.execute_op(op),
 
             SyncOp::DeleteRemote { remote_id, .. } => {
                 client.trash(remote_id).await?;
@@ -430,6 +431,12 @@ impl SyncEngine {
                 expected_name: _,
             } => self.execute_move_local(local_id, from_path, to_path),
 
+            SyncOp::BindExisting {
+                local_id,
+                remote_id,
+                local_path,
+            } => self.execute_bind_existing(local_id, remote_id, local_path),
+
             // These operations require async/network - not implemented in this phase
             SyncOp::DownloadNew { .. }
             | SyncOp::DownloadUpdate { .. }
@@ -496,6 +503,52 @@ impl SyncEngine {
         };
 
         self.store.insert_local_node(&local_node)?;
+        self.store.insert_synced(&synced)?;
+        self.store.flush()?;
+
+        Ok(())
+    }
+
+    fn execute_bind_existing(
+        &self,
+        local_id: &LocalFileId,
+        remote_id: &RemoteId,
+        local_path: &Path,
+    ) -> Result<()> {
+        tracing::info!(
+            path = %local_path.display(),
+            remote_id = remote_id.as_str(),
+            "🔗 Binding existing local and remote nodes"
+        );
+
+        let remote_node = self
+            .store
+            .get_remote_node(remote_id)?
+            .ok_or_else(|| Error::NotFound(remote_id.as_str().to_string()))?;
+
+        let local_node = self
+            .store
+            .get_local_node(local_id)?
+            .ok_or_else(|| Error::NotFound(format!("{local_id}")))?;
+
+        let synced = SyncedRecord {
+            local_id: local_id.clone(),
+            remote_id: remote_id.clone(),
+            rel_path: local_path
+                .strip_prefix(&self.sync_dir)
+                .unwrap_or(local_path)
+                .to_string_lossy()
+                .to_string(),
+            md5sum: remote_node.md5sum.clone(),
+            size: remote_node.size,
+            rev: remote_node.rev.clone(),
+            node_type: remote_node.node_type,
+            local_name: Some(local_node.name.clone()),
+            local_parent_id: local_node.parent_id,
+            remote_name: Some(remote_node.name.clone()),
+            remote_parent_id: remote_node.parent_id,
+        };
+
         self.store.insert_synced(&synced)?;
         self.store.flush()?;
 
