@@ -1010,6 +1010,17 @@ impl SyncEngine {
     ///
     /// Returns an error if the file rename fails.
     pub fn resolve_conflict(&self, conflict: &Conflict) -> Result<()> {
+        // ParentMissing is a transient condition: the parent directory hasn't
+        // been synced yet. The file will be uploaded on the next cycle once the
+        // parent exists — no rename needed.
+        if conflict.kind == ConflictKind::ParentMissing {
+            tracing::info!(
+                conflict = ?conflict,
+                "⏳ Parent not synced yet, deferring to next cycle"
+            );
+            return Ok(());
+        }
+
         let Some(local_path) = &conflict.local_path else {
             tracing::warn!(conflict = ?conflict, "⚠️ Conflict (no local path to resolve)");
             return Ok(());
