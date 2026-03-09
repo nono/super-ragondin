@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::planner::Planner;
 use crate::store::{StoreSnapshot, TreeStore};
+use crate::sync::conflict_name::generate_conflict_name;
 use crate::util::compute_md5_from_bytes;
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
@@ -925,9 +926,9 @@ impl SimulationRunner {
             .cloned()
             .unwrap_or_default();
 
-        // Create a conflict copy with a renamed name
+        // Create a conflict copy using the same naming logic as the real engine
         let conflict_local_id = self.next_local_id();
-        let conflict_name = format!("{}-conflict", node.name);
+        let conflict_name = generate_conflict_name(&PathBuf::from(&node.name));
         let conflict_node = LocalNode {
             id: conflict_local_id.clone(),
             parent_id: node.parent_id.clone(),
