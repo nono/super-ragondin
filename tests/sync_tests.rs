@@ -1545,3 +1545,53 @@ fn test_resolve_conflict_missing_local_file_is_noop() {
     let result = engine.resolve_conflict(&conflict);
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_resolve_conflict_parent_missing_is_noop() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    // Create a local file inside a subdirectory
+    let sub_dir = sync_dir.path().join("docs");
+    std::fs::create_dir(&sub_dir).unwrap();
+    let local_path = sub_dir.join("note.txt");
+    std::fs::write(&local_path, "some content").unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+    );
+
+    // ParentMissing conflict should NOT rename the file — it's a transient
+    // condition that resolves on the next cycle when the parent is synced.
+    let conflict = cozy_desktop::model::Conflict {
+        local_id: Some(LocalFileId::new(1, 200)),
+        remote_id: None,
+        local_path: Some(local_path.clone()),
+        reason: "Parent directory not synced".to_string(),
+        kind: ConflictKind::ParentMissing,
+    };
+
+    let result = engine.resolve_conflict(&conflict);
+    assert!(result.is_ok());
+
+    // The original file should still exist at its original path
+    assert!(
+        local_path.exists(),
+        "ParentMissing conflict should not rename the file"
+    );
+
+    // No conflict copy should have been created
+    let entries: Vec<_> = std::fs::read_dir(&sub_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        !entries.iter().any(|name| name.contains("-conflict-")),
+        "ParentMissing should not create conflict copies, found: {entries:?}"
+    );
+}
