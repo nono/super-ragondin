@@ -1,0 +1,15 @@
+[package]
+name = "super-ragondin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+super-ragondin-sync = { path = "../sync" }
+super-ragondin-rag = { path = "../rag" }
+dirs = "6.0.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1.20.0", features = ["v4"] }
+
+[lints]
+workspace = true

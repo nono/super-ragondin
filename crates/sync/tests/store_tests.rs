@@ -1,5 +1,7 @@
-use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, SyncedRecord};
-use cozy_desktop::store::TreeStore;
+use super_ragondin_sync::model::{
+    LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, SyncedRecord,
+};
+use super_ragondin_sync::store::TreeStore;
 use tempfile::tempdir;
 
 #[test]

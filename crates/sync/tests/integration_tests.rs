@@ -7,12 +7,12 @@
 //! cargo test --test integration_tests -- --ignored
 //! ```
 
-use cozy_desktop::model::{PlanResult, RemoteId, SyncOp};
-use cozy_desktop::remote::client::CozyClient;
-use cozy_desktop::store::TreeStore;
-use cozy_desktop::sync::engine::SyncEngine;
-use cozy_desktop::util::compute_md5_from_bytes;
 use std::process::Command;
+use super_ragondin_sync::model::{PlanResult, RemoteId, SyncOp};
+use super_ragondin_sync::remote::client::CozyClient;
+use super_ragondin_sync::store::TreeStore;
+use super_ragondin_sync::sync::engine::SyncEngine;
+use super_ragondin_sync::util::compute_md5_from_bytes;
 use tempfile::TempDir;
 
 /// Test fixture that manages a disposable Cozy instance.

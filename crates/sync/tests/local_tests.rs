@@ -1,9 +1,9 @@
-use cozy_desktop::local::scanner::Scanner;
-use cozy_desktop::local::watcher::{WatchEvent, WatchEventKind, Watcher};
-use cozy_desktop::model::{LocalNode, NodeType};
 use std::fs;
 use std::thread;
 use std::time::Duration;
+use super_ragondin_sync::local::scanner::Scanner;
+use super_ragondin_sync::local::watcher::{WatchEvent, WatchEventKind, Watcher};
+use super_ragondin_sync::model::{LocalNode, NodeType};
 use tempfile::tempdir;
 
 #[test]

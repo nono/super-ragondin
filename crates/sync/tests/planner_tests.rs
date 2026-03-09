@@ -1,10 +1,10 @@
-use cozy_desktop::model::{
+use std::path::PathBuf;
+use super_ragondin_sync::model::{
     Conflict, ConflictKind, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode,
     SyncOp, SyncedRecord,
 };
-use cozy_desktop::planner::Planner;
-use cozy_desktop::store::TreeStore;
-use std::path::PathBuf;
+use super_ragondin_sync::planner::Planner;
+use super_ragondin_sync::store::TreeStore;
 use tempfile::tempdir;
 
 fn local_id(device: u64, inode: u64) -> LocalFileId {

@@ -1,9 +1,9 @@
-use cozy_desktop::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode};
-use cozy_desktop::simulator::mock_fs::MockFs;
-use cozy_desktop::simulator::mock_remote::MockRemote;
-use cozy_desktop::simulator::runner::{ConcurrentRemoteOp, SimAction, SimulationRunner};
-use cozy_desktop::store::TreeStore;
 use proptest::prelude::*;
+use super_ragondin_sync::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode};
+use super_ragondin_sync::simulator::mock_fs::MockFs;
+use super_ragondin_sync::simulator::mock_remote::MockRemote;
+use super_ragondin_sync::simulator::runner::{ConcurrentRemoteOp, SimAction, SimulationRunner};
+use super_ragondin_sync::store::TreeStore;
 use tempfile::tempdir;
 
 #[test]

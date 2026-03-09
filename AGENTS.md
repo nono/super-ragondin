@@ -1,6 +1,6 @@
-# Cozy Desktop NG
+# Super Ragondin
 
-Rust sync client for Cozy Cloud using the 3-tree model.
+Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo workspace.
 
 ## Instructions
 
@@ -39,18 +39,21 @@ cozy-stack instances rm --force alice.localhost:8080
 
 ## Project Structure
 
-- `src/lib.rs` - Library root, module exports
-- `src/main.rs` - CLI entry point
-- `src/config.rs` - Configuration (with `src/config/` submodules)
-- `src/error.rs` - Error types
-- `src/model.rs` - Core data types (Node, NodeId, SyncOp)
-- `src/planner.rs` - Sync operation planning
-- `src/local.rs` - Local filesystem watching (with `src/local/` submodules)
-- `src/remote.rs` - Remote Cozy API client (with `src/remote/` submodules)
-- `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
-- `src/sync.rs` - Sync engine (with `src/sync/` submodules)
-- `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
-- `tests/` - Integration tests
+Cargo workspace with three crates:
+
+- `crates/cli/` (`super-ragondin`) - CLI binary entry point
+- `crates/sync/` (`super-ragondin-sync`) - File synchronization library
+  - `src/config.rs` - Configuration (with `src/config/` submodules)
+  - `src/error.rs` - Error types
+  - `src/model.rs` - Core data types (Node, NodeId, SyncOp)
+  - `src/planner.rs` - Sync operation planning
+  - `src/local.rs` - Local filesystem watching (with `src/local/` submodules)
+  - `src/remote.rs` - Remote Cozy API client (with `src/remote/` submodules)
+  - `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
+  - `src/sync.rs` - Sync engine (with `src/sync/` submodules)
+  - `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
+  - `tests/` - Integration tests
+- `crates/rag/` (`super-ragondin-rag`) - RAG system (skeleton)
 
 ## Findings
 

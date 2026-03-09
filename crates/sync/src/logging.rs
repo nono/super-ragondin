@@ -7,24 +7,24 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Returns the XDG-compliant log directory.
 ///
-/// Uses `$XDG_STATE_HOME/cozy-desktop/` if set,
-/// otherwise falls back to `$HOME/.local/state/cozy-desktop/`.
+/// Uses `$XDG_STATE_HOME/super-ragondin/` if set,
+/// otherwise falls back to `$HOME/.local/state/super-ragondin/`.
 #[must_use]
 pub fn log_dir() -> PathBuf {
     std::env::var("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("cozy-desktop")
+        .join("super-ragondin")
 }
 
 /// Initialize the dual-output logging system.
 ///
-/// - stderr: human-readable, colored, controlled by `RUST_LOG` (default: `cozy_desktop=info`)
+/// - stderr: human-readable, colored, controlled by `RUST_LOG` (default: `super_ragondin_sync=info`)
 /// - file: JSONL format, daily rotation, always at DEBUG level
 ///
-/// Log files are written to `log_dir()` with the prefix `cozy-desktop`
-/// and suffix `.jsonl`, e.g. `cozy-desktop.2026-02-08.jsonl`.
+/// Log files are written to `log_dir()` with the prefix `super-ragondin`
+/// and suffix `.jsonl`, e.g. `super-ragondin.2026-02-08.jsonl`.
 ///
 /// # Panics
 ///
@@ -35,7 +35,7 @@ pub fn init() {
 
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix("cozy-desktop")
+        .filename_prefix("super-ragondin")
         .filename_suffix("jsonl")
         .build(&dir)
         .expect("failed to create log file appender");
@@ -55,10 +55,12 @@ pub fn init() {
         .with(
             stderr_layer.with_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "cozy_desktop=info".into()),
+                    .unwrap_or_else(|_| "super_ragondin_sync=info".into()),
             ),
         )
-        .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new("cozy_desktop=debug")))
+        .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new(
+            "super_ragondin_sync=debug",
+        )))
         .init();
 
     tracing::info!(log_dir = %dir.display(), "⚙️ Logging initialized");
@@ -69,11 +71,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn log_dir_ends_with_cozy_desktop() {
+    fn log_dir_ends_with_super_ragondin() {
         let dir = log_dir();
         assert!(
-            dir.ends_with("cozy-desktop"),
-            "expected log dir to end with 'cozy-desktop', got: {dir:?}"
+            dir.ends_with("super-ragondin"),
+            "expected log dir to end with 'super-ragondin', got: {dir:?}"
         );
     }
 }

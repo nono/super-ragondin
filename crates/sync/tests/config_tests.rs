@@ -1,5 +1,5 @@
-use cozy_desktop::config::Config;
 use std::path::PathBuf;
+use super_ragondin_sync::config::Config;
 use tempfile::TempDir;
 
 #[test]
@@ -65,7 +65,7 @@ fn staging_dir_returns_correct_path() {
     let config = Config {
         instance_url: "https://test.mycozy.cloud".to_string(),
         sync_dir: PathBuf::from("/home/user/Cozy"),
-        data_dir: PathBuf::from("/home/user/.local/share/cozy-desktop"),
+        data_dir: PathBuf::from("/home/user/.local/share/super-ragondin"),
         oauth_client: None,
         last_seq: None,
     };
@@ -74,7 +74,7 @@ fn staging_dir_returns_correct_path() {
 
     assert_eq!(
         staging,
-        PathBuf::from("/home/user/.local/share/cozy-desktop/staging")
+        PathBuf::from("/home/user/.local/share/super-ragondin/staging")
     );
 }
 
@@ -83,7 +83,7 @@ fn store_dir_returns_correct_path() {
     let config = Config {
         instance_url: "https://test.mycozy.cloud".to_string(),
         sync_dir: PathBuf::from("/home/user/Cozy"),
-        data_dir: PathBuf::from("/home/user/.local/share/cozy-desktop"),
+        data_dir: PathBuf::from("/home/user/.local/share/super-ragondin"),
         oauth_client: None,
         last_seq: None,
     };
@@ -92,7 +92,7 @@ fn store_dir_returns_correct_path() {
 
     assert_eq!(
         store,
-        PathBuf::from("/home/user/.local/share/cozy-desktop/store")
+        PathBuf::from("/home/user/.local/share/super-ragondin/store")
     );
 }
 
