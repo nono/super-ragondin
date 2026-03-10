@@ -31,12 +31,20 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         temp_env::with_vars_unset(
-            ["OPENROUTER_API_KEY", "OPENROUTER_EMBED_MODEL", "OPENROUTER_VISION_MODEL", "OPENROUTER_CHAT_MODEL"],
+            [
+                "OPENROUTER_API_KEY",
+                "OPENROUTER_EMBED_MODEL",
+                "OPENROUTER_VISION_MODEL",
+                "OPENROUTER_CHAT_MODEL",
+            ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
                 assert_eq!(config.embed_model, "openai/text-embedding-3-large");
                 assert_eq!(config.vision_model, "google/gemini-2.0-flash");
-                assert_eq!(config.chat_model, "mistralai/mistral-small-3.2-24b-instruct");
+                assert_eq!(
+                    config.chat_model,
+                    "mistralai/mistral-small-3.2-24b-instruct"
+                );
                 assert!(config.api_key.is_empty());
             },
         );

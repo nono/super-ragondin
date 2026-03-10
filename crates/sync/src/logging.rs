@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
 
 /// Returns the XDG-compliant log directory.
 ///

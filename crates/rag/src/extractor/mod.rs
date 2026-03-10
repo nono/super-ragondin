@@ -3,8 +3,8 @@ pub mod office;
 pub mod pdf;
 pub mod plaintext;
 
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 /// Extract text content from `path`. Returns `None` if the MIME type is unsupported.
 /// Returns `Ok(Some(""))` for PDFs with no extractable text (scanned) — indexer handles fallback.
@@ -20,9 +20,7 @@ pub fn extract(path: &Path, mime_type: &str) -> Result<Option<String>> {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
             Ok(Some(office::extract_xlsx(path)?))
         }
-        "application/vnd.oasis.opendocument.text" => {
-            Ok(Some(office::extract_odt(path)?))
-        }
+        "application/vnd.oasis.opendocument.text" => Ok(Some(office::extract_odt(path)?)),
         // Images handled separately (need async embedder for description)
         "image/jpeg" | "image/png" | "image/webp" | "image/gif" => Ok(None),
         other => {

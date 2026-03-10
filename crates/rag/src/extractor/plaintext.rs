@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 pub fn extract_plaintext(path: &Path) -> Result<String> {
     Ok(std::fs::read_to_string(path)?)
