@@ -234,8 +234,7 @@ fn run_sync_cycle(
         let db_path = config.rag_dir();
         let rag_config = RagConfig::from_env_with_db_path(db_path);
         let embedder = OpenRouterEmbedder::new(rag_config.clone());
-        let store = super_ragondin_sync::store::TreeStore::open(&config.store_dir())?;
-        let synced = store.list_all_synced()?;
+        let synced = engine.store().list_all_synced()?;
 
         if let Err(e) = rt.block_on(async {
             let rag_store = RagStore::open(&rag_config.db_path).await?;
@@ -249,11 +248,11 @@ fn run_sync_cycle(
 }
 
 fn cmd_ask(args: &[String]) -> Result<()> {
+    use std::io::Write;
     use super_ragondin_rag::config::RagConfig;
     use super_ragondin_rag::embedder::OpenRouterEmbedder;
-    use super_ragondin_rag::store::RagStore;
     use super_ragondin_rag::searcher::search;
-    use std::io::Write;
+    use super_ragondin_rag::store::RagStore;
 
     if args.is_empty() {
         println!("Usage: super-ragondin ask <question>");
@@ -268,17 +267,20 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     let rag_config = RagConfig::from_env_with_db_path(db_path);
 
     if rag_config.api_key.is_empty() {
-        eprintln!("Error: OPENROUTER_API_KEY environment variable not set");
-        std::process::exit(1);
+        return Err(Error::Permanent(
+            "OPENROUTER_API_KEY environment variable not set".to_string(),
+        ));
     }
 
     let embedder = OpenRouterEmbedder::new(rag_config.clone());
     let rt = tokio::runtime::Runtime::new()?;
 
-    let chunks = rt.block_on(async {
-        let rag_store = RagStore::open(&rag_config.db_path).await?;
-        search(&question, &rag_store, &embedder, 5).await
-    }).map_err(|e| Error::Permanent(format!("{e:#}")))?;
+    let chunks = rt
+        .block_on(async {
+            let rag_store = RagStore::open(&rag_config.db_path).await?;
+            search(&question, &rag_store, &embedder, 5).await
+        })
+        .map_err(|e| Error::Permanent(format!("{e:#}")))?;
 
     if chunks.is_empty() {
         println!("No relevant documents found.");
@@ -338,7 +340,8 @@ fn cmd_ask(args: &[String]) -> Result<()> {
                                 break;
                             }
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str() {
+                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str()
+                                {
                                     write!(out, "{content}").ok();
                                     out.flush().ok();
                                 }

@@ -1,15 +1,16 @@
+use anyhow::Result;
+use quick_xml::Reader;
+use quick_xml::events::Event;
 use std::io::Read;
 use std::path::Path;
-use anyhow::Result;
-use quick_xml::events::Event;
-use quick_xml::Reader;
 
 /// Extract text from a .docx file (ZIP containing word/document.xml).
 pub fn extract_docx(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mut zip = zip::ZipArchive::new(file)?;
     let mut xml_content = String::new();
-    zip.by_name("word/document.xml")?.read_to_string(&mut xml_content)?;
+    zip.by_name("word/document.xml")?
+        .read_to_string(&mut xml_content)?;
     Ok(xml_text_content(&xml_content))
 }
 
@@ -18,7 +19,8 @@ pub fn extract_odt(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mut zip = zip::ZipArchive::new(file)?;
     let mut xml_content = String::new();
-    zip.by_name("content.xml")?.read_to_string(&mut xml_content)?;
+    zip.by_name("content.xml")?
+        .read_to_string(&mut xml_content)?;
     Ok(xml_text_content(&xml_content))
 }
 
@@ -52,7 +54,7 @@ fn xml_text_content(xml: &str) -> String {
 
 /// Extract text from an .xlsx file using calamine.
 pub fn extract_xlsx(path: &Path) -> Result<String> {
-    use calamine::{open_workbook_auto, Data, Reader as CalaReader};
+    use calamine::{Data, Reader as CalaReader, open_workbook_auto};
     let mut workbook = open_workbook_auto(path)?;
     let mut lines = Vec::new();
     for sheet_name in workbook.sheet_names().to_vec() {
@@ -64,6 +66,8 @@ pub fn extract_xlsx(path: &Path) -> Result<String> {
                         Data::String(s) => Some(s.clone()),
                         Data::Float(f) => Some(f.to_string()),
                         Data::Int(i) => Some(i.to_string()),
+                        Data::Bool(b) => Some(b.to_string()),
+                        Data::DateTime(f) => Some(f.to_string()),
                         _ => None,
                     })
                     .collect();
@@ -82,30 +86,39 @@ mod tests {
 
     #[test]
     fn test_extract_docx() {
-        let path = std::path::Path::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.docx")
-        );
-        if !path.exists() { return; }
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.docx"
+        ));
+        if !path.exists() {
+            return;
+        }
         let text = extract_docx(path).unwrap();
         assert!(!text.is_empty());
     }
 
     #[test]
     fn test_extract_xlsx() {
-        let path = std::path::Path::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.xlsx")
-        );
-        if !path.exists() { return; }
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.xlsx"
+        ));
+        if !path.exists() {
+            return;
+        }
         let text = extract_xlsx(path).unwrap();
         assert!(!text.is_empty());
     }
 
     #[test]
     fn test_extract_odt() {
-        let path = std::path::Path::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.odt")
-        );
-        if !path.exists() { return; }
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.odt"
+        ));
+        if !path.exists() {
+            return;
+        }
         let text = extract_odt(path).unwrap();
         assert!(!text.is_empty());
     }

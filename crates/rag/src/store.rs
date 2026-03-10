@@ -9,10 +9,10 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
-use lancedb::connection::Connection;
-use lancedb::arrow::SendableRecordBatchStream;
-use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::Table;
+use lancedb::arrow::SendableRecordBatchStream;
+use lancedb::connection::Connection;
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 const TABLE_NAME: &str = "chunks";
 const EMBED_DIM: i32 = 3072;
@@ -75,13 +75,15 @@ impl RagStore {
             db.open_table(TABLE_NAME).execute().await?
         } else {
             let schema = chunks_schema();
-            db.create_empty_table(TABLE_NAME, schema)
-                .execute()
-                .await?
+            db.create_empty_table(TABLE_NAME, schema).execute().await?
         };
         Ok(Self { table })
     }
 
+    /// Insert chunks into the store.
+    ///
+    /// **Callers must call [`delete_doc`] before upserting** to avoid duplicate chunks.
+    /// This is an append-only operation; LanceDB does not deduplicate on insert.
     pub async fn upsert_chunks(&self, chunks: &[ChunkRecord]) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
@@ -129,9 +131,7 @@ impl RagStore {
 
     pub async fn delete_doc(&self, doc_id: &str) -> Result<()> {
         let safe = doc_id.replace('\'', "\\'");
-        self.table
-            .delete(&format!("doc_id = '{safe}'"))
-            .await?;
+        self.table.delete(&format!("doc_id = '{safe}'")).await?;
         Ok(())
     }
 
@@ -178,11 +178,7 @@ impl RagStore {
         Ok(result)
     }
 
-    pub async fn search(
-        &self,
-        query_embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
         let mut stream: SendableRecordBatchStream = self
             .table
             .vector_search(query_embedding)?

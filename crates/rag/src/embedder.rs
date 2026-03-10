@@ -1,7 +1,7 @@
+use crate::config::RagConfig;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use crate::config::RagConfig;
 
 #[async_trait]
 pub trait Embedder: Send + Sync {
@@ -97,12 +97,15 @@ async fn post_with_retry(
             if attempt + 1 < MAX_RETRIES {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 delay_ms *= 2;
-                continue;
             }
+            continue;
         }
-        anyhow::bail!("OpenRouter error {status}: {}", resp.text().await?);
+        return Err(anyhow::anyhow!(
+            "OpenRouter error {status}: {}",
+            resp.text().await?
+        ));
     }
-    anyhow::bail!("OpenRouter: exhausted retries")
+    Err(anyhow::anyhow!("OpenRouter: exhausted retries"))
 }
 
 #[async_trait]
@@ -182,7 +185,10 @@ mod tests {
     #[tokio::test]
     async fn test_stub_embed() {
         let e = StubEmbedder;
-        let result = e.embed_texts(&["hello".to_string(), "world".to_string()]).await.unwrap();
+        let result = e
+            .embed_texts(&["hello".to_string(), "world".to_string()])
+            .await
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].len(), 3072);
     }
