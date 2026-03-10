@@ -96,7 +96,7 @@ impl OAuthClient {
             client_name: client_name.to_string(),
             software_id: software_id.to_string(),
             client_kind: "desktop".to_string(),
-            client_uri: "https://github.com/cozy/cozy-desktop".to_string(),
+            client_uri: "https://github.com/nono/super-ragondin".to_string(),
         };
 
         let resp: RegisterResponse = http
