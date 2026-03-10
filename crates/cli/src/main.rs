@@ -24,6 +24,7 @@ fn main() -> Result<()> {
         Some("sync") => cmd_sync(),
         Some("watch") => cmd_watch(),
         Some("status") => cmd_status(),
+        Some("ask") => cmd_ask(&args[2..]),
         _ => {
             println!("Usage: super-ragondin <command>");
             println!();
@@ -33,6 +34,7 @@ fn main() -> Result<()> {
             println!("  sync                             Run one sync cycle");
             println!("  watch                            Watch and sync continuously");
             println!("  status                           Show sync status");
+            println!("  ask <question>                   Ask a question about your files");
             Ok(())
         }
     }
@@ -214,12 +216,158 @@ fn run_sync_cycle(
     client: &super_ragondin_sync::remote::client::CozyClient,
     config: &mut Config,
 ) -> Result<()> {
+    use super_ragondin_rag::config::RagConfig;
+    use super_ragondin_rag::embedder::OpenRouterEmbedder;
+    use super_ragondin_rag::indexer::reconcile;
+    use super_ragondin_rag::store::RagStore;
+
     let last_seq =
         rt.block_on(engine.fetch_and_apply_remote_changes(client, config.last_seq.as_deref()))?;
     config.last_seq = Some(last_seq);
     config.save(&config_path())?;
 
     rt.block_on(engine.run_cycle_async(client))?;
+
+    // RAG reconciliation — only if API key is set
+    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
+    if !api_key.is_empty() {
+        let db_path = config.sync_dir.join(".rag");
+        let rag_config = RagConfig::from_env_with_db_path(db_path);
+        let embedder = OpenRouterEmbedder::new(rag_config.clone());
+        let store = super_ragondin_sync::store::TreeStore::open(&config.store_dir())?;
+        let synced = store.list_all_synced()?;
+
+        if let Err(e) = rt.block_on(async {
+            let rag_store = RagStore::open(&rag_config.db_path).await?;
+            reconcile(&synced, &config.sync_dir, &rag_store, &embedder).await
+        }) {
+            tracing::warn!(error = %e, "RAG reconciliation failed (non-fatal)");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_ask(args: &[String]) -> Result<()> {
+    use super_ragondin_rag::config::RagConfig;
+    use super_ragondin_rag::embedder::OpenRouterEmbedder;
+    use super_ragondin_rag::store::RagStore;
+    use super_ragondin_rag::searcher::search;
+    use std::io::Write;
+
+    if args.is_empty() {
+        println!("Usage: super-ragondin ask <question>");
+        return Ok(());
+    }
+    let question = args.join(" ");
+
+    let config = Config::load(&config_path())?
+        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+
+    let db_path = config.sync_dir.join(".rag");
+    let rag_config = RagConfig::from_env_with_db_path(db_path);
+
+    if rag_config.api_key.is_empty() {
+        eprintln!("Error: OPENROUTER_API_KEY environment variable not set");
+        std::process::exit(1);
+    }
+
+    let embedder = OpenRouterEmbedder::new(rag_config.clone());
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let chunks = rt.block_on(async {
+        let rag_store = RagStore::open(&rag_config.db_path).await?;
+        search(&question, &rag_store, &embedder, 5).await
+    }).map_err(|e| Error::Permanent(format!("{e:#}")))?;
+
+    if chunks.is_empty() {
+        println!("No relevant documents found.");
+        return Ok(());
+    }
+
+    let context: String = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("[{}] {}\n{}", i + 1, c.doc_id, c.chunk_text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let system_prompt = "You are a helpful assistant. Answer the user's question using only the provided document excerpts. Be concise and accurate. Respond in the same language as the question.";
+    let user_prompt = format!("Documents:\n{context}\n\nQuestion: {question}");
+
+    let chat_model = rag_config.chat_model.clone();
+    let api_key = rag_config.api_key.clone();
+    let client = reqwest::Client::new();
+
+    let body = serde_json::json!({
+        "model": chat_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "stream": true
+    });
+
+    rt.block_on(async {
+        use futures::StreamExt;
+
+        let resp = client
+            .post("https://openrouter.ai/api/v1/chat/completions")
+            .bearer_auth(&api_key)
+            .header("HTTP-Referer", "https://github.com/super-ragondin")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Permanent(e.to_string()))?;
+
+        let mut stream = resp.bytes_stream();
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let mut done = false;
+
+        while !done {
+            match stream.next().await {
+                None => break,
+                Some(Err(e)) => return Err(Error::Permanent(e.to_string())),
+                Some(Ok(bytes)) => {
+                    let text = std::str::from_utf8(&bytes).unwrap_or("");
+                    for line in text.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data == "[DONE]" {
+                                done = true;
+                                break;
+                            }
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str() {
+                                    write!(out, "{content}").ok();
+                                    out.flush().ok();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        writeln!(out).ok();
+        Ok::<_, Error>(())
+    })?;
+
+    println!("\nReferences:");
+    for (i, chunk) in chunks.iter().enumerate() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let date = UNIX_EPOCH + Duration::from_secs(chunk.mtime as u64);
+        let dt: chrono::DateTime<chrono::Utc> = date.into();
+        println!(
+            "[{}] {}  ({}, {})",
+            i + 1,
+            chunk.doc_id,
+            chunk.mime_type,
+            dt.format("%Y-%m-%d")
+        );
+        let preview: String = chunk.chunk_text.chars().take(80).collect();
+        println!("    \"{preview}...\"");
+    }
+
     Ok(())
 }
 
