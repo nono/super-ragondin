@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use std::path::Path;
-use anyhow::Result;
-use super_ragondin_sync::model::{NodeType, SyncedRecord};
+use crate::chunker;
 use crate::embedder::Embedder;
 use crate::extractor;
-use crate::chunker;
 use crate::store::{ChunkRecord, RagStore};
+use anyhow::Result;
+use std::collections::HashMap;
+use std::path::Path;
+use super_ragondin_sync::model::{NodeType, SyncedRecord};
 
 /// Reconcile LanceDB index against the current set of synced records.
 /// - Files in synced but not indexed (or with different md5sum) → index.
@@ -23,10 +23,8 @@ pub async fn reconcile(
         .collect();
 
     let indexed = rag_store.list_indexed().await?;
-    let indexed_map: HashMap<String, String> = indexed
-        .into_iter()
-        .map(|d| (d.doc_id, d.md5sum))
-        .collect();
+    let indexed_map: HashMap<String, String> =
+        indexed.into_iter().map(|d| (d.doc_id, d.md5sum)).collect();
 
     for doc_id in indexed_map.keys() {
         if !synced_map.contains_key(doc_id.as_str()) {
@@ -108,7 +106,8 @@ async fn index_file(
                     if mime_type == "application/pdf" {
                         match crate::extractor::pdf::render_first_page_as_base64(file_path) {
                             Ok(b64) => {
-                                let description = embedder.describe_image(&b64, "image/png").await?;
+                                let description =
+                                    embedder.describe_image(&b64, "image/png").await?;
                                 chunker::chunk_text_single(&description)
                             }
                             Err(e) => {
@@ -194,13 +193,19 @@ mod tests {
 
         let file_path = sync_dir.path().join("notes").join("hello.txt");
         std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        std::fs::write(&file_path, "Hello, this is a test note with enough content.").unwrap();
+        std::fs::write(
+            &file_path,
+            "Hello, this is a test note with enough content.",
+        )
+        .unwrap();
 
         let rag_store = RagStore::open(db_dir.path()).await.unwrap();
         let embedder = StubEmbedder;
         let records = vec![synced_record("notes/hello.txt", "abc123")];
 
-        reconcile(&records, sync_dir.path(), &rag_store, &embedder).await.unwrap();
+        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+            .await
+            .unwrap();
 
         let indexed = rag_store.list_indexed().await.unwrap();
         assert_eq!(indexed.len(), 1);
@@ -214,18 +219,23 @@ mod tests {
         let rag_store = RagStore::open(db_dir.path()).await.unwrap();
         let embedder = StubEmbedder;
 
-        rag_store.upsert_chunks(&[crate::store::ChunkRecord {
-            id: "old/file.txt:0".to_string(),
-            doc_id: "old/file.txt".to_string(),
-            mime_type: "text/plain".to_string(),
-            mtime: 0,
-            chunk_index: 0,
-            chunk_text: "old content".to_string(),
-            md5sum: "deadbeef".to_string(),
-            embedding: vec![0.0_f32; 3072],
-        }]).await.unwrap();
+        rag_store
+            .upsert_chunks(&[crate::store::ChunkRecord {
+                id: "old/file.txt:0".to_string(),
+                doc_id: "old/file.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                mtime: 0,
+                chunk_index: 0,
+                chunk_text: "old content".to_string(),
+                md5sum: "deadbeef".to_string(),
+                embedding: vec![0.0_f32; 3072],
+            }])
+            .await
+            .unwrap();
 
-        reconcile(&[], sync_dir.path(), &rag_store, &embedder).await.unwrap();
+        reconcile(&[], sync_dir.path(), &rag_store, &embedder)
+            .await
+            .unwrap();
 
         let indexed = rag_store.list_indexed().await.unwrap();
         assert!(indexed.is_empty());

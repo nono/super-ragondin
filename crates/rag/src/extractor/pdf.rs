@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 const SCANNED_THRESHOLD: usize = 50;
 
@@ -45,8 +45,12 @@ pub fn render_first_page_as_base64(path: &Path) -> Result<String> {
     let img = bitmap.as_image();
     let mut buf = Vec::new();
     use image::ImageEncoder;
-    image::codecs::png::PngEncoder::new(&mut std::io::Cursor::new(&mut buf))
-        .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())?;
+    image::codecs::png::PngEncoder::new(&mut std::io::Cursor::new(&mut buf)).write_image(
+        img.as_bytes(),
+        img.width(),
+        img.height(),
+        img.color().into(),
+    )?;
     Ok(base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         &buf,
@@ -59,9 +63,10 @@ mod tests {
 
     #[test]
     fn test_extract_text_pdf() {
-        let path = std::path::Path::new(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sample.pdf")
-        );
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample.pdf"
+        ));
         if !path.exists() {
             eprintln!("Skipping: sample.pdf not present");
             return;

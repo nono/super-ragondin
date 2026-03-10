@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::embedder::Embedder;
 use crate::store::{RagStore, SearchResult};
+use anyhow::Result;
 
 pub async fn search(
     question: &str,
@@ -37,19 +37,24 @@ mod tests {
     async fn test_search_returns_results() {
         let dir = tempdir().unwrap();
         let store = RagStore::open(dir.path()).await.unwrap();
-        store.upsert_chunks(&[ChunkRecord {
-            id: "notes/a.md:0".to_string(),
-            doc_id: "notes/a.md".to_string(),
-            mime_type: "text/plain".to_string(),
-            mtime: 1_700_000_000,
-            chunk_index: 0,
-            chunk_text: "Remote work policy details here.".to_string(),
-            md5sum: "abc".to_string(),
-            embedding: vec![0.0_f32; 3072],
-        }]).await.unwrap();
+        store
+            .upsert_chunks(&[ChunkRecord {
+                id: "notes/a.md:0".to_string(),
+                doc_id: "notes/a.md".to_string(),
+                mime_type: "text/plain".to_string(),
+                mtime: 1_700_000_000,
+                chunk_index: 0,
+                chunk_text: "Remote work policy details here.".to_string(),
+                md5sum: "abc".to_string(),
+                embedding: vec![0.0_f32; 3072],
+            }])
+            .await
+            .unwrap();
 
         let embedder = StubEmbedder;
-        let results = search("remote work policy", &store, &embedder, 5).await.unwrap();
+        let results = search("remote work policy", &store, &embedder, 5)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].doc_id, "notes/a.md");
     }
