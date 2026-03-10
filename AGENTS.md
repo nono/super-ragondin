@@ -4,6 +4,7 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 
 ## Instructions
 
+- Use `docs/plans` directory for plans
 - Use red-green Test-Driven Development
 - Do not commit automatically
 - Add dependencies with the `cargo add` command - try to avoid directly editing the `Cargo.toml` file to add dependencies.
@@ -58,7 +59,6 @@ Cargo workspace with three crates:
 ## Findings
 
 - Proptest regression files (`*.proptest-regressions`) must be kept and checked into source control — they ensure known failure cases are always re-tested
-
 - reqwest requires `rustls-tls` feature instead of default (native-tls) to avoid OpenSSL system dependency
 - Clippy pedantic warns about "CouchDB" needing backticks in doc comments
 
