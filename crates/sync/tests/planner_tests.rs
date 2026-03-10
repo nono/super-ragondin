@@ -132,6 +132,12 @@ fn test_new_remote_file_generates_download() {
         NodeType::Directory,
     );
     store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(local_id(1, 1), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
 
     let remote_file = make_remote_file(
         remote_id("f1"),
@@ -177,6 +183,12 @@ fn test_new_local_file_generates_upload() {
         NodeType::Directory,
     );
     store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_local.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_remote, None, ""))
+        .unwrap();
 
     let local_file = make_local_file(local_id(1, 100), Some(root_local), "doc.txt", "abc123");
     store.insert_local_node(&local_file).unwrap();
@@ -446,6 +458,12 @@ fn test_new_remote_directory_generates_create_local_dir() {
         NodeType::Directory,
     );
     store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(local_id(1, 1), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
 
     let remote_dir = make_remote_dir(remote_id("d1"), Some(remote_id("root")), "docs");
     store.insert_remote_node(&remote_dir).unwrap();
@@ -482,6 +500,12 @@ fn test_new_local_directory_generates_create_remote_dir() {
         NodeType::Directory,
     );
     store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_local.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_remote, None, ""))
+        .unwrap();
 
     let local_dir = make_local_dir(local_id(1, 200), Some(root_local), "docs");
     store.insert_local_node(&local_dir).unwrap();
@@ -1653,5 +1677,39 @@ fn test_new_remote_and_local_same_dir_same_path_emits_bind() {
         bind.is_some(),
         "Should produce BindExisting for matching dirs, got: {:?}",
         ops
+    );
+}
+
+#[test]
+fn test_both_deleted_generates_delete_synced() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // A synced record exists but neither the local nor remote node is present
+    let synced = make_synced(
+        local_id(1, 100),
+        remote_id("f1"),
+        "file.txt",
+        Some("abc123"),
+        NodeType::File,
+    );
+    store.insert_synced(&synced).unwrap();
+
+    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let ops = planner.plan().unwrap();
+
+    assert_eq!(ops.len(), 1, "Expected exactly one op, got: {:?}", ops);
+    match &ops[0] {
+        PlanResult::Op(SyncOp::DeleteSynced { local_id }) => {
+            assert_eq!(local_id.inode, 100);
+        }
+        other => panic!("Expected DeleteSynced, got {:?}", other),
+    }
+
+    // The synced record should NOT have been deleted by the planner
+    let still_exists = store.get_synced_by_local(&local_id(1, 100)).unwrap();
+    assert!(
+        still_exists.is_some(),
+        "Planner should not modify the store; the synced record should still exist"
     );
 }

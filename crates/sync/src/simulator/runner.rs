@@ -1029,6 +1029,10 @@ impl SimulationRunner {
                 remote_id,
                 ..
             } => self.execute_bind_existing(&local_id, &remote_id),
+            SyncOp::DeleteSynced { local_id } => self
+                .store
+                .delete_synced(&local_id)
+                .map_err(|e| e.to_string()),
         }
     }
 

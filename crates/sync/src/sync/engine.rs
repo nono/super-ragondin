@@ -320,7 +320,8 @@ impl SyncEngine {
             SyncOp::CreateLocalDir { .. }
             | SyncOp::DeleteLocal { .. }
             | SyncOp::MoveLocal { .. }
-            | SyncOp::BindExisting { .. } => self.execute_op(op),
+            | SyncOp::BindExisting { .. }
+            | SyncOp::DeleteSynced { .. } => self.execute_op(op),
 
             SyncOp::DeleteRemote { remote_id, .. } => {
                 client.trash(remote_id).await?;
@@ -450,6 +451,11 @@ impl SyncEngine {
                 remote_id,
                 local_path,
             } => self.execute_bind_existing(local_id, remote_id, local_path),
+
+            SyncOp::DeleteSynced { local_id } => {
+                tracing::debug!(%local_id, "🧹 Deleting orphaned synced record");
+                self.store.delete_synced(local_id)
+            }
 
             // These operations require async/network - not implemented in this phase
             SyncOp::DownloadNew { .. }
