@@ -322,6 +322,8 @@ pub enum SyncOp {
         remote_id: RemoteId,
         local_path: PathBuf,
     },
+    /// Delete an orphaned synced record (both local and remote are gone)
+    DeleteSynced { local_id: LocalFileId },
 }
 
 impl SyncOp {

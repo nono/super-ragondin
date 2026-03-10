@@ -108,12 +108,13 @@ impl<'a> Planner<'a> {
                     results.push(Self::plan_local_deleted(synced, remote_node));
                 }
                 (None, None) => {
-                    // Both sides deleted — clean up the orphaned synced record
                     tracing::debug!(
                         rel_path = &synced.rel_path,
-                        "🧹 Both local and remote deleted, removing orphaned synced record"
+                        "🧹 Both local and remote deleted, planning synced record cleanup"
                     );
-                    self.store.delete_synced(&synced.local_id)?;
+                    results.push(PlanResult::Op(SyncOp::DeleteSynced {
+                        local_id: synced.local_id.clone(),
+                    }));
                 }
                 (Some(_), Some(_)) => {}
             }
@@ -786,7 +787,11 @@ impl<'a> Planner<'a> {
                 | SyncOp::UploadNew { .. }
                 | SyncOp::UploadUpdate { .. },
             ) => 3,
-            PlanResult::Op(SyncOp::DeleteLocal { .. } | SyncOp::DeleteRemote { .. }) => 4,
+            PlanResult::Op(
+                SyncOp::DeleteLocal { .. }
+                | SyncOp::DeleteRemote { .. }
+                | SyncOp::DeleteSynced { .. },
+            ) => 4,
             PlanResult::Conflict(_) => 5,
             PlanResult::NoOp => 6,
         });
