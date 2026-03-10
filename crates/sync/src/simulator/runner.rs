@@ -1029,10 +1029,7 @@ impl SimulationRunner {
                 remote_id,
                 ..
             } => self.execute_bind_existing(&local_id, &remote_id),
-            SyncOp::DeleteSynced { local_id } => self
-                .store
-                .delete_synced(&local_id)
-                .map_err(|e| e.to_string()),
+            SyncOp::DeleteSynced { local_id } => self.execute_delete_synced(&local_id),
         }
     }
 
@@ -1255,6 +1252,16 @@ impl SimulationRunner {
                 .delete_synced(&local_id)
                 .map_err(|e| e.to_string())?;
         }
+        Ok(())
+    }
+
+    fn execute_delete_synced(&mut self, local_id: &LocalFileId) -> Result<(), String> {
+        if let Some(synced) = self.store.get_synced_by_local(local_id).ok().flatten() {
+            self.remote_to_local.remove(&synced.remote_id);
+        }
+        self.store
+            .delete_synced(local_id)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
