@@ -61,6 +61,11 @@ impl Config {
     pub fn store_dir(&self) -> PathBuf {
         self.data_dir.join("store")
     }
+
+    #[must_use]
+    pub fn rag_dir(&self) -> PathBuf {
+        self.data_dir.join("rag")
+    }
 }
 
 #[cfg(test)]

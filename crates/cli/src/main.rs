@@ -231,7 +231,7 @@ fn run_sync_cycle(
     // RAG reconciliation — only if API key is set
     let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
     if !api_key.is_empty() {
-        let db_path = config.sync_dir.join(".rag");
+        let db_path = config.rag_dir();
         let rag_config = RagConfig::from_env_with_db_path(db_path);
         let embedder = OpenRouterEmbedder::new(rag_config.clone());
         let store = super_ragondin_sync::store::TreeStore::open(&config.store_dir())?;
@@ -264,7 +264,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
 
-    let db_path = config.sync_dir.join(".rag");
+    let db_path = config.rag_dir();
     let rag_config = RagConfig::from_env_with_db_path(db_path);
 
     if rag_config.api_key.is_empty() {
