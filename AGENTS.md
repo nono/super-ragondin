@@ -4,6 +4,7 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 
 ## Instructions
 
+- Use `docs/specs` directory for specs
 - Use `docs/plans` directory for plans
 - Use red-green Test-Driven Development
 - Do not commit automatically
