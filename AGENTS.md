@@ -55,13 +55,36 @@ Cargo workspace with three crates:
   - `src/sync.rs` - Sync engine (with `src/sync/` submodules)
   - `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
   - `tests/` - Integration tests
-- `crates/rag/` (`super-ragondin-rag`) - RAG system (skeleton)
+- `crates/rag/` (`super-ragondin-rag`) - RAG indexing and search
+  - `src/config.rs` - `RagConfig` — loads env vars, holds model names + LanceDB path
+  - `src/store.rs` - `RagStore` — LanceDB wrapper: schema, upsert, delete, vector search
+  - `src/embedder.rs` - `Embedder` trait + `OpenRouterEmbedder` — text embeddings + vision descriptions
+  - `src/extractor/` - Text extraction by MIME type (plaintext, PDF, DOCX/ODT/XLSX, images)
+  - `src/chunker.rs` - `chunk_text(text, mime)` — chonkie-based chunking (sentence/recursive/token)
+  - `src/indexer.rs` - `reconcile()` — diffs synced records vs LanceDB, indexes new/changed/deleted files
+  - `src/searcher.rs` - `search()` — embeds question, queries LanceDB, returns ranked chunks
 
 ## Findings
 
 - Proptest regression files (`*.proptest-regressions`) must be kept and checked into source control — they ensure known failure cases are always re-tested
 - reqwest requires `rustls-tls` feature instead of default (native-tls) to avoid OpenSSL system dependency
 - Clippy pedantic warns about "CouchDB" needing backticks in doc comments
+- LanceDB (0.20+) requires `protoc` (Protocol Buffers compiler) at build time — install via `apt install protobuf-compiler` or set `PROTOC=/path/to/protoc`
+- LanceDB 0.20 resolved to arrow 55, not arrow 54 — use `arrow-array = "55"` and `arrow-schema = "55"` in Cargo.toml
+- `infer` crate only detects MIME by magic bytes, not file extension — plain text files (`.txt`, `.md`, `.csv`) need an extension-based fallback in `detect_mime()`
+- chonkie 0.1.1 feature is `tiktoken` (not `tiktoken-rs`)
+- Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
+
+## RAG Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENROUTER_API_KEY` | required | API key for OpenRouter |
+| `OPENROUTER_EMBED_MODEL` | `openai/text-embedding-3-large` | Embedding model |
+| `OPENROUTER_VISION_MODEL` | `google/gemini-2.0-flash` | Vision/image model |
+| `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-3.2-24b-instruct` | Chat completion model |
+
+The LanceDB database is stored at `<sync_dir>/.rag/`.
 
 ## References
 
@@ -72,3 +95,6 @@ Cargo workspace with three crates:
 - [inotify-rs](https://github.com/hannobraun/inotify-rs)
 - [fjall - Log-structured, embeddable key-value storage engine in Rust](https://github.com/fjall-rs/fjall)
 - [proptest - Hypothesis-like property testing for Rust](https://github.com/proptest-rs/proptest)
+- [LanceDB Rust docs](https://docs.rs/lancedb)
+- [chonkie - Rust chunking library](https://docs.rs/chonkie)
+- [OpenRouter API](https://openrouter.ai/docs)
