@@ -178,7 +178,7 @@ All configuration via environment variables:
 | `OPENROUTER_VISION_MODEL` | `google/gemini-2.0-flash` | Vision/image model |
 | `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-3.2-24b-instruct` | Answer generation model |
 
-LanceDB database path defaults to `<sync_dir>/.rag/` alongside the synced files.
+LanceDB database path defaults to `<data_dir>/rag/` (e.g. `~/.local/share/super-ragondin/rag/`), accessed via `config.rag_dir()`.
 
 ## Out of Scope (v1)
 
