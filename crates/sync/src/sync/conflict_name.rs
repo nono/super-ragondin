@@ -71,14 +71,14 @@ fn truncate_to_max(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn conflict_name_for_simple_file() {
         let path = PathBuf::from("/sync/docs/report.txt");
         let name = generate_conflict_name(&path);
         assert!(name.starts_with("report-conflict-"));
-        assert!(name.ends_with(".txt"));
+        assert!(Path::new(&name).extension().is_some_and(|e| e == "txt"));
         assert!(!name.contains(':'));
     }
 
@@ -86,7 +86,7 @@ mod tests {
     fn conflict_name_preserves_extension() {
         let path = PathBuf::from("/sync/photo.jpg");
         let name = generate_conflict_name(&path);
-        assert!(name.ends_with(".jpg"));
+        assert!(Path::new(&name).extension().is_some_and(|e| e == "jpg"));
     }
 
     #[test]
@@ -118,7 +118,7 @@ mod tests {
             "conflict name should fit in 255-byte limit, got {}",
             name.len()
         );
-        assert!(name.ends_with(".txt"));
+        assert!(Path::new(&name).extension().is_some_and(|e| e == "txt"));
     }
 
     #[test]
@@ -132,7 +132,7 @@ mod tests {
     fn conflict_name_handles_multi_dot_extension() {
         let path = PathBuf::from("/sync/archive.tar.gz");
         let name = generate_conflict_name(&path);
-        assert!(name.ends_with(".gz"));
+        assert!(Path::new(&name).extension().is_some_and(|e| e == "gz"));
         assert!(name.starts_with("archive.tar-conflict-"));
     }
 
