@@ -679,7 +679,7 @@ mod tests {
             node_type: NodeType::File,
             md5sum: Some("abc123".to_string()),
             size: Some(1024),
-            mtime: 1706886400,
+            mtime: 1_706_886_400,
         };
 
         let json = serde_json::to_string(&node).unwrap();
@@ -696,7 +696,7 @@ mod tests {
             node_type: NodeType::File,
             md5sum: Some("def456".to_string()),
             size: Some(2048),
-            updated_at: 1706886400,
+            updated_at: 1_706_886_400,
             rev: "2-xyz".to_string(),
         };
 

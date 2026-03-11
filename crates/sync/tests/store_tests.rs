@@ -16,7 +16,7 @@ fn test_remote_node_crud() {
         node_type: NodeType::Directory,
         md5sum: None,
         size: None,
-        updated_at: 1706886400,
+        updated_at: 1_706_886_400,
         rev: "1-abc".to_string(),
     };
 
@@ -41,7 +41,7 @@ fn test_local_node_crud() {
         node_type: NodeType::File,
         md5sum: Some("abc123".to_string()),
         size: Some(1024),
-        mtime: 1706886400,
+        mtime: 1_706_886_400,
     };
 
     store.insert_local_node(&node).unwrap();
@@ -345,7 +345,7 @@ fn test_update_local_node_removes_old_child_key() {
     assert_eq!(children1.len(), 1);
 
     let moved_node = LocalNode {
-        id: child.clone(),
+        id: child,
         parent_id: Some(parent2.clone()),
         name: "renamed.txt".to_string(),
         node_type: NodeType::File,
