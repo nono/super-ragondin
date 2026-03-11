@@ -420,9 +420,12 @@ impl SimulationRunner {
         content: Vec<u8>,
     ) -> Result<(), String> {
         let md5sum = compute_md5(&content);
+        // Resolve stale parent reference: if parent no longer exists in local_fs
+        // (e.g. deleted by resolve_name_collision), fall back to the root dir.
+        let effective_parent = self.resolve_parent(parent_local_id);
         let node = LocalNode {
             id: local_id.clone(),
-            parent_id: parent_local_id,
+            parent_id: effective_parent,
             name,
             node_type: NodeType::File,
             md5sum: Some(md5sum),
@@ -444,9 +447,12 @@ impl SimulationRunner {
         parent_local_id: Option<LocalFileId>,
         name: String,
     ) -> Result<(), String> {
+        // Resolve stale parent reference: if parent no longer exists in local_fs
+        // (e.g. deleted by resolve_name_collision), fall back to the root dir.
+        let effective_parent = self.resolve_parent(parent_local_id);
         let node = LocalNode {
             id: local_id.clone(),
-            parent_id: parent_local_id,
+            parent_id: effective_parent,
             name,
             node_type: NodeType::Directory,
             md5sum: None,
@@ -460,6 +466,20 @@ impl SimulationRunner {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// Resolve a parent `LocalFileId`, falling back to the root dir if the given ID
+    /// no longer exists in `local_fs` (stale reference after a name-collision rename).
+    fn resolve_parent(&self, parent_local_id: Option<LocalFileId>) -> Option<LocalFileId> {
+        match parent_local_id {
+            Some(ref pid) if !self.local_fs.exists(pid) => self
+                .local_fs
+                .list_all()
+                .into_iter()
+                .find(|n| n.parent_id.is_none())
+                .map(|n| n.id.clone()),
+            other => other,
+        }
     }
 
     fn apply_local_delete(&mut self, local_id: &LocalFileId) -> Result<(), String> {
