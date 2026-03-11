@@ -4,8 +4,8 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 
 ## Instructions
 
-- Use `docs/specs` directory for specs
-- Use `docs/plans` directory for plans
+- Use `docs/specs` directory for specs (and NOT `docs/superpowers/specs`)
+- Use `docs/plans` directory for plans (and NOT `docs/superpowers/plans`)
 - Use red-green Test-Driven Development
 - Do not commit automatically
 - Add dependencies with the `cargo add` command - try to avoid directly editing the `Cargo.toml` file to add dependencies

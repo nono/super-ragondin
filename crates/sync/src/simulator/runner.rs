@@ -472,12 +472,17 @@ impl SimulationRunner {
     /// no longer exists in `local_fs` (stale reference after a name-collision rename).
     fn resolve_parent(&self, parent_local_id: Option<LocalFileId>) -> Option<LocalFileId> {
         match parent_local_id {
-            Some(ref pid) if !self.local_fs.exists(pid) => self
-                .local_fs
-                .list_all()
-                .into_iter()
-                .find(|n| n.parent_id.is_none())
-                .map(|n| n.id.clone()),
+            Some(ref pid) if !self.local_fs.exists(pid) => {
+                let mut roots: Vec<_> = self
+                    .local_fs
+                    .list_all()
+                    .into_iter()
+                    .filter(|n| n.parent_id.is_none())
+                    .collect();
+                // Sort by ID to ensure a deterministic choice if multiple roots exist.
+                roots.sort_by_key(|n| n.id.to_bytes());
+                roots.first().map(|n| n.id.clone())
+            }
             other => other,
         }
     }
