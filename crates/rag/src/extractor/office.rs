@@ -5,6 +5,9 @@ use std::io::Read;
 use std::path::Path;
 
 /// Extract text from a .docx file (ZIP containing word/document.xml).
+///
+/// # Errors
+/// Returns error if the file cannot be opened or parsed.
 pub fn extract_docx(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mut zip = zip::ZipArchive::new(file)?;
@@ -15,6 +18,9 @@ pub fn extract_docx(path: &Path) -> Result<String> {
 }
 
 /// Extract text from an .odt file (ZIP containing content.xml).
+///
+/// # Errors
+/// Returns error if the file cannot be opened or parsed.
 pub fn extract_odt(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let mut zip = zip::ZipArchive::new(file)?;
@@ -53,11 +59,14 @@ fn xml_text_content(xml: &str) -> String {
 }
 
 /// Extract text from an .xlsx file using calamine.
+///
+/// # Errors
+/// Returns error if the file cannot be opened or parsed.
 pub fn extract_xlsx(path: &Path) -> Result<String> {
     use calamine::{Data, Reader as CalaReader, open_workbook_auto};
     let mut workbook = open_workbook_auto(path)?;
     let mut lines = Vec::new();
-    for sheet_name in workbook.sheet_names().to_vec() {
+    for sheet_name in workbook.sheet_names() {
         if let Ok(range) = workbook.worksheet_range(&sheet_name) {
             for row in range.rows() {
                 let cells: Vec<String> = row

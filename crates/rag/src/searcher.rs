@@ -2,6 +2,8 @@ use crate::embedder::Embedder;
 use crate::store::{RagStore, SearchResult};
 use anyhow::Result;
 
+/// # Errors
+/// Returns error if the embedding or database search fails.
 pub async fn search(
     question: &str,
     rag_store: &RagStore,
@@ -9,8 +11,11 @@ pub async fn search(
     limit: usize,
 ) -> Result<Vec<SearchResult>> {
     let embeddings = embedder.embed_texts(&[question.to_string()]).await?;
-    let query_vec = embeddings.into_iter().next().unwrap_or_default();
-    rag_store.search(&query_vec, limit).await
+    if let Some(query_vec) = embeddings.into_iter().next() {
+        rag_store.search(&query_vec, limit).await
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]

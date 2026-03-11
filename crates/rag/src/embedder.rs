@@ -18,6 +18,7 @@ pub struct OpenRouterEmbedder {
 }
 
 impl OpenRouterEmbedder {
+    #[must_use]
     pub fn new(config: RagConfig) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -74,6 +75,7 @@ const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 const BATCH_SIZE: usize = 100;
 const MAX_RETRIES: u32 = 3;
 
+#[allow(clippy::future_not_send)]
 async fn post_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -81,14 +83,26 @@ async fn post_with_retry(
     body: &impl Serialize,
 ) -> Result<reqwest::Response> {
     let mut delay_ms = 500u64;
+    let mut last_err: anyhow::Error = anyhow::anyhow!("OpenRouter: exhausted retries");
     for attempt in 0..MAX_RETRIES {
-        let resp = client
+        let resp = match client
             .post(url)
             .bearer_auth(api_key)
             .header("HTTP-Referer", "https://github.com/super-ragondin")
             .json(body)
             .send()
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.into();
+                if attempt + 1 < MAX_RETRIES {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    delay_ms *= 2;
+                }
+                continue;
+            }
+        };
         let status = resp.status();
         if status.is_success() {
             return Ok(resp);
@@ -98,6 +112,7 @@ async fn post_with_retry(
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 delay_ms *= 2;
             }
+            last_err = anyhow::anyhow!("OpenRouter error {status}");
             continue;
         }
         return Err(anyhow::anyhow!(
@@ -105,7 +120,7 @@ async fn post_with_retry(
             resp.text().await?
         ));
     }
-    Err(anyhow::anyhow!("OpenRouter: exhausted retries"))
+    Err(last_err)
 }
 
 #[async_trait]
@@ -183,13 +198,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stub_embed() {
+    async fn test_stub_embed() -> anyhow::Result<()> {
         let e = StubEmbedder;
         let result = e
             .embed_texts(&["hello".to_string(), "world".to_string()])
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].len(), 3072);
+        Ok(())
     }
 }

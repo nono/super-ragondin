@@ -112,26 +112,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_chunk_plaintext_returns_nonempty() {
+    fn test_chunk_plaintext_returns_nonempty() -> Result<()> {
         let text = "This is the first sentence. This is the second sentence. \
                     And here comes a third one that is a bit longer than the others.";
-        let chunks = chunk_text(text, "text/plain").unwrap();
+        let chunks = chunk_text(text, "text/plain")?;
         assert!(!chunks.is_empty());
         for c in &chunks {
             assert!(!c.is_empty());
         }
+        Ok(())
     }
 
     #[test]
-    fn test_chunk_spreadsheet_uses_token_chunker() {
+    fn test_chunk_spreadsheet_uses_token_chunker() -> Result<()> {
         let rows: Vec<String> = (0..20).map(|i| format!("row{i}\tvalue{i}")).collect();
         let text = rows.join("\n");
         let chunks = chunk_text(
             &text,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        .unwrap();
+        )?;
         assert!(!chunks.is_empty());
+        Ok(())
     }
 
     #[test]

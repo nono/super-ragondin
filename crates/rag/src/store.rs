@@ -66,6 +66,11 @@ pub struct RagStore {
 }
 
 impl RagStore {
+    /// # Errors
+    /// Returns error if the database connection or table operation fails.
+    ///
+    /// # Panics
+    /// Panics if `db_path` contains non-UTF-8 characters.
     pub async fn open(db_path: &Path) -> Result<Self> {
         let db: Connection = lancedb::connect(db_path.to_str().unwrap())
             .execute()
@@ -83,7 +88,11 @@ impl RagStore {
     /// Insert chunks into the store.
     ///
     /// **Callers must call [`delete_doc`] before upserting** to avoid duplicate chunks.
-    /// This is an append-only operation; LanceDB does not deduplicate on insert.
+    /// This is an append-only operation; `LanceDB` does not deduplicate on insert.
+    ///
+    /// # Errors
+    /// Returns error if the Arrow data construction or database insert fails.
+    #[allow(clippy::similar_names)]
     pub async fn upsert_chunks(&self, chunks: &[ChunkRecord]) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
@@ -129,16 +138,24 @@ impl RagStore {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns error if the database delete operation fails.
     pub async fn delete_doc(&self, doc_id: &str) -> Result<()> {
         let safe = doc_id.replace('\'', "\\'");
         self.table.delete(&format!("doc_id = '{safe}'")).await?;
         Ok(())
     }
 
-    /// Return one entry per unique doc_id.
+    /// Return one entry per unique `doc_id`.
     ///
-    /// NOTE: All chunks for a given doc_id share the same md5sum (invariant maintained by caller
+    /// NOTE: All chunks for a given `doc_id` share the same md5sum (invariant maintained by caller
     /// who always deletes before upserting). This deduplication relies on that invariant.
+    ///
+    /// # Errors
+    /// Returns error if the database query fails.
+    ///
+    /// # Panics
+    /// Panics if the expected columns are not present in the result batch.
     pub async fn list_indexed(&self) -> Result<Vec<IndexedDoc>> {
         let mut stream: SendableRecordBatchStream = self
             .table
@@ -178,6 +195,12 @@ impl RagStore {
         Ok(result)
     }
 
+    /// # Errors
+    /// Returns error if the vector search query fails.
+    ///
+    /// # Panics
+    /// Panics if the expected columns are not present in the result batch.
+    #[allow(clippy::similar_names)]
     pub async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
         let mut stream: SendableRecordBatchStream = self
             .table

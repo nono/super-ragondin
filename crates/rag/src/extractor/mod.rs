@@ -8,6 +8,9 @@ use std::path::Path;
 
 /// Extract text content from `path`. Returns `None` if the MIME type is unsupported.
 /// Returns `Ok(Some(""))` for PDFs with no extractable text (scanned) — indexer handles fallback.
+///
+/// # Errors
+/// Returns error if the file cannot be read or parsed.
 pub fn extract(path: &Path, mime_type: &str) -> Result<Option<String>> {
     match mime_type {
         "text/plain" | "text/markdown" | "text/csv" | "text/x-markdown" => {
