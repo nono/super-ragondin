@@ -1,5 +1,5 @@
 use crate::embedder::Embedder;
-use crate::store::{RagStore, SearchResult};
+use crate::store::{MetadataFilter, RagStore, SearchResult};
 use anyhow::Result;
 
 /// # Errors
@@ -9,10 +9,11 @@ pub async fn search(
     rag_store: &RagStore,
     embedder: &dyn Embedder,
     limit: usize,
+    filter: Option<&MetadataFilter>,
 ) -> Result<Vec<SearchResult>> {
     let embeddings = embedder.embed_texts(&[question.to_string()]).await?;
     if let Some(query_vec) = embeddings.into_iter().next() {
-        rag_store.search(&query_vec, limit).await
+        rag_store.search(&query_vec, limit, filter).await
     } else {
         Ok(Vec::new())
     }
@@ -57,7 +58,7 @@ mod tests {
             .unwrap();
 
         let embedder = StubEmbedder;
-        let results = search("remote work policy", &store, &embedder, 5)
+        let results = search("remote work policy", &store, &embedder, 5, None)
             .await
             .unwrap();
         assert_eq!(results.len(), 1);

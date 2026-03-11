@@ -247,13 +247,9 @@ fn run_sync_cycle(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
 fn cmd_ask(args: &[String]) -> Result<()> {
-    use std::io::Write;
+    use super_ragondin_codemode::engine::CodeModeEngine;
     use super_ragondin_rag::config::RagConfig;
-    use super_ragondin_rag::embedder::OpenRouterEmbedder;
-    use super_ragondin_rag::searcher::search;
-    use super_ragondin_rag::store::RagStore;
 
     if args.is_empty() {
         println!("Usage: super-ragondin ask <question>");
@@ -273,107 +269,16 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         ));
     }
 
-    let embedder = OpenRouterEmbedder::new(rag_config.clone());
     let rt = tokio::runtime::Runtime::new()?;
-
-    let chunks = rt
-        .block_on(async {
-            let rag_store = RagStore::open(&rag_config.db_path).await?;
-            search(&question, &rag_store, &embedder, 5).await
-        })
-        .map_err(|e| Error::Permanent(format!("{e:#}")))?;
-
-    if chunks.is_empty() {
-        println!("No relevant documents found.");
-        return Ok(());
-    }
-
-    let context: String = chunks
-        .iter()
-        .enumerate()
-        .map(|(i, c)| format!("[{}] {}\n{}", i + 1, c.doc_id, c.chunk_text))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    let system_prompt = "You are a helpful assistant. Answer the user's question using only the provided document excerpts. Be concise and accurate. Respond in the same language as the question.";
-    let user_prompt = format!("Documents:\n{context}\n\nQuestion: {question}");
-
-    let chat_model = rag_config.chat_model.clone();
-    let api_key = rag_config.api_key;
-    let client = reqwest::Client::new();
-
-    let body = serde_json::json!({
-        "model": chat_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "stream": true
-    });
-
     rt.block_on(async {
-        use futures::StreamExt;
-
-        let resp = client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .bearer_auth(&api_key)
-            .header("HTTP-Referer", "https://github.com/super-ragondin")
-            .json(&body)
-            .send()
+        let engine = CodeModeEngine::new(rag_config)
             .await
-            .map_err(|e| Error::Permanent(e.to_string()))?;
-
-        let mut stream = resp.bytes_stream();
-        let stdout = std::io::stdout();
-        let mut out = stdout.lock();
-        let mut done = false;
-        let mut buf = Vec::<u8>::new();
-
-        while !done {
-            match stream.next().await {
-                None => break,
-                Some(Err(e)) => return Err(Error::Permanent(e.to_string())),
-                Some(Ok(bytes)) => {
-                    buf.extend_from_slice(&bytes);
-                    while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                        let line_bytes = buf.drain(..=pos).collect::<Vec<_>>();
-                        let line = String::from_utf8_lossy(&line_bytes);
-                        let line = line.trim();
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            if data == "[DONE]" {
-                                done = true;
-                                break;
-                            }
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
-                                && let Some(content) = v["choices"][0]["delta"]["content"].as_str()
-                            {
-                                write!(out, "{content}").ok();
-                                out.flush().ok();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        writeln!(out).ok();
-        Ok::<_, Error>(())
+            .map_err(|e| Error::Permanent(format!("{e:#}")))?;
+        engine
+            .ask(&question)
+            .await
+            .map_err(|e| Error::Permanent(format!("{e:#}")))
     })?;
-
-    println!("\nReferences:");
-    for (i, chunk) in chunks.iter().enumerate() {
-        use std::time::{Duration, UNIX_EPOCH};
-        let date = UNIX_EPOCH + Duration::from_secs(chunk.mtime.cast_unsigned());
-        let dt: chrono::DateTime<chrono::Utc> = date.into();
-        println!(
-            "[{}] {}  ({}, {})",
-            i + 1,
-            chunk.doc_id,
-            chunk.mime_type,
-            dt.format("%Y-%m-%d")
-        );
-        let preview: String = chunk.chunk_text.chars().take(80).collect();
-        println!("    \"{preview}...\"");
-    }
 
     Ok(())
 }

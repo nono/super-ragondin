@@ -1,0 +1,222 @@
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use boa_engine::{Context, JsError, JsValue, Source, js_string};
+use serde_json::Value as SerdeValue;
+use super_ragondin_rag::{config::RagConfig, embedder::OpenRouterEmbedder, store::RagStore};
+
+use crate::tools;
+
+/// Shared Rust state available to all JS native functions during a single execution.
+/// Set via thread-local before each Boa evaluation; cleared after.
+///
+/// All tool functions (`search`, `listFiles`, etc.) access this to reach the store,
+/// embedder, and Tokio runtime handle.
+#[allow(dead_code)]
+pub struct SandboxContext {
+    pub store: Arc<RagStore>,
+    pub embedder: Arc<OpenRouterEmbedder>,
+    pub config: RagConfig,
+    pub handle: tokio::runtime::Handle,
+}
+
+thread_local! {
+    /// Active sandbox context for the current Boa execution.
+    /// None outside of a `Sandbox::execute()` call.
+    #[allow(dead_code)]
+    pub static SANDBOX_CTX: RefCell<Option<SandboxContext>> = const { RefCell::new(None) };
+}
+
+/// Convert a `JsValue` to a `serde_json::Value` via `JSON.stringify` inside Boa.
+///
+/// Uses a temporary global variable (`__sr_tmp__`) as an intermediary.
+/// Returns `Value::Null` on failure.
+#[allow(dead_code)]
+pub fn jsvalue_to_serde(val: JsValue, ctx: &mut Context) -> SerdeValue {
+    let _ = ctx
+        .global_object()
+        .set(js_string!("__sr_tmp__"), val, false, ctx);
+    match ctx.eval(Source::from_bytes(b"JSON.stringify(__sr_tmp__)")) {
+        Ok(JsValue::String(s)) => {
+            serde_json::from_str(&s.to_std_string_escaped()).unwrap_or(SerdeValue::Null)
+        }
+        _ => SerdeValue::Null,
+    }
+}
+
+/// Convert a `serde_json::Value` to a `JsValue` by evaluating the JSON as JS code.
+///
+/// Uses the `(JSON)` eval trick, which is safe for any valid JSON value.
+#[allow(dead_code)]
+pub fn serde_to_jsvalue(val: &SerdeValue, ctx: &mut Context) -> Result<JsValue, JsError> {
+    let json_str = serde_json::to_string(val).unwrap_or_else(|_| "null".to_string());
+    ctx.eval(Source::from_bytes(format!("({json_str})").as_bytes()))
+}
+
+/// Execution wrapper: creates a fresh Boa context per call.
+///
+/// Must be called from a `spawn_blocking` thread — tool functions call
+/// `Handle::current().block_on(...)` internally.
+#[allow(dead_code)]
+pub struct Sandbox {
+    store: Arc<RagStore>,
+    config: RagConfig,
+}
+
+#[allow(dead_code)]
+impl Sandbox {
+    /// Create a new sandbox with the given store and config.
+    #[must_use]
+    pub const fn new(store: Arc<RagStore>, config: RagConfig) -> Self {
+        Self { store, config }
+    }
+
+    /// Execute JS code in a fresh Boa context.
+    ///
+    /// Returns the JSON-serialized value of the last expression.
+    ///
+    /// # Errors
+    /// Returns `Err(String)` with a human-readable message on JS or Rust error.
+    pub fn execute(&self, code: &str) -> Result<String, String> {
+        let handle = tokio::runtime::Handle::current();
+        let embedder = Arc::new(OpenRouterEmbedder::new(self.config.clone()));
+
+        SANDBOX_CTX.with(|cell| {
+            *cell.borrow_mut() = Some(SandboxContext {
+                store: Arc::clone(&self.store),
+                embedder,
+                config: self.config.clone(),
+                handle,
+            });
+        });
+
+        let result = self.run_boa(code);
+
+        SANDBOX_CTX.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+
+        result
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_boa(&self, code: &str) -> Result<String, String> {
+        let mut ctx = Context::default();
+
+        tools::search::register(&mut ctx).map_err(|e| format!("JS error: register search: {e}"))?;
+        tools::list_files::register(&mut ctx)
+            .map_err(|e| format!("JS error: register listFiles: {e}"))?;
+        tools::get_document::register(&mut ctx)
+            .map_err(|e| format!("JS error: register getDocument: {e}"))?;
+        tools::sub_agent::register(&mut ctx)
+            .map_err(|e| format!("JS error: register subAgent: {e}"))?;
+
+        let val = ctx
+            .eval(Source::from_bytes(code.as_bytes()))
+            .map_err(|e| format!("JS error: {e}"))?;
+
+        let serde_val = jsvalue_to_serde(val, &mut ctx);
+        serde_json::to_string(&serde_val).map_err(|e| format!("JS error: serialize result: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boa_engine::Context;
+    use std::sync::Arc;
+    use super_ragondin_rag::{config::RagConfig, store::RagStore};
+    use tempfile::tempdir;
+
+    async fn make_sandbox() -> Sandbox {
+        let dir = tempdir().unwrap();
+        let store = Arc::new(RagStore::open(dir.path()).await.unwrap());
+        let config = RagConfig::from_env_with_db_path(dir.path().to_path_buf());
+        Sandbox::new(store, config)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_arithmetic() {
+        let sandbox = make_sandbox().await;
+        let result = sandbox.execute("1 + 2").unwrap();
+        assert_eq!(result, "3");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_returns_last_expression() {
+        let sandbox = make_sandbox().await;
+        let result = sandbox.execute("const x = 10; x * 2").unwrap();
+        assert_eq!(result, "20");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_js_error_returns_err_string() {
+        let sandbox = make_sandbox().await;
+        let result = sandbox.execute("undeclaredFunction()");
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("JS error"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_execute_object_result() {
+        let sandbox = make_sandbox().await;
+        let result = sandbox.execute("({ a: 1, b: 'hello' })").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["a"], 1);
+        assert_eq!(parsed["b"], "hello");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_fresh_context_per_call() {
+        let sandbox = make_sandbox().await;
+        // Set a variable in one call
+        sandbox.execute("var x = 42;").ok();
+        // It must NOT be visible in the next call
+        let result = sandbox.execute("typeof x === 'undefined'").unwrap();
+        assert_eq!(result, "true");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_sandbox_globals_registered() {
+        let sandbox = make_sandbox().await;
+        for fn_name in &["search", "listFiles", "getDocument", "subAgent"] {
+            let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
+            assert_eq!(
+                result,
+                format!("\"function\""),
+                "{fn_name} should be a function"
+            );
+        }
+    }
+
+    #[test]
+    fn test_jsvalue_to_serde_string() {
+        let mut ctx = Context::default();
+        let val = ctx
+            .eval(boa_engine::Source::from_bytes(b"'hello'"))
+            .unwrap();
+        let serde = jsvalue_to_serde(val, &mut ctx);
+        assert_eq!(serde, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_jsvalue_to_serde_array() {
+        let mut ctx = Context::default();
+        let val = ctx
+            .eval(boa_engine::Source::from_bytes(b"[1, 2, 3]"))
+            .unwrap();
+        let serde = jsvalue_to_serde(val, &mut ctx);
+        assert_eq!(serde, serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn test_serde_to_jsvalue_roundtrip() {
+        let mut ctx = Context::default();
+        let original =
+            serde_json::json!({ "doc_id": "notes/a.md", "mtime": "2024-01-01T00:00:00Z" });
+        let js = serde_to_jsvalue(&original, &mut ctx).unwrap();
+        let back = jsvalue_to_serde(js, &mut ctx);
+        assert_eq!(original, back);
+    }
+}
