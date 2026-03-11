@@ -1,0 +1,31 @@
+[package]
+name = "super-ragondin-codemode"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+super-ragondin-rag = { path = "../rag" }
+
+# JS engine — 0.20+ required for register_global_callable API
+boa_engine = "0.20"
+
+# HTTP client — no stream feature needed (all LLM calls are non-streaming in this crate)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+tracing = "0.1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

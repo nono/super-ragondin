@@ -58,12 +58,20 @@ Cargo workspace with three crates:
   - `tests/` - Integration tests
 - `crates/rag/` (`super-ragondin-rag`) - RAG indexing and search
   - `src/config.rs` - `RagConfig` — loads env vars, holds model names + LanceDB path
-  - `src/store.rs` - `RagStore` — LanceDB wrapper: schema, upsert, delete, vector search
+  - `src/store.rs` - `RagStore` — LanceDB wrapper: schema, upsert, delete, vector search; `MetadataFilter`, `DocInfo`, `ChunkInfo`, `DocSort`
   - `src/embedder.rs` - `Embedder` trait + `OpenRouterEmbedder` — text embeddings + vision descriptions
   - `src/extractor/` - Text extraction by MIME type (plaintext, PDF, DOCX/ODT/XLSX, images)
   - `src/chunker.rs` - `chunk_text(text, mime)` — chonkie-based chunking (sentence/recursive/token)
   - `src/indexer.rs` - `reconcile()` — diffs synced records vs LanceDB, indexes new/changed/deleted files
   - `src/searcher.rs` - `search()` — embeds question, queries LanceDB, returns ranked chunks
+- `crates/codemode/` (`super-ragondin-codemode`) - JS sandbox + LLM tool-use loop for `ask` command
+  - `src/prompt.rs` - `system_prompt()` — system prompt explaining JS API + examples
+  - `src/sandbox.rs` - `SandboxContext` thread-local, `jsvalue_to_serde`/`serde_to_jsvalue` helpers, `Sandbox` struct (fresh Boa context per call)
+  - `src/tools/search.rs` - `search(query, options?)` JS global — vector search via embedder + RagStore
+  - `src/tools/list_files.rs` - `listFiles(options?)` JS global — metadata-based file discovery
+  - `src/tools/get_document.rs` - `getDocument(docId)` JS global — all chunks for a document
+  - `src/tools/sub_agent.rs` - `subAgent(systemPrompt, userPrompt)` JS global — cheap sub-LLM call
+  - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
 
 ## Findings
 

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -39,6 +39,77 @@ pub struct SearchResult {
     pub mime_type: String,
     pub mtime: i64,
     pub chunk_text: String,
+}
+
+pub enum DocSort {
+    Recent,
+    Oldest,
+}
+
+/// One entry per document returned by `list_docs()`.
+#[derive(Debug, Clone)]
+pub struct DocInfo {
+    pub doc_id: String,
+    pub mime_type: String,
+    pub mtime: i64,
+}
+
+/// One chunk entry returned by `get_chunks()`.
+#[derive(Debug, Clone)]
+pub struct ChunkInfo {
+    pub chunk_index: u32,
+    pub chunk_text: String,
+}
+
+/// Filter for metadata-based queries. All fields are optional.
+/// Constructed in Rust from validated inputs — never from raw user/JS strings.
+pub struct MetadataFilter {
+    pub mime_type: Option<String>,
+    /// Matched as `doc_id LIKE 'prefix/%'`. Trailing slash added if absent.
+    pub path_prefix: Option<String>,
+    /// Unix timestamp (seconds). Matched as `mtime > after`.
+    pub after: Option<i64>,
+    /// Unix timestamp (seconds). Matched as `mtime < before`.
+    pub before: Option<i64>,
+}
+
+impl MetadataFilter {
+    /// Build a `LanceDB` SQL WHERE clause from this filter.
+    /// Returns `None` if no fields are set.
+    #[must_use]
+    pub fn to_where_clause(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+
+        if let Some(mime) = &self.mime_type {
+            let safe = mime.replace('\'', "\\'");
+            parts.push(format!("mime_type = '{safe}'"));
+        }
+        if let Some(prefix) = &self.path_prefix {
+            let prefix_with_slash = if prefix.ends_with('/') {
+                prefix.clone()
+            } else {
+                format!("{prefix}/")
+            };
+            // Escape SQL special chars and LIKE wildcard chars
+            let safe = prefix_with_slash
+                .replace('\'', "\\'")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            parts.push(format!("doc_id LIKE '{safe}%' ESCAPE '\\'"));
+        }
+        if let Some(after) = self.after {
+            parts.push(format!("mtime > {after}"));
+        }
+        if let Some(before) = self.before {
+            parts.push(format!("mtime < {before}"));
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" AND "))
+        }
+    }
 }
 
 fn chunks_schema() -> Arc<Schema> {
@@ -201,13 +272,19 @@ impl RagStore {
     /// # Panics
     /// Panics if the expected columns are not present in the result batch.
     #[allow(clippy::similar_names)]
-    pub async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
-        let mut stream: SendableRecordBatchStream = self
-            .table
-            .vector_search(query_embedding)?
-            .limit(limit)
-            .execute()
-            .await?;
+    pub async fn search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        filter: Option<&MetadataFilter>,
+    ) -> Result<Vec<SearchResult>> {
+        let mut query = self.table.vector_search(query_embedding)?.limit(limit);
+        if let Some(f) = filter
+            && let Some(clause) = f.to_where_clause()
+        {
+            query = query.only_if(clause);
+        }
+        let mut stream: SendableRecordBatchStream = query.execute().await?;
 
         let mut results = Vec::new();
         while let Some(batch) = stream.try_next().await? {
@@ -246,6 +323,128 @@ impl RagStore {
         }
         Ok(results)
     }
+
+    /// Return one entry per unique `doc_id`, sorted by `mtime`.
+    ///
+    /// De-duplication is client-side (keeps the row with the highest mtime per `doc_id`).
+    /// `limit` is applied after de-duplication.
+    ///
+    /// # Errors
+    /// Returns error if the database query fails.
+    ///
+    /// # Panics
+    /// Panics if expected columns are absent from the result batch.
+    #[allow(clippy::similar_names)]
+    pub async fn list_docs(
+        &self,
+        filter: Option<&MetadataFilter>,
+        sort: DocSort,
+        limit: Option<usize>,
+    ) -> Result<Vec<DocInfo>> {
+        let mut q = self.table.query().select(Select::Columns(vec![
+            "doc_id".to_string(),
+            "mime_type".to_string(),
+            "mtime".to_string(),
+        ]));
+        if let Some(f) = filter
+            && let Some(clause) = f.to_where_clause()
+        {
+            q = q.only_if(clause);
+        }
+        let mut stream: SendableRecordBatchStream = q.execute().await?;
+
+        let mut map: HashMap<String, DocInfo> = HashMap::new();
+        while let Some(batch) = stream.try_next().await? {
+            let doc_ids = batch
+                .column_by_name("doc_id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let mimes = batch
+                .column_by_name("mime_type")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let mtimes = batch
+                .column_by_name("mtime")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                let doc_id = doc_ids.value(i).to_string();
+                let mtime = mtimes.value(i);
+                map.entry(doc_id.clone())
+                    .and_modify(|e| {
+                        if mtime > e.mtime {
+                            e.mtime = mtime;
+                        }
+                    })
+                    .or_insert_with(|| DocInfo {
+                        doc_id,
+                        mime_type: mimes.value(i).to_string(),
+                        mtime,
+                    });
+            }
+        }
+
+        let mut docs: Vec<DocInfo> = map.into_values().collect();
+        docs.sort_by(|a, b| match sort {
+            DocSort::Recent => b.mtime.cmp(&a.mtime),
+            DocSort::Oldest => a.mtime.cmp(&b.mtime),
+        });
+        if let Some(n) = limit {
+            docs.truncate(n);
+        }
+        Ok(docs)
+    }
+
+    /// Return all chunks for a document, ordered by `chunk_index`.
+    ///
+    /// # Errors
+    /// Returns error if the database query fails.
+    ///
+    /// # Panics
+    /// Panics if expected columns are absent from the result batch.
+    pub async fn get_chunks(&self, doc_id: &str) -> Result<Vec<ChunkInfo>> {
+        let safe = doc_id.replace('\'', "\\'");
+        let mut stream: SendableRecordBatchStream = self
+            .table
+            .query()
+            .only_if(format!("doc_id = '{safe}'"))
+            .select(Select::Columns(vec![
+                "chunk_index".to_string(),
+                "chunk_text".to_string(),
+            ]))
+            .execute()
+            .await?;
+
+        let mut chunks = Vec::new();
+        while let Some(batch) = stream.try_next().await? {
+            let indices = batch
+                .column_by_name("chunk_index")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap();
+            let texts = batch
+                .column_by_name("chunk_text")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                chunks.push(ChunkInfo {
+                    chunk_index: indices.value(i),
+                    chunk_text: texts.value(i).to_string(),
+                });
+            }
+        }
+        chunks.sort_by_key(|c| c.chunk_index);
+        Ok(chunks)
+    }
 }
 
 #[cfg(test)]
@@ -277,6 +476,149 @@ mod tests {
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].doc_id, "notes/test.md");
         assert_eq!(indexed[0].md5sum, "abc123");
+    }
+
+    #[test]
+    fn test_metadata_filter_where_clause() {
+        let filter = MetadataFilter {
+            mime_type: Some("application/pdf".to_string()),
+            path_prefix: Some("work".to_string()), // no trailing slash
+            after: Some(1_700_000_000),
+            before: None,
+        };
+        let clause = filter.to_where_clause().unwrap();
+        assert!(clause.contains("mime_type = 'application/pdf'"));
+        assert!(clause.contains("doc_id LIKE 'work/%' ESCAPE '\\'")); // trailing slash added
+        assert!(clause.contains("mtime > 1700000000"));
+
+        let empty = MetadataFilter {
+            mime_type: None,
+            path_prefix: None,
+            after: None,
+            before: None,
+        };
+        assert!(empty.to_where_clause().is_none());
+    }
+
+    #[test]
+    fn test_metadata_filter_escapes_single_quotes() {
+        let filter = MetadataFilter {
+            mime_type: Some("text/plain".to_string()),
+            path_prefix: Some("O'Brien/notes".to_string()),
+            after: None,
+            before: None,
+        };
+        let clause = filter.to_where_clause().unwrap();
+        // single quotes in path_prefix must be escaped
+        assert!(clause.contains("O\\'Brien"));
+    }
+
+    #[test]
+    fn test_metadata_filter_escapes_like_wildcards() {
+        let filter = MetadataFilter {
+            mime_type: None,
+            path_prefix: Some("my_notes%data".to_string()),
+            after: None,
+            before: None,
+        };
+        let clause = filter.to_where_clause().unwrap();
+        assert!(clause.contains("\\_"));
+        assert!(clause.contains("\\%"));
+        assert!(clause.contains("ESCAPE"));
+    }
+
+    #[tokio::test]
+    async fn test_list_docs_dedup_and_sort() {
+        let dir = tempdir().unwrap();
+        let store = RagStore::open(dir.path()).await.unwrap();
+
+        // Two chunks for doc a (mtime 200), one for doc b (mtime 100)
+        let mut c0 = make_chunk("notes/a.md", 0, "chunk0");
+        c0.mtime = 200;
+        let mut c1 = make_chunk("notes/a.md", 1, "chunk1");
+        c1.mtime = 200;
+        let mut c2 = make_chunk("work/b.md", 0, "chunk2");
+        c2.mtime = 100;
+        store.upsert_chunks(&[c0, c1, c2]).await.unwrap();
+
+        // Recent first — should be deduplicated to 2 docs
+        let docs = store.list_docs(None, DocSort::Recent, None).await.unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0].doc_id, "notes/a.md"); // higher mtime first
+        assert_eq!(docs[1].doc_id, "work/b.md");
+
+        // Filter by path prefix
+        let filtered = store
+            .list_docs(
+                Some(&MetadataFilter {
+                    path_prefix: Some("work".to_string()),
+                    mime_type: None,
+                    after: None,
+                    before: None,
+                }),
+                DocSort::Recent,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].doc_id, "work/b.md");
+
+        // Limit
+        let limited = store
+            .list_docs(None, DocSort::Recent, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(limited.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_chunks_ordered() {
+        let dir = tempdir().unwrap();
+        let store = RagStore::open(dir.path()).await.unwrap();
+        store
+            .upsert_chunks(&[
+                make_chunk("notes/a.md", 1, "second"),
+                make_chunk("notes/a.md", 0, "first"),
+            ])
+            .await
+            .unwrap();
+
+        let chunks = store.get_chunks("notes/a.md").await.unwrap();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].chunk_text, "first");
+        assert_eq!(chunks[1].chunk_index, 1);
+        assert_eq!(chunks[1].chunk_text, "second");
+
+        let empty = store.get_chunks("nonexistent.md").await.unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_with_mime_filter() {
+        let dir = tempdir().unwrap();
+        let store = RagStore::open(dir.path()).await.unwrap();
+
+        let mut pdf_chunk = make_chunk("docs/report.pdf", 0, "quarterly results");
+        pdf_chunk.mime_type = "application/pdf".to_string();
+        let txt_chunk = make_chunk("notes/a.md", 0, "quarterly results");
+        // txt_chunk mime_type defaults to "text/plain" from make_chunk
+
+        store.upsert_chunks(&[pdf_chunk, txt_chunk]).await.unwrap();
+
+        let filter = MetadataFilter {
+            mime_type: Some("application/pdf".to_string()),
+            path_prefix: None,
+            after: None,
+            before: None,
+        };
+        let results = store
+            .search(&vec![0.0_f32; 3072], 5, Some(&filter))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].doc_id, "docs/report.pdf");
     }
 
     #[tokio::test]

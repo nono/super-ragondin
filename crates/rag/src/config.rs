@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
+pub const OPENROUTER_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+pub const OPENROUTER_REFERER: &str = "https://github.com/super-ragondin";
+
 #[derive(Clone)]
 pub struct RagConfig {
     pub api_key: String,
     pub embed_model: String,
     pub vision_model: String,
     pub chat_model: String,
+    pub subagent_model: String,
     pub db_path: PathBuf,
 }
 
@@ -16,6 +20,7 @@ impl std::fmt::Debug for RagConfig {
             .field("embed_model", &self.embed_model)
             .field("vision_model", &self.vision_model)
             .field("chat_model", &self.chat_model)
+            .field("subagent_model", &self.subagent_model)
             .field("db_path", &self.db_path)
             .finish()
     }
@@ -32,6 +37,8 @@ impl RagConfig {
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             chat_model: std::env::var("OPENROUTER_CHAT_MODEL")
                 .unwrap_or_else(|_| "mistralai/mistral-small-3.2-24b-instruct".to_string()),
+            subagent_model: std::env::var("OPENROUTER_SUBAGENT_MODEL")
+                .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             db_path,
         }
     }
@@ -49,6 +56,7 @@ mod tests {
                 "OPENROUTER_EMBED_MODEL",
                 "OPENROUTER_VISION_MODEL",
                 "OPENROUTER_CHAT_MODEL",
+                "OPENROUTER_SUBAGENT_MODEL",
             ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
@@ -58,6 +66,7 @@ mod tests {
                     config.chat_model,
                     "mistralai/mistral-small-3.2-24b-instruct"
                 );
+                assert_eq!(config.subagent_model, "google/gemini-2.5-flash");
                 assert!(config.api_key.is_empty());
             },
         );
@@ -74,6 +83,20 @@ mod tests {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
                 assert_eq!(config.api_key, "test-key");
                 assert_eq!(config.embed_model, "custom/model");
+            },
+        );
+    }
+
+    #[test]
+    fn test_subagent_model_from_env() {
+        temp_env::with_vars(
+            [(
+                "OPENROUTER_SUBAGENT_MODEL",
+                Some("anthropic/claude-haiku-4-5"),
+            )],
+            || {
+                let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
+                assert_eq!(config.subagent_model, "anthropic/claude-haiku-4-5");
             },
         );
     }
