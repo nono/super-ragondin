@@ -13,7 +13,7 @@ Add a RAG (Retrieval-Augmented Generation) system to Super Ragondin. Synced file
 |---|---|
 | Vector DB | LanceDB (embedded, Rust-native, single directory on disk) |
 | Embeddings | OpenRouter → `openai/text-embedding-3-large` (3072d, multilingual) |
-| Vision / scanned PDF | OpenRouter → `google/gemini-2.0-flash` (image → text description) |
+| Vision / scanned PDF | OpenRouter → `google/gemini-2.5-flash` (image → text description) |
 | Chat LLM | OpenRouter → `mistralai/mistral-small-3.2-24b-instruct` |
 | Chunking | `chonkie` crate with tiktoken cl100k_base tokenizer |
 | MIME detection | `infer` crate (magic bytes) |
@@ -131,7 +131,7 @@ All OpenRouter calls go through `embedder.rs`.
 - Returns: `Vec<[f32; 3072]>`
 
 **Vision descriptions:**
-- Model: `google/gemini-2.0-flash`
+- Model: `google/gemini-2.5-flash`
 - Image sent as base64 data URL in a chat message
 - Prompt: `"Describe the content of this image in detail, in the language of the text it contains if any. Focus on information that would be useful for search and retrieval."`
 - Returns: description string, then chunked as plain text
@@ -175,7 +175,7 @@ All configuration via environment variables:
 |---|---|---|
 | `OPENROUTER_API_KEY` | required | API key |
 | `OPENROUTER_EMBED_MODEL` | `openai/text-embedding-3-large` | Embedding model |
-| `OPENROUTER_VISION_MODEL` | `google/gemini-2.0-flash` | Vision/image model |
+| `OPENROUTER_VISION_MODEL` | `google/gemini-2.5-flash` | Vision/image model |
 | `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-3.2-24b-instruct` | Answer generation model |
 
 LanceDB database path defaults to `<data_dir>/rag/` (e.g. `~/.local/share/super-ragondin/rag/`), accessed via `config.rag_dir()`.

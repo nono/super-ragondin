@@ -29,7 +29,7 @@ impl RagConfig {
             embed_model: std::env::var("OPENROUTER_EMBED_MODEL")
                 .unwrap_or_else(|_| "openai/text-embedding-3-large".to_string()),
             vision_model: std::env::var("OPENROUTER_VISION_MODEL")
-                .unwrap_or_else(|_| "google/gemini-2.0-flash".to_string()),
+                .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             chat_model: std::env::var("OPENROUTER_CHAT_MODEL")
                 .unwrap_or_else(|_| "mistralai/mistral-small-3.2-24b-instruct".to_string()),
             db_path,
@@ -53,7 +53,7 @@ mod tests {
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
                 assert_eq!(config.embed_model, "openai/text-embedding-3-large");
-                assert_eq!(config.vision_model, "google/gemini-2.0-flash");
+                assert_eq!(config.vision_model, "google/gemini-2.5-flash");
                 assert_eq!(
                     config.chat_model,
                     "mistralai/mistral-small-3.2-24b-instruct"
