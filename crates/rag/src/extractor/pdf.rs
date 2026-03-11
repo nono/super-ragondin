@@ -4,8 +4,11 @@ use std::path::Path;
 const SCANNED_THRESHOLD: usize = 50;
 
 /// Extract text from a PDF file.
-/// If extracted text is shorter than SCANNED_THRESHOLD chars, the PDF is likely
+/// If extracted text is shorter than `SCANNED_THRESHOLD` chars, the PDF is likely
 /// scanned. Returns empty string in that case — the indexer will route to vision LLM.
+///
+/// # Errors
+/// Returns error if the file cannot be read.
 pub fn extract_pdf(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path)?;
     match pdf_extract::extract_text_from_mem(&bytes) {
@@ -31,7 +34,11 @@ pub fn extract_pdf(path: &Path) -> Result<String> {
 /// Render the first page of a PDF to a PNG and return as base64.
 /// Used by the indexer when `extract_pdf` returns empty (scanned PDF).
 /// NOTE: Requires pdfium shared library at runtime. Not tested in CI.
+///
+/// # Errors
+/// Returns error if the PDF cannot be loaded or rendered.
 pub fn render_first_page_as_base64(path: &Path) -> Result<String> {
+    use image::ImageEncoder;
     use pdfium_render::prelude::*;
 
     let pdfium = Pdfium::new(Pdfium::bind_to_system_library()?);
@@ -44,7 +51,6 @@ pub fn render_first_page_as_base64(path: &Path) -> Result<String> {
     )?;
     let img = bitmap.as_image();
     let mut buf = Vec::new();
-    use image::ImageEncoder;
     image::codecs::png::PngEncoder::new(&mut std::io::Cursor::new(&mut buf)).write_image(
         img.as_bytes(),
         img.width(),
@@ -62,16 +68,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_text_pdf() {
+    fn test_extract_text_pdf() -> Result<()> {
         let path = std::path::Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/sample.pdf"
         ));
         if !path.exists() {
             eprintln!("Skipping: sample.pdf not present");
-            return;
+            return Ok(());
         }
-        let result = extract_pdf(path).unwrap();
+        let result = extract_pdf(path)?;
         assert!(result.len() > 50, "Expected meaningful text from PDF");
+        Ok(())
     }
 }

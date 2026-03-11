@@ -7,9 +7,9 @@ edition = "2024"
 super-ragondin-sync = { path = "../sync" }
 
 # Vector DB
-lancedb = "0.20"
-arrow-array = "55"
-arrow-schema = "55"
+lancedb = "0.26"
+arrow-array = "57"
+arrow-schema = "57"
 
 # Chunking
 chonkie = { version = "0.1.1", features = ["tiktoken"] }

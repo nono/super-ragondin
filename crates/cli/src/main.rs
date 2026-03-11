@@ -247,6 +247,7 @@ fn run_sync_cycle(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn cmd_ask(args: &[String]) -> Result<()> {
     use std::io::Write;
     use super_ragondin_rag::config::RagConfig;
@@ -298,7 +299,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     let user_prompt = format!("Documents:\n{context}\n\nQuestion: {question}");
 
     let chat_model = rag_config.chat_model.clone();
-    let api_key = rag_config.api_key.clone();
+    let api_key = rag_config.api_key;
     let client = reqwest::Client::new();
 
     let body = serde_json::json!({
@@ -326,25 +327,28 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
         let mut done = false;
+        let mut buf = Vec::<u8>::new();
 
         while !done {
             match stream.next().await {
                 None => break,
                 Some(Err(e)) => return Err(Error::Permanent(e.to_string())),
                 Some(Ok(bytes)) => {
-                    let text = std::str::from_utf8(&bytes).unwrap_or("");
-                    for line in text.lines() {
+                    buf.extend_from_slice(&bytes);
+                    while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                        let line_bytes = buf.drain(..=pos).collect::<Vec<_>>();
+                        let line = String::from_utf8_lossy(&line_bytes);
+                        let line = line.trim();
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data == "[DONE]" {
                                 done = true;
                                 break;
                             }
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(content) = v["choices"][0]["delta"]["content"].as_str()
-                                {
-                                    write!(out, "{content}").ok();
-                                    out.flush().ok();
-                                }
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data)
+                                && let Some(content) = v["choices"][0]["delta"]["content"].as_str()
+                            {
+                                write!(out, "{content}").ok();
+                                out.flush().ok();
                             }
                         }
                     }
@@ -358,7 +362,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     println!("\nReferences:");
     for (i, chunk) in chunks.iter().enumerate() {
         use std::time::{Duration, UNIX_EPOCH};
-        let date = UNIX_EPOCH + Duration::from_secs(chunk.mtime as u64);
+        let date = UNIX_EPOCH + Duration::from_secs(chunk.mtime.cast_unsigned());
         let dt: chrono::DateTime<chrono::Utc> = date.into();
         println!(
             "[{}] {}  ({}, {})",

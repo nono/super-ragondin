@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RagConfig {
     pub api_key: String,
     pub embed_model: String,
@@ -9,7 +9,20 @@ pub struct RagConfig {
     pub db_path: PathBuf,
 }
 
+impl std::fmt::Debug for RagConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RagConfig")
+            .field("api_key", &"***")
+            .field("embed_model", &self.embed_model)
+            .field("vision_model", &self.vision_model)
+            .field("chat_model", &self.chat_model)
+            .field("db_path", &self.db_path)
+            .finish()
+    }
+}
+
 impl RagConfig {
+    #[must_use]
     pub fn from_env_with_db_path(db_path: PathBuf) -> Self {
         Self {
             api_key: std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),

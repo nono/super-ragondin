@@ -7,9 +7,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use super_ragondin_sync::model::{NodeType, SyncedRecord};
 
-/// Reconcile LanceDB index against the current set of synced records.
+/// Reconcile `LanceDB` index against the current set of synced records.
 /// - Files in synced but not indexed (or with different md5sum) → index.
-/// - Doc IDs in LanceDB not present in synced → delete.
+/// - Doc IDs in `LanceDB` not present in synced → delete.
+///
+/// # Errors
+/// Returns error if any database or embedding operation fails.
 pub async fn reconcile(
     synced: &[SyncedRecord],
     sync_dir: &Path,
@@ -47,8 +50,7 @@ pub async fn reconcile(
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs().cast_signed());
 
         let mime_type = detect_mime(&file_path);
 
@@ -78,7 +80,7 @@ fn detect_mime(path: &Path) -> String {
     // Fall back to extension-based detection for text formats that have no magic bytes
     match path.extension().and_then(|e| e.to_str()) {
         Some("txt") => "text/plain".to_string(),
-        Some("md") | Some("markdown") => "text/markdown".to_string(),
+        Some("md" | "markdown") => "text/markdown".to_string(),
         Some("csv") => "text/csv".to_string(),
         _ => "application/octet-stream".to_string(),
     }
@@ -138,7 +140,7 @@ async fn index_file(
             doc_id: rel_path.to_string(),
             mime_type: mime_type.to_string(),
             mtime,
-            chunk_index: i as u32,
+            chunk_index: u32::try_from(i).expect("chunk index fits u32"),
             chunk_text: text,
             md5sum: md5sum.to_string(),
             embedding,

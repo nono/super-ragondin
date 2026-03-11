@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
 
+/// # Errors
+/// Returns error if the file cannot be read.
 pub fn extract_plaintext(path: &Path) -> Result<String> {
     Ok(std::fs::read_to_string(path)?)
 }

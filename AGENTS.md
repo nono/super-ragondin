@@ -8,9 +8,10 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 - Use `docs/plans` directory for plans
 - Use red-green Test-Driven Development
 - Do not commit automatically
-- Add dependencies with the `cargo add` command - try to avoid directly editing the `Cargo.toml` file to add dependencies.
+- Add dependencies with the `cargo add` command - try to avoid directly editing the `Cargo.toml` file to add dependencies
 - Always run `cargo fmt --all` after editing Rust files
 - Always run `cargo clippy --all-features` after editing Rust files and fix any warnings
+- Avoid unsafe unwrap() in async tests
 
 ## Commands
 
