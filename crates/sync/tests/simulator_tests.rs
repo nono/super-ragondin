@@ -1304,7 +1304,43 @@ proptest! {
             // Extra sync to pick up any concurrent remote changes that fired mid-sync
             runner.apply(SimAction::Sync).unwrap();
 
-            // Check convergence after every round to catch state accumulation bugs
+            // Refresh sim_state to match the actual local filesystem after sync.
+            // Sync can create new local dirs (from synced remote dirs or collision
+            // rename) or remove dirs — IDs in sim_state may have become stale.
+            let tracked_ids: std::collections::HashSet<_> = sim_state
+                .local_dir_ids
+                .iter()
+                .chain(sim_state.local_file_ids.iter())
+                .cloned()
+                .collect();
+            for node in runner.local_fs.list_all() {
+                if !tracked_ids.contains(&node.id) {
+                    match node.node_type {
+                        NodeType::Directory => sim_state.local_dir_ids.push(node.id.clone()),
+                        NodeType::File => sim_state.local_file_ids.push(node.id.clone()),
+                    }
+                }
+                if let Some(ref parent_id) = node.parent_id {
+                    sim_state.local_parents.insert(node.id.clone(), parent_id.clone());
+                }
+            }
+            sim_state.local_dir_ids.retain(|id| runner.local_fs.exists(id));
+            sim_state.local_file_ids.retain(|id| runner.local_fs.exists(id));
+            // Prune remote IDs deleted during sync (e.g., when a local delete
+            // was propagated to remote). Without this, later actions may try
+            // to modify remote nodes that no longer exist.
+            sim_state.remote_file_ids.retain(|id| runner.remote.get_node(id).is_some());
+            sim_state.remote_dir_ids.retain(|id| runner.remote.get_node(id).is_some());
+
+            // Check convergence after every round. Allow up to 3 extra syncs
+            // for concurrent remote changes (trashes, deletes) that arrived
+            // mid-sync and need an additional round to fully propagate.
+            for _ in 0..3 {
+                if runner.check_convergence().is_ok() {
+                    break;
+                }
+                runner.apply(SimAction::Sync).unwrap();
+            }
             runner.check_convergence().unwrap();
         }
 

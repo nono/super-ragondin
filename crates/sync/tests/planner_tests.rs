@@ -1129,6 +1129,9 @@ fn test_remote_name_dotdot_is_rejected_as_conflict() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
 
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
     let remote_file = make_remote_file(remote_id("f1"), Some(remote_id("root")), "..", "abc123");
     store.insert_remote_node(&remote_file).unwrap();
 
@@ -1154,6 +1157,9 @@ fn test_remote_name_with_slash_is_rejected_as_conflict() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
 
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
     let remote_file = make_remote_file(
         remote_id("f1"),
         Some(remote_id("root")),
