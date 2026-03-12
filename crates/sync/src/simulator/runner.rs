@@ -982,6 +982,16 @@ impl SimulationRunner {
                         self.execute_move_local(local_id)?;
                     }
                 }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::ParentMissing
+                        && conflict.remote_id.is_none() =>
+                {
+                    // Local-only file whose parent directory no longer has a synced
+                    // record (ancestor was deleted on remote). Delete locally to converge.
+                    if let Some(ref local_id) = conflict.local_id {
+                        self.execute_delete_local(local_id)?;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1111,8 +1121,33 @@ impl SimulationRunner {
         }
     }
 
+    fn validate_local_parent(
+        &self,
+        remote_parent_id: Option<&RemoteId>,
+    ) -> Result<Option<LocalFileId>, ()> {
+        let local_parent_id =
+            remote_parent_id.and_then(|pid| self.remote_to_local.get(pid).cloned());
+        if let Some(ref lpid) = local_parent_id
+            && !self.local_fs.exists(lpid)
+        {
+            return Err(());
+        }
+        Ok(local_parent_id)
+    }
+
+    fn validate_remote_parent(&self, parent_remote_id: &RemoteId) -> Result<(), ()> {
+        if self.remote.get_node(parent_remote_id).is_none() {
+            return Err(());
+        }
+        Ok(())
+    }
+
     fn execute_download_new(&mut self, remote_id: &RemoteId) -> Result<(), String> {
         let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
+            return Ok(());
+        };
+        // Skip if the mapped local parent no longer exists (ancestor was deleted)
+        let Ok(local_parent_id) = self.validate_local_parent(remote_node.parent_id.as_ref()) else {
             return Ok(());
         };
         let local_id = self.next_local_id();
@@ -1124,10 +1159,7 @@ impl SimulationRunner {
 
         let local_node = LocalNode {
             id: local_id.clone(),
-            parent_id: remote_node
-                .parent_id
-                .as_ref()
-                .and_then(|pid| self.remote_to_local.get(pid).cloned()),
+            parent_id: local_parent_id,
             name: remote_node.name.clone(),
             node_type: remote_node.node_type,
             md5sum: remote_node.md5sum.clone(),
@@ -1167,14 +1199,15 @@ impl SimulationRunner {
         };
 
         // Resolve parent: if the remote node has a parent that isn't yet mapped
-        // to a local ID, skip this creation — the next planning cycle will retry
-        // after the parent dir is created.
-        let local_parent_id = match remote_node.parent_id.as_ref() {
-            Some(pid) => match self.remote_to_local.get(pid).cloned() {
-                Some(local_pid) => Some(local_pid),
-                None => return Ok(()),
-            },
-            None => None,
+        // to a local ID, or the mapped local parent no longer exists (ancestor
+        // was deleted), skip — the next planning cycle will retry.
+        let local_parent_id = if let Some(pid) = remote_node.parent_id.as_ref() {
+            match self.validate_local_parent(Some(pid)) {
+                Ok(Some(lpid)) => Some(lpid),
+                _ => return Ok(()),
+            }
+        } else {
+            None
         };
 
         let local_id = self.next_local_id();
@@ -1223,6 +1256,10 @@ impl SimulationRunner {
         expected_md5: &str,
     ) -> Result<(), String> {
         let Some(local_node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        // Skip if the parent remote node no longer exists (ancestor was deleted)
+        let Ok(()) = self.validate_remote_parent(parent_remote_id) else {
             return Ok(());
         };
         let content = self
@@ -1275,6 +1312,10 @@ impl SimulationRunner {
         name: &str,
     ) -> Result<(), String> {
         let Some(local_node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        // Skip if the parent remote node no longer exists (ancestor was deleted)
+        let Ok(()) = self.validate_remote_parent(parent_remote_id) else {
             return Ok(());
         };
         let remote_id = RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
