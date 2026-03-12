@@ -331,7 +331,10 @@ impl SimulationRunner {
                 self.apply_remote_trash(&id);
                 Ok(())
             }
-            SimAction::RemoteModifyFile { id, content } => self.apply_remote_modify(&id, content),
+            SimAction::RemoteModifyFile { id, content } => {
+                self.apply_remote_modify(&id, content);
+                Ok(())
+            }
             SimAction::LocalMove {
                 local_id,
                 new_parent_local_id,
@@ -603,12 +606,12 @@ impl SimulationRunner {
         self.remote.add_node(node, None);
     }
 
-    fn apply_remote_modify(&mut self, id: &RemoteId, content: Vec<u8>) -> Result<(), String> {
-        let node = self
-            .remote
-            .get_node(id)
-            .cloned()
-            .ok_or_else(|| format!("RemoteModifyFile: node {} not found", id.as_str()))?;
+    fn apply_remote_modify(&mut self, id: &RemoteId, content: Vec<u8>) {
+        let Some(node) = self.remote.get_node(id).cloned() else {
+            // Node was already deleted (e.g., by a concurrent or preceding action).
+            // Treat as a no-op, consistent with ConcurrentRemoteOp::ModifyFile.
+            return;
+        };
         let md5sum = compute_md5(&content);
         let mut updated = node;
         updated.md5sum = Some(md5sum);
@@ -622,7 +625,6 @@ impl SimulationRunner {
             .unwrap_or(1);
         updated.rev = format!("{}-{}", rev_num + 1, id.as_str());
         self.remote.add_node(updated, Some(content));
-        Ok(())
     }
 
     fn apply_remote_trash(&mut self, id: &RemoteId) {
@@ -905,7 +907,7 @@ impl SimulationRunner {
                 }
                 ConcurrentRemoteOp::ModifyFile { id, content } => {
                     // Silently ignore if the file no longer exists (concurrent deletion)
-                    let _ = self.apply_remote_modify(&id, content);
+                    self.apply_remote_modify(&id, content);
                 }
                 ConcurrentRemoteOp::DeleteFile { id } => {
                     self.remote.delete_node(&id);
@@ -928,6 +930,57 @@ impl SimulationRunner {
                     if conflict.kind == crate::model::ConflictKind::NameCollision =>
                 {
                     self.resolve_name_collision(conflict)?;
+                }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::LocalModifyRemoteDelete =>
+                {
+                    // Remote was deleted while local was modified. Drop the orphaned
+                    // synced record so the next planning cycle re-uploads the local file.
+                    if let Some(ref local_id) = conflict.local_id {
+                        self.store
+                            .delete_synced(local_id)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::BothMoved =>
+                {
+                    // Both sides moved/renamed the file to different locations.
+                    // Remote wins: apply the remote location to the local file.
+                    if let Some(ref local_id) = conflict.local_id {
+                        self.execute_move_local(local_id)?;
+                    }
+                }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::LocalDeleteRemoteModify =>
+                {
+                    // Local deleted but remote was modified. Drop the orphaned synced
+                    // record so the next planning cycle downloads the remote version.
+                    if let Some(ref local_id) = conflict.local_id {
+                        self.store
+                            .delete_synced(local_id)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::BothModified =>
+                {
+                    // Both sides modified the same file. Remote wins: download remote.
+                    if let (Some(remote_id), Some(local_id)) =
+                        (&conflict.remote_id, &conflict.local_id)
+                    {
+                        self.execute_download_update(remote_id, local_id)?;
+                    }
+                }
+                crate::model::PlanResult::Conflict(ref conflict)
+                    if conflict.kind == crate::model::ConflictKind::ParentMissing
+                        && conflict.remote_id.is_some() =>
+                {
+                    // Local file moved to a parent whose remote ID isn't synced yet.
+                    // Remote wins: move local back to where remote currently is.
+                    if let Some(ref local_id) = conflict.local_id {
+                        self.execute_move_local(local_id)?;
+                    }
                 }
                 _ => {}
             }
@@ -1112,14 +1165,23 @@ impl SimulationRunner {
         let Some(remote_node) = self.remote.get_node(remote_id).cloned() else {
             return Ok(());
         };
+
+        // Resolve parent: if the remote node has a parent that isn't yet mapped
+        // to a local ID, skip this creation — the next planning cycle will retry
+        // after the parent dir is created.
+        let local_parent_id = match remote_node.parent_id.as_ref() {
+            Some(pid) => match self.remote_to_local.get(pid).cloned() {
+                Some(local_pid) => Some(local_pid),
+                None => return Ok(()),
+            },
+            None => None,
+        };
+
         let local_id = self.next_local_id();
 
         let local_node = LocalNode {
             id: local_id.clone(),
-            parent_id: remote_node
-                .parent_id
-                .as_ref()
-                .and_then(|pid| self.remote_to_local.get(pid).cloned()),
+            parent_id: local_parent_id,
             name: remote_node.name.clone(),
             node_type: NodeType::Directory,
             md5sum: None,
@@ -1304,6 +1366,14 @@ impl SimulationRunner {
             .parent_id
             .as_ref()
             .and_then(|pid| self.remote_to_local.get(pid).cloned());
+        // If the target parent was deleted locally, skip the move to avoid
+        // placing the file under a non-existent directory. A CreateRemoteDir
+        // for the new local parent (or the next sync round) will resolve this.
+        if let Some(ref pid) = new_parent_local
+            && !self.local_fs.exists(pid)
+        {
+            return Ok(());
+        }
         self.local_fs
             .move_node(local_id, new_parent_local.clone(), remote_node.name.clone());
         if let Some(node) = self.local_fs.get_node(local_id).cloned() {

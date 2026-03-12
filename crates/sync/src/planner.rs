@@ -566,12 +566,20 @@ impl<'a> Planner<'a> {
                 if !visited.insert(cid.clone()) {
                     break; // cycle detected
                 }
-                match remote_by_id.get(cid).and_then(|n| n.parent_id.as_ref()) {
+                match remote_by_id.get(cid) {
                     None => {
-                        reaches_root = true;
+                        // Parent node not found — orphaned (ancestor was deleted).
+                        // This is unreachable, not a root.
                         break;
                     }
-                    Some(pid) => current = Some(pid.clone()),
+                    Some(node) => match node.parent_id.as_ref() {
+                        None => {
+                            // Reached a root node (no parent).
+                            reaches_root = true;
+                            break;
+                        }
+                        Some(pid) => current = Some(pid.clone()),
+                    },
                 }
             }
             if !reaches_root {
