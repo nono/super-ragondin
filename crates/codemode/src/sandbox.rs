@@ -18,6 +18,7 @@ pub struct SandboxContext {
     pub embedder: Arc<OpenRouterEmbedder>,
     pub config: RagConfig,
     pub handle: tokio::runtime::Handle,
+    pub sync_dir: std::path::PathBuf,
 }
 
 thread_local! {
@@ -61,14 +62,23 @@ pub fn serde_to_jsvalue(val: &SerdeValue, ctx: &mut Context) -> Result<JsValue, 
 pub struct Sandbox {
     store: Arc<RagStore>,
     config: RagConfig,
+    sync_dir: std::path::PathBuf,
 }
 
 #[allow(dead_code)]
 impl Sandbox {
-    /// Create a new sandbox with the given store and config.
+    /// Create a new sandbox with the given store, config, and sync directory.
     #[must_use]
-    pub const fn new(store: Arc<RagStore>, config: RagConfig) -> Self {
-        Self { store, config }
+    pub const fn new(
+        store: Arc<RagStore>,
+        config: RagConfig,
+        sync_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            store,
+            config,
+            sync_dir,
+        }
     }
 
     /// Execute JS code in a fresh Boa context.
@@ -87,6 +97,7 @@ impl Sandbox {
                 embedder,
                 config: self.config.clone(),
                 handle,
+                sync_dir: self.sync_dir.clone(),
             });
         });
 
@@ -110,6 +121,10 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register getDocument: {e}"))?;
         tools::sub_agent::register(&mut ctx)
             .map_err(|e| format!("JS error: register subAgent: {e}"))?;
+        tools::save_file::register(&mut ctx)
+            .map_err(|e| format!("JS error: register saveFile: {e}"))?;
+        tools::list_dirs::register(&mut ctx)
+            .map_err(|e| format!("JS error: register listDirs: {e}"))?;
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -128,30 +143,36 @@ mod tests {
     use super_ragondin_rag::{config::RagConfig, store::RagStore};
     use tempfile::tempdir;
 
-    async fn make_sandbox() -> Sandbox {
-        let dir = tempdir().unwrap();
-        let store = Arc::new(RagStore::open(dir.path()).await.unwrap());
-        let config = RagConfig::from_env_with_db_path(dir.path().to_path_buf());
-        Sandbox::new(store, config)
+    async fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
+        let db_dir = tempdir().expect("failed to create temp db dir");
+        let sync_dir = tempdir().expect("failed to create temp sync dir");
+        let store = Arc::new(
+            RagStore::open(db_dir.path())
+                .await
+                .expect("failed to open RagStore"),
+        );
+        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
+        let sandbox = Sandbox::new(store, config, sync_dir.path().to_path_buf());
+        (sandbox, db_dir, sync_dir)
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_arithmetic() {
-        let sandbox = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
         let result = sandbox.execute("1 + 2").unwrap();
         assert_eq!(result, "3");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_returns_last_expression() {
-        let sandbox = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
         let result = sandbox.execute("const x = 10; x * 2").unwrap();
         assert_eq!(result, "20");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_js_error_returns_err_string() {
-        let sandbox = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
         let result = sandbox.execute("undeclaredFunction()");
         assert!(result.is_err());
         let msg = result.unwrap_err();
@@ -160,7 +181,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_object_result() {
-        let sandbox = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
         let result = sandbox.execute("({ a: 1, b: 'hello' })").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["a"], 1);
@@ -169,7 +190,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_fresh_context_per_call() {
-        let sandbox = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
         // Set a variable in one call
         sandbox.execute("var x = 42;").ok();
         // It must NOT be visible in the next call
@@ -179,8 +200,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_sandbox_globals_registered() {
-        let sandbox = make_sandbox().await;
-        for fn_name in &["search", "listFiles", "getDocument", "subAgent"] {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        for fn_name in &[
+            "search",
+            "listFiles",
+            "getDocument",
+            "subAgent",
+            "saveFile",
+            "listDirs",
+        ] {
             let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
             assert_eq!(
                 result,
@@ -188,6 +216,30 @@ mod tests {
                 "{fn_name} should be a function"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_save_file_creates_file() {
+        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let result = sandbox
+            .execute(r#"saveFile("hello.txt", "world")"#)
+            .unwrap();
+        assert_eq!(result, "null");
+        let content = std::fs::read_to_string(sync_dir.path().join("hello.txt"))
+            .expect("file should exist after saveFile");
+        assert_eq!(content, "world");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_dirs_returns_directories() {
+        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        // Create some directories in the sync dir
+        std::fs::create_dir(sync_dir.path().join("alpha")).expect("create alpha");
+        std::fs::create_dir(sync_dir.path().join("beta")).expect("create beta");
+        std::fs::File::create(sync_dir.path().join("file.txt")).expect("create file");
+        let result = sandbox.execute("listDirs()").unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&result).expect("should be a JSON array");
+        assert_eq!(parsed, vec!["alpha", "beta"]);
     }
 
     #[test]
