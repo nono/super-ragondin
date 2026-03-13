@@ -7,7 +7,7 @@ use std::path::{Component, Path};
 ///
 /// # Errors
 /// Returns `Err` with a message if the path contains a `ParentDir` or `RootDir` component.
-pub fn check_relative_path(path: &str) -> Result<(), &'static str> {
+pub(crate) fn check_relative_path(path: &str) -> Result<(), &'static str> {
     for component in Path::new(path).components() {
         match component {
             Component::ParentDir | Component::RootDir => {
