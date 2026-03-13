@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use boa_engine::{
-    Context, JsArgs, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string,
-};
+use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
 use super_ragondin_rag::config::{OPENROUTER_API_URL, OPENROUTER_REFERER};
 
 use crate::sandbox::SANDBOX_CTX;
@@ -24,6 +22,7 @@ pub fn register(ctx: &mut Context) -> Result<(), JsError> {
 }
 
 fn generate_image_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    use boa_engine::JsArgs;
     // Parse prompt (required)
     let prompt_val = args.get_or_undefined(0);
     if prompt_val.is_undefined() || prompt_val.is_null() {
@@ -94,7 +93,8 @@ fn generate_image_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     // Compute absolute save path (if requested)
     let save_path: Option<PathBuf> = path_opt.map(|p| sync_dir.join(p));
 
-    // Run async HTTP call
+    // Values are cloned out of SANDBOX_CTX before block_on so the RefCell borrow
+    // is released before the async work begins (avoids holding the borrow across await).
     let b64 = handle.block_on(async move {
         generate_image_async(
             &api_key,
