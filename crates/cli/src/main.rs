@@ -11,8 +11,10 @@ use super_ragondin_sync::local::watcher::{WatchEvent, Watcher};
 use super_ragondin_sync::model::PlanResult;
 use super_ragondin_sync::planner::Planner;
 use super_ragondin_sync::remote::auth::OAuthClient;
+use super_ragondin_sync::remote::realtime::RealtimeListener;
 use super_ragondin_sync::store::TreeStore;
 use super_ragondin_sync::sync::engine::SyncEngine;
+use tokio_util::sync::CancellationToken;
 
 fn main() -> Result<()> {
     super_ragondin_sync::logging::init();
@@ -161,6 +163,11 @@ fn open_engine(config: &Config) -> Result<SyncEngine> {
     ))
 }
 
+enum SyncTrigger {
+    Local(WatchEvent),
+    Remote,
+}
+
 fn cmd_watch() -> Result<()> {
     let mut config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
@@ -169,15 +176,48 @@ fn cmd_watch() -> Result<()> {
     let mut engine = open_engine(&config)?;
     let rt = tokio::runtime::Runtime::new()?;
 
-    let (tx, rx) = mpsc::channel::<WatchEvent>();
+    let (tx, rx) = mpsc::channel::<SyncTrigger>();
 
+    // Local filesystem watcher
+    let local_tx = tx.clone();
+    let (local_watch_tx, local_watch_rx) = mpsc::channel::<WatchEvent>();
     let sync_dir = config.sync_dir.clone();
     let watcher_rules = IgnoreRules::load(Some(&config.syncignore_path()));
     thread::spawn(move || {
-        let mut watcher =
-            Watcher::new(&sync_dir, tx, watcher_rules).expect("Failed to create watcher");
+        let mut watcher = Watcher::new(&sync_dir, local_watch_tx, watcher_rules)
+            .expect("Failed to create watcher");
         watcher.run().expect("Watcher failed");
     });
+    thread::spawn(move || {
+        for event in local_watch_rx {
+            if local_tx.send(SyncTrigger::Local(event)).is_err() {
+                break;
+            }
+        }
+    });
+
+    // Realtime WebSocket listener
+    let cancel = CancellationToken::new();
+    let oauth = config.oauth_client.as_ref();
+    if let Some(access_token) = oauth.and_then(|o| o.access_token().map(String::from)) {
+        let instance_url = config.instance_url.clone();
+        let remote_tx = tx;
+        let cancel2 = cancel.clone();
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(async {
+                let listener = RealtimeListener::new(&instance_url, &access_token);
+                let mut rx = listener.start(cancel2);
+                while rx.recv().await.is_some() {
+                    if remote_tx.send(SyncTrigger::Remote).is_err() {
+                        break;
+                    }
+                }
+            });
+        });
+    } else {
+        tracing::warn!("🔌 No access token, realtime notifications disabled");
+    }
 
     tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 
@@ -186,8 +226,15 @@ fn cmd_watch() -> Result<()> {
 
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(event) => {
-                tracing::debug!(event = ?event, "👁️ Watch event received");
+            Ok(trigger) => {
+                match &trigger {
+                    SyncTrigger::Local(event) => {
+                        tracing::debug!(event = ?event, "👁️ Local watch event received");
+                    }
+                    SyncTrigger::Remote => {
+                        tracing::info!("🔌 Remote change notification received");
+                    }
+                }
                 if last_sync.elapsed() > debounce {
                     tracing::info!("🔄 Changes detected, syncing");
                     if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
@@ -206,12 +253,13 @@ fn cmd_watch() -> Result<()> {
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::error!("❌ Watcher disconnected");
+                tracing::error!("❌ All event sources disconnected");
                 break;
             }
         }
     }
 
+    cancel.cancel();
     Ok(())
 }
 

@@ -24,6 +24,8 @@ uuid = { version = "1.20.0", features = ["v4"] }
 tracing-appender = "0.2"
 futures = "0.3.32"
 ignore = "0.4.25"
+tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
+tokio-util = "0.7.18"
 
 [dev-dependencies]
 proptest = "1"
