@@ -1,21 +1,10 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
 
+use super::path_utils::check_relative_path;
 use crate::sandbox::SANDBOX_CTX;
-
-fn check_relative_path(path: &str) -> Result<(), &'static str> {
-    for component in Path::new(path).components() {
-        match component {
-            Component::ParentDir | Component::RootDir => {
-                return Err("path escapes sync directory");
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
 
 /// Register the `saveFile(path, content, options?)` global function.
 ///
@@ -104,20 +93,5 @@ mod tests {
             result.unwrap().as_string().unwrap().to_std_string_escaped(),
             "function"
         );
-    }
-
-    #[test]
-    fn test_check_relative_path_rejects_parent_dir() {
-        assert!(check_relative_path("../etc/passwd").is_err());
-        assert!(check_relative_path("notes/../../../etc").is_err());
-        assert!(check_relative_path("a/b/../../..").is_err());
-    }
-
-    #[test]
-    fn test_check_relative_path_accepts_normal_paths() {
-        assert!(check_relative_path("notes/summary.md").is_ok());
-        assert!(check_relative_path("./notes/file.txt").is_ok());
-        assert!(check_relative_path("file.txt").is_ok());
-        assert!(check_relative_path("a/b/c").is_ok());
     }
 }
