@@ -1,3 +1,4 @@
+pub mod generate_image;
 pub mod get_document;
 pub mod list_dirs;
 pub mod list_files;
