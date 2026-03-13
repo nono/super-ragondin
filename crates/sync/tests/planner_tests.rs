@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use super_ragondin_sync::ignore::IgnoreRules;
 use super_ragondin_sync::model::{
     Conflict, ConflictKind, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode,
     SyncOp, SyncedRecord,
@@ -147,7 +148,8 @@ fn test_new_remote_file_generates_download() {
     );
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -193,7 +195,8 @@ fn test_new_local_file_generates_upload() {
     let local_file = make_local_file(local_id(1, 100), Some(root_local), "doc.txt", "abc123");
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -230,7 +233,8 @@ fn test_synced_file_no_ops() {
     store.insert_remote_node(&remote_file).unwrap();
     store.insert_synced(&synced).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert!(ops.is_empty());
@@ -260,7 +264,8 @@ fn test_remote_modified_generates_download() {
     store.insert_synced(&synced).unwrap();
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -306,7 +311,8 @@ fn test_local_modified_generates_upload() {
     store.insert_synced(&synced).unwrap();
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -352,7 +358,8 @@ fn test_both_modified_generates_conflict() {
     store.insert_remote_node(&remote_file).unwrap();
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -391,7 +398,8 @@ fn test_remote_deleted_generates_local_delete() {
     store.insert_synced(&synced).unwrap();
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -428,7 +436,8 @@ fn test_local_deleted_generates_remote_delete() {
     store.insert_synced(&synced).unwrap();
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -468,7 +477,8 @@ fn test_new_remote_directory_generates_create_local_dir() {
     let remote_dir = make_remote_dir(remote_id("d1"), Some(remote_id("root")), "docs");
     store.insert_remote_node(&remote_dir).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -510,7 +520,8 @@ fn test_new_local_directory_generates_create_remote_dir() {
     let local_dir = make_local_dir(local_id(1, 200), Some(root_local), "docs");
     store.insert_local_node(&local_dir).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -537,7 +548,8 @@ fn test_local_file_without_synced_parent_generates_parent_missing_conflict() {
     let local_file = make_local_file(local_id(1, 100), Some(local_id(1, 50)), "doc.txt", "abc123");
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -580,7 +592,8 @@ fn test_upload_update_uses_remote_rev_not_synced_rev() {
     store.insert_synced(&synced).unwrap();
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1);
@@ -639,7 +652,8 @@ fn test_remote_rename_generates_move_local() {
     let remote_file = make_remote_file(rid.clone(), Some(parent_rid.clone()), "new.txt", "hash");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let move_op = ops
@@ -744,7 +758,8 @@ fn test_remote_move_to_different_dir_generates_move_local() {
     let remote_file = make_remote_file(rid.clone(), Some(parent2_rid.clone()), "file.txt", "hash");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let move_op = ops
@@ -809,7 +824,8 @@ fn test_local_rename_generates_move_remote() {
     let remote_file = make_remote_file(rid.clone(), Some(parent_rid.clone()), "old.txt", "hash");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let move_op = ops
@@ -875,7 +891,8 @@ fn test_both_moved_to_same_location_is_noop() {
     store.insert_local_node(&local_file).unwrap();
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let move_ops: Vec<_> = ops
@@ -951,7 +968,8 @@ fn test_both_moved_to_different_locations_is_conflict() {
     );
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let conflict = ops
@@ -1010,7 +1028,8 @@ fn test_remote_rename_and_content_change_generates_move_and_download() {
     remote_file.rev = "2-abc".to_string();
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_move = ops
@@ -1086,7 +1105,8 @@ fn test_local_rename_and_content_change_generates_move_and_upload() {
         make_remote_file(rid.clone(), Some(parent_rid.clone()), "old.txt", "old_hash");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_move = ops
@@ -1135,7 +1155,8 @@ fn test_remote_name_dotdot_is_rejected_as_conflict() {
     let remote_file = make_remote_file(remote_id("f1"), Some(remote_id("root")), "..", "abc123");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_download = ops
@@ -1168,7 +1189,8 @@ fn test_remote_name_with_slash_is_rejected_as_conflict() {
     );
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_download = ops
@@ -1196,7 +1218,8 @@ fn test_remote_name_dot_is_rejected_as_conflict() {
     let remote_file = make_remote_file(remote_id("f1"), Some(remote_id("root")), ".", "abc123");
     store.insert_remote_node(&remote_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_download = ops
@@ -1271,7 +1294,8 @@ fn test_atomic_save_rebinds_inode_and_generates_upload_update() {
     );
     store.insert_remote_node(&remote).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     // Should NOT produce DeleteRemote + UploadNew
@@ -1373,7 +1397,8 @@ fn test_atomic_save_same_content_produces_no_op() {
     );
     store.insert_remote_node(&remote).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert!(
@@ -1445,7 +1470,8 @@ fn test_atomic_save_does_not_rebind_when_name_differs() {
     );
     store.insert_remote_node(&remote).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     // Should treat as separate delete + create, not rebind
@@ -1510,7 +1536,8 @@ fn test_new_remote_and_local_same_path_same_content_emits_bind() {
     );
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     // Should NOT have DownloadNew, UploadNew, or a conflict
@@ -1589,7 +1616,8 @@ fn test_new_remote_and_local_same_path_different_content_is_conflict() {
     );
     store.insert_local_node(&local_file).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     // Should produce a NameCollision conflict
@@ -1655,7 +1683,8 @@ fn test_new_remote_and_local_same_dir_same_path_emits_bind() {
     let local_dir = make_local_dir(local_id(1, 200), Some(root_lid.clone()), "photos");
     store.insert_local_node(&local_dir).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     let has_create_local = ops
@@ -1701,7 +1730,8 @@ fn test_both_deleted_generates_delete_synced() {
     );
     store.insert_synced(&synced).unwrap();
 
-    let planner = Planner::new(&store, PathBuf::from("/sync"));
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
     let ops = planner.plan().unwrap();
 
     assert_eq!(ops.len(), 1, "Expected exactly one op, got: {:?}", ops);

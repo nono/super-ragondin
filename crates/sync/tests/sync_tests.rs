@@ -1,3 +1,4 @@
+use super_ragondin_sync::ignore::IgnoreRules;
 use super_ragondin_sync::model::{
     ConflictKind, LocalFileId, NodeType, RemoteId, RemoteNode, SyncedRecord,
 };
@@ -60,7 +61,8 @@ fn test_sync_engine_plans_download_for_new_remote_file() {
     store.flush().unwrap();
 
     // Plan should generate a download operation
-    let planner = Planner::new(&store, sync_dir.path().to_path_buf());
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, sync_dir.path().to_path_buf(), &rules);
     let results = planner.plan().unwrap();
 
     assert!(!results.is_empty(), "Should have planned operations");
@@ -85,6 +87,7 @@ fn test_sync_engine_creation() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Engine should be creatable
@@ -108,6 +111,7 @@ fn test_sync_engine_initial_scan() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Scan the local directory
@@ -147,6 +151,7 @@ fn test_sync_engine_plan() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Engine should be able to plan
@@ -181,6 +186,7 @@ fn test_sync_engine_execute_create_local_dir() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Create the operation
@@ -252,6 +258,7 @@ fn test_sync_engine_execute_delete_local() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Create delete operation with correct md5
@@ -339,7 +346,8 @@ fn test_planner_computes_nested_paths() {
     store.insert_remote_node(&file).unwrap();
     store.flush().unwrap();
 
-    let planner = Planner::new(&store, sync_dir.path().to_path_buf());
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, sync_dir.path().to_path_buf(), &rules);
     let results = planner.plan().unwrap();
 
     // Find the download operation for file.txt
@@ -412,6 +420,7 @@ fn test_sync_engine_execute_move_local() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     let to_path = sync_dir.path().join("new.txt");
@@ -462,6 +471,7 @@ fn test_delete_local_refuses_when_md5_changed() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // User modifies the file between planning and execution
@@ -520,6 +530,7 @@ fn test_delete_local_succeeds_when_md5_matches() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     let op = SyncOp::DeleteLocal {
@@ -571,6 +582,7 @@ fn test_move_local_refuses_when_inode_mismatches() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // Use a wrong local_id (different inode) - simulates the file being
@@ -635,6 +647,7 @@ fn test_sync_engine_run_cycle() {
         store,
         sync_dir.path().to_path_buf(),
         sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
     );
 
     // First cycle: should create the directory
@@ -744,6 +757,7 @@ async fn test_sync_engine_download_new_via_async() -> Result<(), Box<dyn std::er
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let results = engine.run_cycle_async(&client).await?;
@@ -862,6 +876,7 @@ async fn test_sync_engine_upload_new_via_async() -> Result<(), Box<dyn std::erro
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let results = engine.run_cycle_async(&client).await?;
@@ -990,6 +1005,7 @@ async fn test_sync_engine_parallel_downloads() -> Result<(), Box<dyn std::error:
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let results = engine.run_cycle_async(&client).await?;
@@ -1042,6 +1058,7 @@ fn test_initial_scan_bootstraps_root() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     engine.initial_scan().unwrap();
@@ -1133,6 +1150,7 @@ async fn test_fetch_and_apply_remote_changes_populates_remote_tree()
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
@@ -1222,6 +1240,7 @@ async fn test_fetch_and_apply_remote_changes_handles_deletions() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
@@ -1307,6 +1326,7 @@ async fn test_fetch_and_apply_remote_changes_skips_trash_dir() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
@@ -1395,6 +1415,7 @@ async fn test_fetch_and_apply_remote_changes_treats_trashed_node_as_deletion() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     let client = CozyClient::new(&mock_server.uri(), "fake-token");
@@ -1450,6 +1471,7 @@ fn test_resolve_both_modified_renames_local_file() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     // Simulate a BothModified conflict
@@ -1507,6 +1529,7 @@ fn test_resolve_conflict_no_local_path_is_noop() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     // Conflict without local_path should be a no-op (just logged)
@@ -1533,6 +1556,7 @@ fn test_resolve_conflict_missing_local_file_is_noop() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     // Conflict pointing to a non-existent file should succeed (no-op)
@@ -1565,6 +1589,7 @@ fn test_resolve_conflict_parent_missing_is_noop() {
         store,
         sync_dir.path().to_path_buf(),
         staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
     );
 
     // ParentMissing conflict should NOT rename the file — it's a transient
@@ -1596,4 +1621,88 @@ fn test_resolve_conflict_parent_missing_is_noop() {
         !entries.iter().any(|name| name.contains("-conflict-")),
         "ParentMissing should not create conflict copies, found: {entries:?}"
     );
+}
+
+#[test]
+fn planner_skips_ignored_remote_nodes() {
+    use super_ragondin_sync::model::{PlanResult, SyncOp};
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    let root_remote_id = RemoteId::new("io.cozy.files.root-dir");
+    store
+        .insert_remote_node(&RemoteNode {
+            id: root_remote_id.clone(),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 0,
+            rev: String::new(),
+        })
+        .unwrap();
+
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("hidden-id"),
+            parent_id: Some(root_remote_id.clone()),
+            name: ".hidden-file".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("abc123".to_string()),
+            size: Some(10),
+            updated_at: 1000,
+            rev: "1-abc".to_string(),
+        })
+        .unwrap();
+
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("normal-id"),
+            parent_id: Some(root_remote_id),
+            name: "normal.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some("def456".to_string()),
+            size: Some(20),
+            updated_at: 1000,
+            rev: "1-def".to_string(),
+        })
+        .unwrap();
+
+    store.flush().unwrap();
+
+    let rules = IgnoreRules::default_only();
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        rules,
+    );
+    engine.initial_scan().unwrap();
+    let results = engine.plan().unwrap();
+
+    let create_ops: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Op(SyncOp::DownloadNew { .. })))
+        .collect();
+    assert_eq!(
+        create_ops.len(),
+        1,
+        "Should plan exactly one download (normal.txt), skipping ignored .hidden-file"
+    );
+
+    // Verify the correct file is being downloaded, not the ignored hidden file
+    let download_op = create_ops.first().unwrap();
+    if let PlanResult::Op(SyncOp::DownloadNew { remote_id, .. }) = download_op {
+        assert_eq!(
+            remote_id.as_str(),
+            "normal-id",
+            "Should download normal.txt, not the ignored hidden file"
+        );
+    } else {
+        panic!("Expected DownloadNew operation");
+    }
 }

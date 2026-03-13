@@ -23,6 +23,7 @@ bytes = "1"
 uuid = { version = "1.20.0", features = ["v4"] }
 tracing-appender = "0.2"
 futures = "0.3.32"
+ignore = "0.4.25"
 
 [dev-dependencies]
 proptest = "1"

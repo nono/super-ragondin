@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::ignore::IgnoreRules;
 use crate::local::scanner::Scanner;
 use crate::model::{
     Conflict, ConflictKind, LocalFileId, LocalNode, NodeType, PlanResult, RemoteId, RemoteNode,
@@ -21,15 +22,23 @@ pub struct SyncEngine {
     store: TreeStore,
     sync_dir: PathBuf,
     staging_dir: PathBuf,
+    rules: IgnoreRules,
 }
 
 impl SyncEngine {
     #[must_use]
-    pub const fn new(store: TreeStore, sync_dir: PathBuf, staging_dir: PathBuf) -> Self {
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn new(
+        store: TreeStore,
+        sync_dir: PathBuf,
+        staging_dir: PathBuf,
+        rules: IgnoreRules,
+    ) -> Self {
         Self {
             store,
             sync_dir,
             staging_dir,
+            rules,
         }
     }
 
@@ -45,6 +54,12 @@ impl SyncEngine {
         &self.store
     }
 
+    /// Returns a reference to the ignore rules.
+    #[must_use]
+    pub const fn rules(&self) -> &IgnoreRules {
+        &self.rules
+    }
+
     /// Scan the local sync directory and populate the local tree.
     ///
     /// # Errors
@@ -56,7 +71,7 @@ impl SyncEngine {
         self.bootstrap_root()?;
 
         let scanner = Scanner::new(&self.sync_dir);
-        let local_nodes = scanner.scan()?;
+        let local_nodes = scanner.scan_with_ignore(&self.rules)?;
         let count = local_nodes.len();
 
         for node in &local_nodes {
@@ -117,7 +132,7 @@ impl SyncEngine {
     ///
     /// Returns an error if store access fails.
     pub fn plan(&self) -> Result<Vec<PlanResult>> {
-        let planner = Planner::new(&self.store, self.sync_dir.clone());
+        let planner = Planner::new(&self.store, self.sync_dir.clone(), &self.rules);
         planner.plan()
     }
 

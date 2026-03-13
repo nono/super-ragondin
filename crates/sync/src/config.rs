@@ -66,6 +66,11 @@ impl Config {
     pub fn rag_dir(&self) -> PathBuf {
         self.data_dir.join("rag")
     }
+
+    #[must_use]
+    pub fn syncignore_path(&self) -> PathBuf {
+        self.data_dir.join("syncignore")
+    }
 }
 
 #[cfg(test)]

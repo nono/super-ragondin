@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use super_ragondin_sync::config::Config;
 use super_ragondin_sync::error::{Error, Result};
+use super_ragondin_sync::ignore::IgnoreRules;
 use super_ragondin_sync::local::watcher::{WatchEvent, Watcher};
 use super_ragondin_sync::model::PlanResult;
 use super_ragondin_sync::planner::Planner;
@@ -151,10 +152,12 @@ fn open_client(config: &Config) -> Result<super_ragondin_sync::remote::client::C
 
 fn open_engine(config: &Config) -> Result<SyncEngine> {
     let store = TreeStore::open(&config.store_dir())?;
+    let rules = IgnoreRules::load(Some(&config.syncignore_path()));
     Ok(SyncEngine::new(
         store,
         config.sync_dir.clone(),
         config.staging_dir(),
+        rules,
     ))
 }
 
@@ -169,8 +172,10 @@ fn cmd_watch() -> Result<()> {
     let (tx, rx) = mpsc::channel::<WatchEvent>();
 
     let sync_dir = config.sync_dir.clone();
+    let watcher_rules = IgnoreRules::load(Some(&config.syncignore_path()));
     thread::spawn(move || {
-        let mut watcher = Watcher::new(&sync_dir, tx).expect("Failed to create watcher");
+        let mut watcher =
+            Watcher::new(&sync_dir, tx, watcher_rules).expect("Failed to create watcher");
         watcher.run().expect("Watcher failed");
     });
 
@@ -309,7 +314,8 @@ fn cmd_status() -> Result<()> {
         println!("  Local:  {} nodes", local.len());
         println!("  Synced: {} nodes", synced.len());
 
-        let planner = Planner::new(&store, config.sync_dir);
+        let rules = IgnoreRules::load(Some(&config.syncignore_path()));
+        let planner = Planner::new(&store, config.sync_dir, &rules);
         let ops = planner.plan()?;
         let pending_ops: Vec<_> = ops
             .iter()

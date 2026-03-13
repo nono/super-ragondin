@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod ignore;
 pub mod local;
 pub mod logging;
 pub mod model;

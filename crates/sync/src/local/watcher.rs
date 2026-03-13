@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::ignore::IgnoreRules;
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,6 +29,7 @@ pub struct Watcher {
     root: PathBuf,
     tx: Sender<WatchEvent>,
     watches: HashMap<WatchDescriptor, PathBuf>,
+    rules: IgnoreRules,
 }
 
 impl Watcher {
@@ -35,13 +37,14 @@ impl Watcher {
     ///
     /// # Errors
     /// Returns an error if inotify initialization fails.
-    pub fn new(root: &Path, tx: Sender<WatchEvent>) -> Result<Self> {
+    pub fn new(root: &Path, tx: Sender<WatchEvent>, rules: IgnoreRules) -> Result<Self> {
         let inotify = Inotify::init()?;
         let mut watcher = Self {
             inotify,
             root: root.to_path_buf(),
             tx,
             watches: HashMap::new(),
+            rules,
         };
 
         watcher.add_watch_recursive(root)?;
@@ -80,7 +83,15 @@ impl Watcher {
                 continue;
             }
             if entry_md.file_type().is_dir() {
-                self.add_watch_recursive(&entry.path())?;
+                let entry_path = entry.path();
+                let rel_path = entry_path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&entry_path)
+                    .to_string_lossy();
+                if !rel_path.is_empty() && self.rules.is_ignored(&rel_path, true) {
+                    continue;
+                }
+                self.add_watch_recursive(&entry_path)?;
             }
         }
 
@@ -111,6 +122,14 @@ impl Watcher {
                 };
 
                 let is_dir = event.mask.contains(EventMask::ISDIR);
+
+                // Skip events for ignored paths
+                let rel_path = path.strip_prefix(&self.root).unwrap_or(&path);
+                let rel_str = rel_path.to_string_lossy();
+                if !rel_str.is_empty() && self.rules.is_ignored(&rel_str, is_dir) {
+                    tracing::debug!(path = %path.display(), "⏭️ Watcher: skipping ignored path");
+                    continue;
+                }
 
                 // Handle queue overflow - requires full rescan
                 if event.mask.contains(EventMask::Q_OVERFLOW) {

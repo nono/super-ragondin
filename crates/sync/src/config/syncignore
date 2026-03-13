@@ -1,0 +1,28 @@
+# Default ignore rules for Super Ragondin
+# See https://git-scm.com/docs/gitignore/#_pattern_format
+
+# Hidden files and directories
+.*
+
+# Editor temp files
+*.tmp
+*.bak
+
+# Emacs
+*~
+\#*\#
+
+# LibreOffice
+*.osl-tmp
+
+# OpenOffice
+*.lck
+
+# Microsoft Office
+~$*
+
+# Vim
+*.sw[px]
+
+# Google Chrome partial downloads
+*.crdownload
