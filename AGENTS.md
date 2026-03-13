@@ -95,6 +95,7 @@ Cargo workspace with three crates:
 | `OPENROUTER_VISION_MODEL` | `google/gemini-2.5-flash` | Vision/image model |
 | `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-3.2-24b-instruct` | Chat completion model (main reasoning loop) |
 | `OPENROUTER_SUBAGENT_MODEL` | `google/gemini-2.5-flash` | Model for sub-agent summarization calls (cheaper/faster) |
+| `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image-preview` | Image generation model |
 
 The LanceDB database is stored at `<data_dir>/rag/` (e.g. `~/.local/share/super-ragondin/rag/`), accessible via `config.rag_dir()`.
 
