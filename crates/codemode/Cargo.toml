@@ -24,6 +24,7 @@ tracing = "0.1"
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22.1"
+infer = "0.19.0"
 
 [dev-dependencies]
 tempfile = "3"
