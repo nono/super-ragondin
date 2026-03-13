@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::ignore::IgnoreRules;
 use crate::model::{
     Conflict, ConflictKind, LocalFileId, LocalNode, NodeInfo, NodeType, PlanResult, RemoteId,
     RemoteNode, SyncOp, SyncedRecord, content_matches,
@@ -10,12 +11,17 @@ use std::path::PathBuf;
 pub struct Planner<'a> {
     store: &'a TreeStore,
     sync_root: PathBuf,
+    rules: &'a IgnoreRules,
 }
 
 impl<'a> Planner<'a> {
     #[must_use]
-    pub const fn new(store: &'a TreeStore, sync_root: PathBuf) -> Self {
-        Self { store, sync_root }
+    pub const fn new(store: &'a TreeStore, sync_root: PathBuf, rules: &'a IgnoreRules) -> Self {
+        Self {
+            store,
+            sync_root,
+            rules,
+        }
     }
 
     /// Plan sync operations by comparing all three trees.
@@ -23,6 +29,7 @@ impl<'a> Planner<'a> {
     /// # Errors
     ///
     /// Returns an error if store access fails.
+    #[allow(clippy::too_many_lines)]
     pub fn plan(&self) -> Result<Vec<PlanResult>> {
         let mut results = Vec::new();
 
@@ -56,6 +63,17 @@ impl<'a> Planner<'a> {
         let cyclic_remote_ids = Self::find_remote_cycles(&remote_by_id);
 
         for remote in &remote_nodes {
+            let rel_path = self.compute_remote_rel_path(remote);
+            let rel_str = rel_path.to_string_lossy();
+            if !rel_str.is_empty()
+                && self
+                    .rules
+                    .is_ignored(&rel_str, remote.node_type == NodeType::Directory)
+            {
+                tracing::debug!(path = %rel_str, "⏭️ Skipping ignored remote node");
+                continue;
+            }
+
             if cyclic_remote_ids.contains(&remote.id) {
                 tracing::warn!(
                     remote_id = remote.id.as_str(),
@@ -91,6 +109,16 @@ impl<'a> Planner<'a> {
         for local in &local_nodes {
             let synced = synced_by_local.get(&local.id);
             if synced.is_some() {
+                continue;
+            }
+            let rel_path = self.compute_local_rel_path(local);
+            let rel_str = rel_path.to_string_lossy();
+            if !rel_str.is_empty()
+                && self
+                    .rules
+                    .is_ignored(&rel_str, local.node_type == NodeType::Directory)
+            {
+                tracing::debug!(path = %rel_str, "⏭️ Skipping ignored local node");
                 continue;
             }
             results.extend(self.plan_local_only(local));

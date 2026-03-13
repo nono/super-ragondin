@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::ignore::IgnoreRules;
 use crate::model::{LocalFileId, LocalNode, NodeType};
 use crate::util::compute_md5_from_path;
 use std::collections::HashMap;
@@ -103,6 +104,123 @@ impl Scanner {
 
             if metadata.is_dir() {
                 Self::scan_recursive(&entry_path, Some(&id), nodes, inode_to_id)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Scan all files and directories under the root, skipping ignored entries.
+    ///
+    /// # Errors
+    /// Returns an error if filesystem operations fail.
+    pub fn scan_with_ignore(&self, rules: &IgnoreRules) -> Result<Vec<LocalNode>> {
+        tracing::info!(root = %self.root.display(), "🔍 Starting local filesystem scan (with ignore rules)");
+        let mut nodes = Vec::new();
+        let mut inode_to_id: HashMap<(u64, u64), LocalFileId> = HashMap::new();
+
+        let root_meta = fs::symlink_metadata(&self.root)?;
+        let root_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+
+        Self::scan_recursive_with_ignore(
+            &self.root,
+            Some(&root_id),
+            &mut nodes,
+            &mut inode_to_id,
+            &self.root,
+            rules,
+        )?;
+        tracing::info!(root = %self.root.display(), count = nodes.len(), "🔍 Scan complete");
+        Ok(nodes)
+    }
+
+    fn scan_recursive_with_ignore(
+        path: &Path,
+        parent_id: Option<&LocalFileId>,
+        nodes: &mut Vec<LocalNode>,
+        inode_to_id: &mut HashMap<(u64, u64), LocalFileId>,
+        root: &Path,
+        rules: &IgnoreRules,
+    ) -> Result<()> {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+
+            // Use symlink_metadata to skip symlinks/special files
+            let Ok(metadata) = fs::symlink_metadata(&entry_path) else {
+                continue;
+            };
+
+            // Skip symlinks and special files
+            if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+                tracing::debug!(path = %entry_path.display(), "⏭️ Skipping non-regular file");
+                continue;
+            }
+
+            let is_dir = metadata.is_dir();
+
+            // Check ignore rules
+            if let Ok(rel_path) = entry_path.strip_prefix(root) {
+                let rel_str = rel_path.to_string_lossy();
+                if rules.is_ignored(&rel_str, is_dir) {
+                    tracing::debug!(path = %entry_path.display(), "⏭️ Skipping ignored entry");
+                    continue;
+                }
+            }
+
+            let device_id = metadata.dev();
+            let inode = metadata.ino();
+
+            let id = inode_to_id
+                .entry((device_id, inode))
+                .or_insert_with(|| LocalFileId::new(device_id, inode))
+                .clone();
+
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            let (node_type, md5sum, size) = if is_dir {
+                (NodeType::Directory, None, None)
+            } else {
+                let size = metadata.len();
+                let mtime = metadata.mtime();
+                let md5sum = compute_md5_from_path(&entry_path)?;
+
+                // TOCTOU protection: re-stat and verify unchanged
+                let Ok(metadata_after) = fs::symlink_metadata(&entry_path) else {
+                    continue; // File disappeared
+                };
+                if metadata_after.len() != size
+                    || metadata_after.mtime() != mtime
+                    || metadata_after.ino() != inode
+                {
+                    tracing::debug!(path = %entry_path.display(), "⏭️ File changed during hash, skipping");
+                    continue;
+                }
+
+                (NodeType::File, Some(md5sum), Some(size))
+            };
+
+            let node = LocalNode {
+                id: id.clone(),
+                parent_id: parent_id.cloned(),
+                name,
+                node_type,
+                md5sum,
+                size,
+                mtime: metadata.mtime(),
+            };
+
+            nodes.push(node);
+
+            if is_dir {
+                Self::scan_recursive_with_ignore(
+                    &entry_path,
+                    Some(&id),
+                    nodes,
+                    inode_to_id,
+                    root,
+                    rules,
+                )?;
             }
         }
 

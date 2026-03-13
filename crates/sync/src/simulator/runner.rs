@@ -1,5 +1,6 @@
 use super::mock_fs::MockFs;
 use super::mock_remote::MockRemote;
+use crate::ignore::IgnoreRules;
 use crate::model::{
     LocalFileId, LocalNode, NodeInfo, NodeType, RemoteId, RemoteNode, SyncedRecord, TRASH_DIR_ID,
 };
@@ -35,6 +36,8 @@ pub struct SimulationRunner {
     pending_concurrent_remote_ops: Vec<ConcurrentRemoteOp>,
     /// Saved snapshot for rollback testing
     snapshot: Option<RunnerSnapshot>,
+    /// Ignore rules (no-op for simulation)
+    rules: IgnoreRules,
 }
 
 /// Complete snapshot of the runner state for rollback testing
@@ -274,6 +277,7 @@ impl SimulationRunner {
             pending_upload_failures: 0,
             pending_concurrent_remote_ops: Vec::new(),
             snapshot: None,
+            rules: IgnoreRules::none(),
         }
     }
 
@@ -920,7 +924,7 @@ impl SimulationRunner {
     }
 
     fn plan_sync_ops(&mut self) -> Result<Vec<crate::model::SyncOp>, String> {
-        let planner = Planner::new(&self.store, self.sync_root.clone());
+        let planner = Planner::new(&self.store, self.sync_root.clone(), &self.rules);
         let results = planner.plan().map_err(|e| e.to_string())?;
         let mut ops = Vec::new();
         for r in results {
@@ -1822,7 +1826,7 @@ impl SimulationRunner {
     /// # Errors
     /// Returns an error listing unexpected operations or conflicts
     pub fn check_idempotency(&self) -> Result<(), String> {
-        let planner = Planner::new(&self.store, self.sync_root.clone());
+        let planner = Planner::new(&self.store, self.sync_root.clone(), &self.rules);
         let results = planner.plan().map_err(|e| e.to_string())?;
 
         let ops: Vec<_> = results

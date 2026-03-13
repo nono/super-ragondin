@@ -8,6 +8,7 @@
 //! ```
 
 use std::process::Command;
+use super_ragondin_sync::ignore::IgnoreRules;
 use super_ragondin_sync::model::{PlanResult, RemoteId, SyncOp};
 use super_ragondin_sync::remote::client::CozyClient;
 use super_ragondin_sync::store::TreeStore;
@@ -121,6 +122,7 @@ impl TestCozy {
             store,
             self.sync_dir.path().to_path_buf(),
             self.staging_dir.path().to_path_buf(),
+            IgnoreRules::default_only(),
         )
     }
 }
