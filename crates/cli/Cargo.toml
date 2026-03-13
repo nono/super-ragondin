@@ -11,6 +11,7 @@ dirs = "6.0.0"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 uuid = { version = "1.20.0", features = ["v4"] }
+tokio-util = "0.7.18"
 
 [lints]
 workspace = true
