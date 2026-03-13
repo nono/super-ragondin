@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 pub const OPENROUTER_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 pub const OPENROUTER_REFERER: &str = "https://github.com/super-ragondin";
+pub const OPENROUTER_IMAGE_MODEL_DEFAULT: &str = "google/gemini-3.1-flash-image-preview";
 
 #[derive(Clone)]
 pub struct RagConfig {
@@ -10,6 +11,7 @@ pub struct RagConfig {
     pub vision_model: String,
     pub chat_model: String,
     pub subagent_model: String,
+    pub image_model: String,
     pub db_path: PathBuf,
 }
 
@@ -21,6 +23,7 @@ impl std::fmt::Debug for RagConfig {
             .field("vision_model", &self.vision_model)
             .field("chat_model", &self.chat_model)
             .field("subagent_model", &self.subagent_model)
+            .field("image_model", &self.image_model)
             .field("db_path", &self.db_path)
             .finish()
     }
@@ -39,6 +42,8 @@ impl RagConfig {
                 .unwrap_or_else(|_| "mistralai/mistral-small-3.2-24b-instruct".to_string()),
             subagent_model: std::env::var("OPENROUTER_SUBAGENT_MODEL")
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
+            image_model: std::env::var("OPENROUTER_IMAGE_MODEL")
+                .unwrap_or_else(|_| OPENROUTER_IMAGE_MODEL_DEFAULT.to_string()),
             db_path,
         }
     }
@@ -57,6 +62,7 @@ mod tests {
                 "OPENROUTER_VISION_MODEL",
                 "OPENROUTER_CHAT_MODEL",
                 "OPENROUTER_SUBAGENT_MODEL",
+                "OPENROUTER_IMAGE_MODEL",
             ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
@@ -67,6 +73,7 @@ mod tests {
                     "mistralai/mistral-small-3.2-24b-instruct"
                 );
                 assert_eq!(config.subagent_model, "google/gemini-2.5-flash");
+                assert_eq!(config.image_model, "google/gemini-3.1-flash-image-preview");
                 assert!(config.api_key.is_empty());
             },
         );
@@ -97,6 +104,17 @@ mod tests {
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
                 assert_eq!(config.subagent_model, "anthropic/claude-haiku-4-5");
+            },
+        );
+    }
+
+    #[test]
+    fn test_image_model_from_env() {
+        temp_env::with_vars(
+            [("OPENROUTER_IMAGE_MODEL", Some("custom/img-model"))],
+            || {
+                let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
+                assert_eq!(config.image_model, "custom/img-model");
             },
         );
     }
