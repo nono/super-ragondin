@@ -140,6 +140,7 @@ impl Sandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use boa_engine::Context;
     use std::sync::Arc;
     use super_ragondin_rag::{config::RagConfig, store::RagStore};
@@ -245,6 +246,43 @@ mod tests {
         assert_eq!(parsed, vec!["alpha", "beta"]);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_generate_image_rejects_path_traversal() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox.execute(r#"generateImage("test", { path: "../escape.png" })"#);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("path") || msg.contains("escapes"),
+            "got: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_generate_image_rejects_reference_traversal() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox.execute(r#"generateImage("test", { reference: "../secret.png" })"#);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("path") || msg.contains("escapes"),
+            "got: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_generate_image_nonexistent_reference_returns_io_error() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox.execute(r#"generateImage("test", { reference: "nonexistent.png" })"#);
+        assert!(result.is_err());
+        // Should be an IO error about the missing file, not a path error
+        let msg = result.unwrap_err();
+        assert!(
+            !msg.contains("escapes") && !msg.contains("relative"),
+            "expected IO error, got: {msg}"
+        );
+    }
+
     #[test]
     fn test_jsvalue_to_serde_string() {
         let mut ctx = Context::default();
@@ -273,5 +311,67 @@ mod tests {
         let js = serde_to_jsvalue(&original, &mut ctx).unwrap();
         let back = jsvalue_to_serde(js, &mut ctx);
         assert_eq!(original, back);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires OPENROUTER_API_KEY"]
+    async fn test_generate_image_basic() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox
+            .execute(
+                r#"generateImage("a simple red circle on white background", { size: "0.5K" })"#,
+            )
+            .expect("generateImage should succeed");
+        // Result is a JSON string (quoted base64)
+        let b64: String = serde_json::from_str(&result).expect("result should be a JSON string");
+        assert!(!b64.is_empty(), "base64 result should not be empty");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&b64)
+            .expect("result should be valid base64");
+        // Check for PNG (\x89PNG) or JPEG (\xFF\xD8) magic bytes
+        assert!(
+            bytes.starts_with(b"\x89PNG") || bytes.starts_with(b"\xFF\xD8"),
+            "decoded bytes should start with PNG or JPEG magic, got: {:?}",
+            &bytes[..4.min(bytes.len())]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires OPENROUTER_API_KEY"]
+    async fn test_generate_image_saves_file() {
+        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        sandbox
+            .execute(r#"generateImage("a simple blue square", { path: "generated/out.png", size: "0.5K" })"#)
+            .expect("generateImage with path should succeed");
+        let file_path = sync_dir.path().join("generated/out.png");
+        assert!(file_path.exists(), "file should have been written");
+        let bytes = std::fs::read(&file_path).unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires OPENROUTER_API_KEY"]
+    async fn test_generate_image_with_reference() {
+        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+
+        // Write a minimal valid 1x1 PNG as the reference image
+        let minimal_png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR length + type
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, // bit depth etc.
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT length + type
+            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, // IDAT data
+            0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, // IDAT data
+            0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, // IEND length + type
+            0x44, 0xAE, 0x42, 0x60, 0x82, // IEND data
+        ];
+        std::fs::write(sync_dir.path().join("ref.png"), minimal_png).unwrap();
+
+        let result = sandbox
+            .execute(r#"generateImage("enhance this image with warm colors", { reference: "ref.png", size: "0.5K" })"#)
+            .expect("generateImage with reference should succeed");
+        let b64: String = serde_json::from_str(&result).expect("result should be a JSON string");
+        assert!(!b64.is_empty(), "should return non-empty base64");
     }
 }
