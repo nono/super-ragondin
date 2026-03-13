@@ -125,6 +125,8 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register saveFile: {e}"))?;
         tools::list_dirs::register(&mut ctx)
             .map_err(|e| format!("JS error: register listDirs: {e}"))?;
+        tools::generate_image::register(&mut ctx)
+            .map_err(|e| format!("JS error: register generateImage: {e}"))?;
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -208,6 +210,7 @@ mod tests {
             "subAgent",
             "saveFile",
             "listDirs",
+            "generateImage",
         ] {
             let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
             assert_eq!(

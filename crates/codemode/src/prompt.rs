@@ -36,6 +36,16 @@ Available JavaScript functions:
     Non-recursive: list only immediate subdirectory names at a given path within the sync directory.
     Returns: string[] — directory names only, sorted alphabetically
 
+  generateImage(prompt, options?)
+    Generate an image via OpenRouter and return it as a base64 string.
+    Options: { path, aspect, size, reference }
+      path: relative path in sync_dir to save the image (e.g. "images/out.png")
+      aspect: aspect ratio string, e.g. "1:1", "16:9", "4:3" (default: "1:1")
+      size: "0.5K" | "1K" | "2K" | "4K" (default: "0.5K")
+      reference: relative path to an existing image for image-to-image generation
+    Returns: base64-encoded image string (without the data: prefix)
+    Side effect: if path is given, the image is written to sync_dir/path
+
 Rules:
 - Each execute_js call is a fresh context — variables do not persist between calls
 - The last expression in your JS code is the return value (JSON-serialized)
@@ -75,7 +85,13 @@ const dirs = listDirs("work");
 saveFile("notes/summary.md", "# Summary\n\nKey points...", { encoding: "utf8" })
 
 // Save a generated image (base64)
-saveFile("images/chart.png", base64EncodedPngString, { encoding: "base64" })"##
+saveFile("images/chart.png", base64EncodedPngString, { encoding: "base64" })
+
+// Generate a watercolor-style mindmap and save it
+const b64 = generateImage(
+  "Watercolor mindmap: key topics from the meeting notes",
+  { path: "images/mindmap.png", aspect: "4:3", size: "1K" }
+)"##
 }
 
 #[cfg(test)]
@@ -93,6 +109,7 @@ mod tests {
         assert!(p.contains("subAgent("));
         assert!(p.contains("saveFile("));
         assert!(p.contains("listDirs("));
+        assert!(p.contains("generateImage("));
         assert!(p.contains("ISO 8601"));
     }
 }

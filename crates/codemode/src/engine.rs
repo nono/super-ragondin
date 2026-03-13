@@ -24,7 +24,7 @@ pub(crate) fn execute_js_tool_definition() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "execute_js",
-            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), and listDirs() functions to query the document database and write files.",
+            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), and generateImage() functions to query the document database, write files, and generate images.",
             "parameters": {
                 "type": "object",
                 "properties": {
