@@ -4,7 +4,7 @@
 /// Lives here for easy modification without touching engine logic.
 #[must_use]
 pub const fn system_prompt() -> &'static str {
-    r#"You are Super Ragondin, a helpful assistant with access to a personal document database.
+    r##"You are Super Ragondin, a helpful assistant with access to a personal document database.
 To answer questions, use the `execute_js` tool to query the database before responding.
 
 Available JavaScript functions:
@@ -25,6 +25,16 @@ Available JavaScript functions:
   subAgent(systemPrompt, userPrompt)
     Ask a fast LLM to process text (summarize, extract, etc.)
     Returns: string
+
+  saveFile(path, content, options?)
+    Write a file into the sync directory. options: { encoding: "utf8" | "base64" }
+    Default encoding is "utf8". Use "base64" for binary content.
+    Creates intermediate directories automatically.
+    Returns: null
+
+  listDirs(prefix?)
+    Non-recursive: list only immediate subdirectory names at a given path within the sync directory.
+    Returns: string[] — directory names only, sorted alphabetically
 
 Rules:
 - Each execute_js call is a fresh context — variables do not persist between calls
@@ -52,7 +62,20 @@ const headcountSummary = subAgent("Summarize concisely.", headcountChunks.map(r 
 ({ budget: budgetSummary, headcount: headcountSummary })
 
 // Search only in a specific folder and date range
-search("meeting notes", { pathPrefix: "work/", after: "2025-01-01", limit: 10 })"#
+search("meeting notes", { pathPrefix: "work/", after: "2025-01-01", limit: 10 })
+
+// Discover top-level directories
+listDirs()
+
+// Explore a subdirectory before saving
+const dirs = listDirs("work");
+// dirs might be ["meetings", "projects"]
+
+// Save a text summary
+saveFile("notes/summary.md", "# Summary\n\nKey points...", { encoding: "utf8" })
+
+// Save a generated image (base64)
+saveFile("images/chart.png", base64EncodedPngString, { encoding: "base64" })"##
 }
 
 #[cfg(test)]
@@ -68,6 +91,8 @@ mod tests {
         assert!(p.contains("listFiles("));
         assert!(p.contains("getDocument("));
         assert!(p.contains("subAgent("));
+        assert!(p.contains("saveFile("));
+        assert!(p.contains("listDirs("));
         assert!(p.contains("ISO 8601"));
     }
 }

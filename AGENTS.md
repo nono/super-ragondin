@@ -71,6 +71,8 @@ Cargo workspace with three crates:
   - `src/tools/list_files.rs` - `listFiles(options?)` JS global — metadata-based file discovery
   - `src/tools/get_document.rs` - `getDocument(docId)` JS global — all chunks for a document
   - `src/tools/sub_agent.rs` - `subAgent(systemPrompt, userPrompt)` JS global — cheap sub-LLM call
+  - `src/tools/save_file.rs` - `saveFile(path, content, options?)` JS global — write files into sync_dir (utf8/base64 encoding, path traversal prevention)
+  - `src/tools/list_dirs.rs` - `listDirs(prefix?)` JS global — list immediate subdirectory names at a path within sync_dir
   - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
 
 ## Findings

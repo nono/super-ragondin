@@ -326,7 +326,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let engine = CodeModeEngine::new(rag_config)
+        let engine = CodeModeEngine::new(rag_config, config.sync_dir)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         engine

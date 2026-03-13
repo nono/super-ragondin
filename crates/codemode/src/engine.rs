@@ -24,7 +24,7 @@ pub(crate) fn execute_js_tool_definition() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "execute_js",
-            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), and subAgent() functions to query the document database.",
+            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), and listDirs() functions to query the document database and write files.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -76,6 +76,7 @@ pub(crate) fn extract_text(response: &serde_json::Value) -> Option<String> {
 pub struct CodeModeEngine {
     store: Arc<RagStore>,
     config: RagConfig,
+    sync_dir: std::path::PathBuf,
 }
 
 impl CodeModeEngine {
@@ -83,9 +84,13 @@ impl CodeModeEngine {
     ///
     /// # Errors
     /// Returns error if the RAG store cannot be opened.
-    pub async fn new(config: RagConfig) -> Result<Self> {
+    pub async fn new(config: RagConfig, sync_dir: std::path::PathBuf) -> Result<Self> {
         let store = Arc::new(RagStore::open(&config.db_path).await?);
-        Ok(Self { store, config })
+        Ok(Self {
+            store,
+            config,
+            sync_dir,
+        })
     }
 
     /// Ask a question using the code-mode LLM loop.
@@ -139,10 +144,11 @@ impl CodeModeEngine {
                     tracing::debug!(iteration, code = %tool_call.code, "execute_js tool call");
                     let store_clone = Arc::clone(&self.store);
                     let config_clone = self.config.clone();
+                    let sync_dir_clone = self.sync_dir.clone();
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
-                        let sandbox = Sandbox::new(store_clone, config_clone);
+                        let sandbox = Sandbox::new(store_clone, config_clone, sync_dir_clone);
                         (id_clone, sandbox.execute(&code_clone))
                     }));
                 }
