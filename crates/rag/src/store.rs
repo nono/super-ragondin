@@ -668,7 +668,8 @@ mod tests {
     fn unix_secs(t: std::time::SystemTime) -> i64 {
         t.duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i64
+            .as_secs()
+            .cast_signed()
     }
 
     async fn make_store() -> (RagStore, tempfile::TempDir) {
