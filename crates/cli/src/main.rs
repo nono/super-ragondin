@@ -330,7 +330,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         engine
-            .ask(&question)
+            .ask(&question, None)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))
     })?;

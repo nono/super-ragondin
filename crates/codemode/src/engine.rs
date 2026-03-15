@@ -99,7 +99,7 @@ impl CodeModeEngine {
     ///
     /// # Errors
     /// Returns error if the `OpenRouter` API call fails or the iteration limit is reached.
-    pub async fn ask(&self, question: &str) -> Result<()> {
+    pub async fn ask(&self, question: &str, context_dir: Option<std::path::PathBuf>) -> Result<()> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -107,10 +107,13 @@ impl CodeModeEngine {
         let api_key = &self.config.api_key;
         let model = &self.config.chat_model;
 
-        let mut messages = vec![
-            serde_json::json!({"role": "system", "content": system_prompt()}),
-            serde_json::json!({"role": "user", "content": question}),
-        ];
+        let context_msg = self.build_context_message(context_dir).await;
+
+        let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt()})];
+        if let Some(ctx) = context_msg {
+            messages.push(serde_json::json!({"role": "user", "content": ctx}));
+        }
+        messages.push(serde_json::json!({"role": "user", "content": question}));
 
         let tools = vec![execute_js_tool_definition()];
 
@@ -182,11 +185,139 @@ impl CodeModeEngine {
 
         Ok(())
     }
+
+    /// Build the optional context message to prepend before the user question.
+    ///
+    /// Returns `None` if there are no signals to report (no CWD inside `sync_dir`
+    /// and no recently modified files).
+    async fn build_context_message(
+        &self,
+        context_dir: Option<std::path::PathBuf>,
+    ) -> Option<String> {
+        // Compute relative CWD if inside sync_dir
+        let relative_cwd: Option<String> = context_dir.and_then(|dir| {
+            dir.strip_prefix(&self.sync_dir)
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        });
+
+        // Query recent files (last 15 minutes)
+        let since = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(900))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let recent_files = self.store.list_recent(since).await.unwrap_or_default();
+
+        if relative_cwd.is_none() && recent_files.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec!["[Context]".to_string()];
+        if let Some(ref cwd) = relative_cwd {
+            let display = if cwd.is_empty() { "." } else { cwd.as_str() };
+            lines.push(format!("Current directory: {display}"));
+        }
+        if !recent_files.is_empty() {
+            lines.push("Recently modified (last 15 min):".to_string());
+            for path in &recent_files {
+                lines.push(format!("- {path}"));
+            }
+        }
+        Some(lines.join("\n"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Helpers for build_context_message tests
+    async fn make_engine_for_ctx_test() -> (CodeModeEngine, tempfile::TempDir, tempfile::TempDir) {
+        use std::sync::Arc;
+        use super_ragondin_rag::{config::RagConfig, store::RagStore};
+        let db_dir = tempfile::tempdir().expect("db_dir");
+        let sync_dir = tempfile::tempdir().expect("sync_dir");
+        let store = RagStore::open(db_dir.path()).await.expect("store");
+        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
+        let engine = CodeModeEngine {
+            store: Arc::new(store),
+            config,
+            sync_dir: sync_dir.path().to_path_buf(),
+        };
+        (engine, db_dir, sync_dir)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_build_context_message_none_when_no_signals() {
+        let (engine, _db, _sync) = make_engine_for_ctx_test().await;
+        let result = engine.build_context_message(None).await;
+        assert!(result.is_none(), "should be None when no signals");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_build_context_message_includes_relative_dir() {
+        let (engine, _db, sync) = make_engine_for_ctx_test().await;
+        let sub = sync.path().join("work/meetings");
+        std::fs::create_dir_all(&sub).unwrap();
+        let result = engine.build_context_message(Some(sub)).await;
+        let msg = result.expect("should have message");
+        assert!(msg.contains("Current directory:"), "got: {msg}");
+        assert!(msg.contains("work/meetings"), "got: {msg}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_build_context_message_outside_sync_dir_no_cwd_line() {
+        let (engine, _db, _sync) = make_engine_for_ctx_test().await;
+        let outside = tempfile::tempdir().unwrap();
+        let result = engine
+            .build_context_message(Some(outside.path().to_path_buf()))
+            .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_build_context_message_recent_files_no_cwd() {
+        use std::time::UNIX_EPOCH;
+        use super_ragondin_rag::store::ChunkRecord;
+        let (engine, _db, _sync) = make_engine_for_ctx_test().await;
+        let now = std::time::SystemTime::now();
+        let recent_secs = now
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed()
+            - 60;
+        let chunk = ChunkRecord {
+            id: "docs/recent.md-0".to_string(),
+            doc_id: "docs/recent.md".to_string(),
+            mime_type: "text/plain".to_string(),
+            mtime: recent_secs,
+            chunk_index: 0,
+            chunk_text: "hello".to_string(),
+            md5sum: "abc".to_string(),
+            embedding: vec![0.0_f32; 3072],
+        };
+        engine.store.upsert_chunks(&[chunk]).await.unwrap();
+
+        let result = engine.build_context_message(None).await;
+        let msg = result.expect("should have message when recent files exist");
+        assert!(msg.contains("Recently modified"), "got: {msg}");
+        assert!(msg.contains("docs/recent.md"), "got: {msg}");
+        assert!(
+            !msg.contains("Current directory:"),
+            "should not have CWD line; got: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_context_message_starts_with_context_header() {
+        let (engine, _db, sync) = make_engine_for_ctx_test().await;
+        let sub = sync.path().join("notes");
+        std::fs::create_dir_all(&sub).unwrap();
+        let ctx_msg = engine.build_context_message(Some(sub)).await;
+        assert!(ctx_msg.is_some());
+        let msg = ctx_msg.unwrap();
+        assert!(msg.starts_with("[Context]"), "got: {msg}");
+    }
 
     #[test]
     fn test_execute_js_tool_definition() {
