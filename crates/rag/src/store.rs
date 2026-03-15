@@ -401,6 +401,31 @@ impl RagStore {
         Ok(docs)
     }
 
+    /// Return the `doc_id`s of documents modified after `since`, most recent first.
+    ///
+    /// Uses the existing [`MetadataFilter`] `after` field (Unix timestamp seconds).
+    /// De-duplicates across chunks and caps results at 20.
+    ///
+    /// # Errors
+    /// Returns error if the database query fails.
+    pub async fn list_recent(&self, since: std::time::SystemTime) -> Result<Vec<String>> {
+        let since_secs = since
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+        let filter = MetadataFilter {
+            mime_type: None,
+            path_prefix: None,
+            after: Some(since_secs),
+            before: None,
+        };
+        let docs = self
+            .list_docs(Some(&filter), DocSort::Recent, Some(20))
+            .await?;
+        Ok(docs.into_iter().map(|d| d.doc_id).collect())
+    }
+
     /// Return all chunks for a document, ordered by `chunk_index`.
     ///
     /// # Errors
@@ -638,5 +663,108 @@ mod tests {
         let indexed = store.list_indexed().await.unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].doc_id, "notes/b.md");
+    }
+
+    fn unix_secs(t: std::time::SystemTime) -> i64 {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    async fn make_store() -> (RagStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = RagStore::open(dir.path()).await.expect("open");
+        (store, dir)
+    }
+
+    fn dummy_chunk(doc_id: &str, mtime: std::time::SystemTime) -> ChunkRecord {
+        ChunkRecord {
+            id: format!("{doc_id}-0"),
+            doc_id: doc_id.to_string(),
+            mime_type: "text/plain".to_string(),
+            mtime: unix_secs(mtime),
+            chunk_index: 0,
+            chunk_text: "hello".to_string(),
+            md5sum: "abc".to_string(),
+            embedding: vec![0.0_f32; 3072],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_recent_returns_only_recent_docs() {
+        let (store, _dir) = make_store().await;
+        let now = std::time::SystemTime::now();
+        let recent = now - std::time::Duration::from_secs(60);
+        let old = now - std::time::Duration::from_secs(3600);
+
+        store
+            .upsert_chunks(&[dummy_chunk("docs/new.md", recent)])
+            .await
+            .unwrap();
+        store
+            .upsert_chunks(&[dummy_chunk("docs/old.md", old)])
+            .await
+            .unwrap();
+
+        let since = now - std::time::Duration::from_secs(900);
+        let result = store.list_recent(since).await.unwrap();
+
+        assert_eq!(result, vec!["docs/new.md".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_recent_empty_when_nothing_recent() {
+        let (store, _dir) = make_store().await;
+        let now = std::time::SystemTime::now();
+        let old = now - std::time::Duration::from_secs(3600);
+
+        store
+            .upsert_chunks(&[dummy_chunk("docs/old.md", old)])
+            .await
+            .unwrap();
+
+        let since = now - std::time::Duration::from_secs(900);
+        let result = store.list_recent(since).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_recent_deduplicates_doc_ids() {
+        let (store, _dir) = make_store().await;
+        let now = std::time::SystemTime::now();
+        let recent = now - std::time::Duration::from_secs(60);
+
+        let mut c0 = dummy_chunk("docs/multi.md", recent);
+        let mut c1 = dummy_chunk("docs/multi.md", recent);
+        c0.id = "docs/multi.md-0".to_string();
+        c0.chunk_index = 0;
+        c1.id = "docs/multi.md-1".to_string();
+        c1.chunk_index = 1;
+        store.upsert_chunks(&[c0, c1]).await.unwrap();
+
+        let since = now - std::time::Duration::from_secs(900);
+        let result = store.list_recent(since).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "docs/multi.md");
+    }
+
+    #[tokio::test]
+    async fn test_list_recent_caps_at_20() {
+        let (store, _dir) = make_store().await;
+        let now = std::time::SystemTime::now();
+        let recent = now - std::time::Duration::from_secs(60);
+
+        let chunks: Vec<ChunkRecord> = (0..25_u32)
+            .map(|i| dummy_chunk(&format!("docs/file{i}.md"), recent))
+            .collect();
+        store.upsert_chunks(&chunks).await.unwrap();
+
+        let since = now - std::time::Duration::from_secs(900);
+        let result = store.list_recent(since).await.unwrap();
+        assert!(
+            result.len() <= 20,
+            "got {} results, expected <= 20",
+            result.len()
+        );
     }
 }
