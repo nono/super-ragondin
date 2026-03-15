@@ -329,8 +329,9 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         let engine = CodeModeEngine::new(rag_config, config.sync_dir)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
+        let cwd = std::env::current_dir().ok();
         engine
-            .ask(&question, None)
+            .ask(&question, cwd)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))
     })?;
