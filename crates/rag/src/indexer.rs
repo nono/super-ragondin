@@ -57,11 +57,16 @@ pub async fn reconcile(
         rag_store.delete_doc(rel_path).await?;
 
         match index_file(rel_path, &file_path, &mime_type, mtime, md5sum, embedder).await {
+            Ok(chunks) if chunks.is_empty() => {
+                rag_store.upsert_skipped(rel_path, md5sum).await?;
+                tracing::debug!(
+                    rel_path,
+                    "File produced no indexable content, marked as skipped"
+                );
+            }
             Ok(chunks) => {
-                if !chunks.is_empty() {
-                    rag_store.upsert_chunks(&chunks).await?;
-                    tracing::info!(rel_path, chunks = chunks.len(), "Indexed file");
-                }
+                rag_store.upsert_chunks(&chunks).await?;
+                tracing::info!(rel_path, chunks = chunks.len(), "Indexed file");
             }
             Err(e) => {
                 tracing::warn!(rel_path, error = %e, "Failed to index file, skipping");
@@ -212,6 +217,90 @@ mod tests {
         let indexed = rag_store.list_indexed().await.unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].doc_id, "notes/hello.txt");
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_skips_unindexable_file_on_second_run() {
+        let db_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        // Write a binary file that will produce no chunks (application/octet-stream, no extractor)
+        let file_path = sync_dir.path().join("binary.bin");
+        std::fs::write(&file_path, b"\x00\x01\x02\x03\xff\xfe binary junk").unwrap();
+
+        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let embedder = StubEmbedder;
+        let records = vec![synced_record("binary.bin", "deadbeef")];
+
+        // First run: file is processed, produces no chunks, should be marked as skipped
+        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+            .await
+            .unwrap();
+
+        // Skipped entry should now be recorded
+        let indexed = rag_store.list_indexed().await.unwrap();
+        assert_eq!(
+            indexed.len(),
+            1,
+            "skipped file should appear in list_indexed"
+        );
+        assert_eq!(indexed[0].doc_id, "binary.bin");
+        assert_eq!(indexed[0].md5sum, "deadbeef");
+
+        // Second run: same md5sum → should be skipped without re-processing
+        // (We verify this indirectly: list_indexed still has exactly one entry,
+        // not two, confirming no duplicate was inserted.)
+        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+            .await
+            .unwrap();
+
+        let indexed = rag_store.list_indexed().await.unwrap();
+        assert_eq!(indexed.len(), 1, "no duplicate entry after second run");
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_reindexes_previously_skipped_file_when_md5_changes() {
+        let db_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        // First: binary file, no chunks → skipped
+        let file_path = sync_dir.path().join("doc.bin");
+        std::fs::write(&file_path, b"\x00binary").unwrap();
+        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let embedder = StubEmbedder;
+
+        reconcile(
+            &[synced_record("doc.bin", "md5_v1")],
+            sync_dir.path(),
+            &rag_store,
+            &embedder,
+        )
+        .await
+        .unwrap();
+
+        let indexed = rag_store.list_indexed().await.unwrap();
+        assert_eq!(indexed[0].md5sum, "md5_v1");
+
+        // Now file changes to text content — new md5sum triggers re-processing
+        std::fs::write(
+            &file_path,
+            "Now this is indexable text content for the RAG.",
+        )
+        .unwrap();
+
+        reconcile(
+            &[synced_record("doc.bin", "md5_v2")],
+            sync_dir.path(),
+            &rag_store,
+            &embedder,
+        )
+        .await
+        .unwrap();
+
+        // File should now be properly indexed with the new md5sum
+        let indexed = rag_store.list_indexed().await.unwrap();
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(indexed[0].md5sum, "md5_v2");
     }
 
     #[tokio::test]

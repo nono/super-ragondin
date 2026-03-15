@@ -15,6 +15,7 @@ use lancedb::connection::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 const TABLE_NAME: &str = "chunks";
+const SKIPPED_TABLE_NAME: &str = "skipped_docs";
 const EMBED_DIM: i32 = 3072;
 
 pub struct ChunkRecord {
@@ -112,6 +113,13 @@ impl MetadataFilter {
     }
 }
 
+fn skipped_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("doc_id", DataType::Utf8, false),
+        Field::new("md5sum", DataType::Utf8, false),
+    ]))
+}
+
 fn chunks_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -134,6 +142,7 @@ fn chunks_schema() -> Arc<Schema> {
 
 pub struct RagStore {
     table: Table,
+    skipped_table: Table,
 }
 
 impl RagStore {
@@ -153,7 +162,18 @@ impl RagStore {
             let schema = chunks_schema();
             db.create_empty_table(TABLE_NAME, schema).execute().await?
         };
-        Ok(Self { table })
+        let skipped_table = if table_names.contains(&SKIPPED_TABLE_NAME.to_string()) {
+            db.open_table(SKIPPED_TABLE_NAME).execute().await?
+        } else {
+            let schema = skipped_schema();
+            db.create_empty_table(SKIPPED_TABLE_NAME, schema)
+                .execute()
+                .await?
+        };
+        Ok(Self {
+            table,
+            skipped_table,
+        })
     }
 
     /// Insert chunks into the store.
@@ -214,10 +234,39 @@ impl RagStore {
     pub async fn delete_doc(&self, doc_id: &str) -> Result<()> {
         let safe = doc_id.replace('\'', "\\'");
         self.table.delete(&format!("doc_id = '{safe}'")).await?;
+        self.skipped_table
+            .delete(&format!("doc_id = '{safe}'"))
+            .await?;
         Ok(())
     }
 
-    /// Return one entry per unique `doc_id`.
+    /// Record a file that produced no indexable content.
+    ///
+    /// Stores the `doc_id` and its `md5sum` so that [`list_indexed`] can return it
+    /// and [`reconcile`] will skip re-processing the file unless the content changes.
+    ///
+    /// Callers should call [`delete_doc`] first to remove any stale entry.
+    ///
+    /// # Errors
+    /// Returns error if the database operation fails.
+    pub async fn upsert_skipped(&self, doc_id: &str, md5sum: &str) -> Result<()> {
+        let schema = skipped_schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![doc_id])),
+                Arc::new(StringArray::from(vec![md5sum])),
+            ],
+        )?;
+        let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
+        self.skipped_table.add(batches).execute().await?;
+        Ok(())
+    }
+
+    /// Return one entry per unique `doc_id` — both properly indexed docs and skipped docs.
+    ///
+    /// Skipped docs are files that produced no indexable content; they are tracked so that
+    /// [`reconcile`] can avoid re-processing them on every sync cycle.
     ///
     /// NOTE: All chunks for a given `doc_id` share the same md5sum (invariant maintained by caller
     /// who always deletes before upserting). This deduplication relies on that invariant.
@@ -228,6 +277,10 @@ impl RagStore {
     /// # Panics
     /// Panics if the expected columns are not present in the result batch.
     pub async fn list_indexed(&self) -> Result<Vec<IndexedDoc>> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut result = Vec::new();
+
+        // Collect properly indexed docs (chunks table)
         let mut stream: SendableRecordBatchStream = self
             .table
             .query()
@@ -237,9 +290,6 @@ impl RagStore {
             ]))
             .execute()
             .await?;
-
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut result = Vec::new();
         while let Some(batch) = stream.try_next().await? {
             let doc_ids = batch
                 .column_by_name("doc_id")
@@ -263,6 +313,41 @@ impl RagStore {
                 }
             }
         }
+
+        // Also collect skipped docs (no content to index, but md5sum recorded)
+        let mut skipped_stream: SendableRecordBatchStream = self
+            .skipped_table
+            .query()
+            .select(Select::Columns(vec![
+                "doc_id".to_string(),
+                "md5sum".to_string(),
+            ]))
+            .execute()
+            .await?;
+        while let Some(batch) = skipped_stream.try_next().await? {
+            let doc_ids = batch
+                .column_by_name("doc_id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let md5sums = batch
+                .column_by_name("md5sum")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                let doc_id = doc_ids.value(i).to_string();
+                if seen.insert(doc_id.clone()) {
+                    result.push(IndexedDoc {
+                        doc_id,
+                        md5sum: md5sums.value(i).to_string(),
+                    });
+                }
+            }
+        }
+
         Ok(result)
     }
 
