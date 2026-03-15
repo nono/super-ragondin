@@ -205,7 +205,10 @@ impl CodeModeEngine {
         let since = std::time::SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(900))
             .unwrap_or(std::time::UNIX_EPOCH);
-        let recent_files = self.store.list_recent(since).await.unwrap_or_default();
+        let recent_files = self.store.list_recent(since).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "list_recent failed, skipping recent files context");
+            vec![]
+        });
 
         if relative_cwd.is_none() && recent_files.is_empty() {
             return None;
