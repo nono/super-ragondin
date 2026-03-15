@@ -113,6 +113,15 @@ impl MetadataFilter {
     }
 }
 
+fn str_col<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+}
+
 fn skipped_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("doc_id", DataType::Utf8, false),
@@ -140,6 +149,27 @@ fn chunks_schema() -> Arc<Schema> {
     ]))
 }
 
+async fn collect_doc_id_md5sum(
+    mut stream: SendableRecordBatchStream,
+    seen: &mut HashSet<String>,
+    result: &mut Vec<IndexedDoc>,
+) -> Result<()> {
+    while let Some(batch) = stream.try_next().await? {
+        let doc_ids = str_col(&batch, "doc_id");
+        let md5sums = str_col(&batch, "md5sum");
+        for i in 0..batch.num_rows() {
+            let doc_id = doc_ids.value(i).to_string();
+            if seen.insert(doc_id.clone()) {
+                result.push(IndexedDoc {
+                    doc_id,
+                    md5sum: md5sums.value(i).to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct RagStore {
     table: Table,
     skipped_table: Table,
@@ -156,13 +186,13 @@ impl RagStore {
             .execute()
             .await?;
         let table_names = db.table_names().execute().await?;
-        let table = if table_names.contains(&TABLE_NAME.to_string()) {
+        let table = if table_names.iter().any(|n| n == TABLE_NAME) {
             db.open_table(TABLE_NAME).execute().await?
         } else {
             let schema = chunks_schema();
             db.create_empty_table(TABLE_NAME, schema).execute().await?
         };
-        let skipped_table = if table_names.contains(&SKIPPED_TABLE_NAME.to_string()) {
+        let skipped_table = if table_names.iter().any(|n| n == SKIPPED_TABLE_NAME) {
             db.open_table(SKIPPED_TABLE_NAME).execute().await?
         } else {
             let schema = skipped_schema();
@@ -233,10 +263,11 @@ impl RagStore {
     /// Returns error if the database delete operation fails.
     pub async fn delete_doc(&self, doc_id: &str) -> Result<()> {
         let safe = doc_id.replace('\'', "\\'");
-        self.table.delete(&format!("doc_id = '{safe}'")).await?;
-        self.skipped_table
-            .delete(&format!("doc_id = '{safe}'"))
-            .await?;
+        let clause = format!("doc_id = '{safe}'");
+        tokio::try_join!(
+            self.table.delete(&clause),
+            self.skipped_table.delete(&clause)
+        )?;
         Ok(())
     }
 
@@ -280,73 +311,15 @@ impl RagStore {
         let mut seen: HashSet<String> = HashSet::new();
         let mut result = Vec::new();
 
+        let cols = Select::Columns(vec!["doc_id".to_string(), "md5sum".to_string()]);
+
         // Collect properly indexed docs (chunks table)
-        let mut stream: SendableRecordBatchStream = self
-            .table
-            .query()
-            .select(Select::Columns(vec![
-                "doc_id".to_string(),
-                "md5sum".to_string(),
-            ]))
-            .execute()
-            .await?;
-        while let Some(batch) = stream.try_next().await? {
-            let doc_ids = batch
-                .column_by_name("doc_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let md5sums = batch
-                .column_by_name("md5sum")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            for i in 0..batch.num_rows() {
-                let doc_id = doc_ids.value(i).to_string();
-                if seen.insert(doc_id.clone()) {
-                    result.push(IndexedDoc {
-                        doc_id,
-                        md5sum: md5sums.value(i).to_string(),
-                    });
-                }
-            }
-        }
+        let stream = self.table.query().select(cols.clone()).execute().await?;
+        collect_doc_id_md5sum(stream, &mut seen, &mut result).await?;
 
         // Also collect skipped docs (no content to index, but md5sum recorded)
-        let mut skipped_stream: SendableRecordBatchStream = self
-            .skipped_table
-            .query()
-            .select(Select::Columns(vec![
-                "doc_id".to_string(),
-                "md5sum".to_string(),
-            ]))
-            .execute()
-            .await?;
-        while let Some(batch) = skipped_stream.try_next().await? {
-            let doc_ids = batch
-                .column_by_name("doc_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let md5sums = batch
-                .column_by_name("md5sum")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            for i in 0..batch.num_rows() {
-                let doc_id = doc_ids.value(i).to_string();
-                if seen.insert(doc_id.clone()) {
-                    result.push(IndexedDoc {
-                        doc_id,
-                        md5sum: md5sums.value(i).to_string(),
-                    });
-                }
-            }
-        }
+        let skipped_stream = self.skipped_table.query().select(cols).execute().await?;
+        collect_doc_id_md5sum(skipped_stream, &mut seen, &mut result).await?;
 
         Ok(result)
     }
@@ -373,30 +346,15 @@ impl RagStore {
 
         let mut results = Vec::new();
         while let Some(batch) = stream.try_next().await? {
-            let doc_ids = batch
-                .column_by_name("doc_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let mimes = batch
-                .column_by_name("mime_type")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+            let doc_ids = str_col(&batch, "doc_id");
+            let mimes = str_col(&batch, "mime_type");
             let mtimes = batch
                 .column_by_name("mtime")
                 .unwrap()
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .unwrap();
-            let texts = batch
-                .column_by_name("chunk_text")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+            let texts = str_col(&batch, "chunk_text");
             for i in 0..batch.num_rows() {
                 results.push(SearchResult {
                     doc_id: doc_ids.value(i).to_string(),
@@ -440,18 +398,8 @@ impl RagStore {
 
         let mut map: HashMap<String, DocInfo> = HashMap::new();
         while let Some(batch) = stream.try_next().await? {
-            let doc_ids = batch
-                .column_by_name("doc_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let mimes = batch
-                .column_by_name("mime_type")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+            let doc_ids = str_col(&batch, "doc_id");
+            let mimes = str_col(&batch, "mime_type");
             let mtimes = batch
                 .column_by_name("mtime")
                 .unwrap()
@@ -539,12 +487,7 @@ impl RagStore {
                 .as_any()
                 .downcast_ref::<UInt32Array>()
                 .unwrap();
-            let texts = batch
-                .column_by_name("chunk_text")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+            let texts = str_col(&batch, "chunk_text");
             for i in 0..batch.num_rows() {
                 chunks.push(ChunkInfo {
                     chunk_index: indices.value(i),
@@ -847,9 +790,10 @@ mod tests {
 
         let since = now - std::time::Duration::from_secs(900);
         let result = store.list_recent(since).await.unwrap();
-        assert!(
-            result.len() <= 20,
-            "got {} results, expected <= 20",
+        assert_eq!(
+            result.len(),
+            20,
+            "expected exactly 20 results (cap), got {}",
             result.len()
         );
     }
