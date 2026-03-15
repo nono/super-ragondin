@@ -221,10 +221,22 @@ fn cmd_watch() -> Result<()> {
 
     tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 
-    let mut last_sync = Instant::now();
+    let mut pending = true;
+    let mut last_sync: Option<Instant> = None;
     let debounce = Duration::from_secs(2);
 
     loop {
+        let debounce_ok = last_sync.is_none_or(|t| t.elapsed() > debounce);
+
+        if pending && debounce_ok {
+            tracing::info!("🔄 Syncing");
+            pending = false;
+            if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
+                tracing::error!(error = %e, "❌ Sync failed");
+            }
+            last_sync = Some(Instant::now());
+        }
+
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(trigger) => {
                 match &trigger {
@@ -235,21 +247,11 @@ fn cmd_watch() -> Result<()> {
                         tracing::info!("🔌 Remote change notification received");
                     }
                 }
-                if last_sync.elapsed() > debounce {
-                    tracing::info!("🔄 Changes detected, syncing");
-                    if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
-                        tracing::error!(error = %e, "❌ Sync failed");
-                    }
-                    last_sync = Instant::now();
-                }
+                pending = true;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_sync.elapsed() > Duration::from_secs(30) {
-                    tracing::info!("🔄 Periodic sync");
-                    if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
-                        tracing::error!(error = %e, "❌ Sync failed");
-                    }
-                    last_sync = Instant::now();
+                if last_sync.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
+                    pending = true;
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
