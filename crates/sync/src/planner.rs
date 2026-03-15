@@ -71,6 +71,15 @@ impl<'a> Planner<'a> {
                     .is_ignored(&rel_str, remote.node_type == NodeType::Directory)
             {
                 tracing::debug!(path = %rel_str, "⏭️ Skipping ignored remote node");
+                if let Some(synced) = synced_by_remote.get(&remote.id) {
+                    tracing::info!(
+                        rel_path = &synced.rel_path,
+                        "🧹 Previously synced file now ignored, removing synced record"
+                    );
+                    results.push(PlanResult::Op(SyncOp::DeleteSynced {
+                        local_id: synced.local_id.clone(),
+                    }));
+                }
                 continue;
             }
 
@@ -125,6 +134,25 @@ impl<'a> Planner<'a> {
         }
 
         for synced in &synced_records {
+            if !synced.rel_path.is_empty()
+                && self
+                    .rules
+                    .is_ignored(&synced.rel_path, synced.node_type == NodeType::Directory)
+            {
+                // When the remote still exists, the remote loop already
+                // emitted DeleteSynced; only emit here for one-side-deleted.
+                if !remote_by_id.contains_key(&synced.remote_id) {
+                    tracing::debug!(
+                        rel_path = &synced.rel_path,
+                        "⏭️ Synced record now ignored, cleaning up"
+                    );
+                    results.push(PlanResult::Op(SyncOp::DeleteSynced {
+                        local_id: synced.local_id.clone(),
+                    }));
+                }
+                continue;
+            }
+
             let local = local_by_id.get(&synced.local_id);
             let remote = remote_by_id.get(&synced.remote_id);
 

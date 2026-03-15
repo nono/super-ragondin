@@ -1836,3 +1836,111 @@ fn test_actual_cycle_is_detected() {
         "Both nodes in the cycle should produce CycleDetected conflicts"
     );
 }
+
+#[test]
+fn test_synced_file_now_ignored_cleans_up_synced_record() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+
+    // File is synced and still present on both sides
+    let local_file = make_local_file(lid.clone(), None, "secret.tmp", "abc123");
+    let remote_file = make_remote_file(rid.clone(), None, "secret.tmp", "abc123");
+    let synced = make_synced(
+        lid.clone(),
+        rid.clone(),
+        "secret.tmp",
+        Some("abc123"),
+        NodeType::File,
+    );
+
+    store.insert_local_node(&local_file).unwrap();
+    store.insert_remote_node(&remote_file).unwrap();
+    store.insert_synced(&synced).unwrap();
+
+    // Use rules that ignore .tmp files (default rules do this)
+    let rules = IgnoreRules::default_only();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    // Should only produce a DeleteSynced to stop tracking, NOT delete local or remote
+    assert_eq!(ops.len(), 1, "ops: {ops:?}");
+    match &ops[0] {
+        PlanResult::Op(SyncOp::DeleteSynced { local_id }) => {
+            assert_eq!(*local_id, lid);
+        }
+        other => panic!("Expected DeleteSynced, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_synced_file_now_ignored_with_remote_deleted_just_cleans_up() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+
+    // File is synced, local still exists, remote was deleted
+    let local_file = make_local_file(lid.clone(), None, "notes.bak", "abc123");
+    let synced = make_synced(
+        lid.clone(),
+        rid.clone(),
+        "notes.bak",
+        Some("abc123"),
+        NodeType::File,
+    );
+
+    store.insert_local_node(&local_file).unwrap();
+    store.insert_synced(&synced).unwrap();
+
+    let rules = IgnoreRules::default_only();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    // Should NOT delete the local file — just clean up synced record
+    assert_eq!(ops.len(), 1, "ops: {ops:?}");
+    match &ops[0] {
+        PlanResult::Op(SyncOp::DeleteSynced { local_id }) => {
+            assert_eq!(*local_id, lid);
+        }
+        other => panic!("Expected DeleteSynced, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_synced_file_now_ignored_with_local_deleted_just_cleans_up() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+
+    // File is synced, remote still exists, local was deleted
+    let remote_file = make_remote_file(rid.clone(), None, "cache.swp", "abc123");
+    let synced = make_synced(
+        lid.clone(),
+        rid.clone(),
+        "cache.swp",
+        Some("abc123"),
+        NodeType::File,
+    );
+
+    store.insert_remote_node(&remote_file).unwrap();
+    store.insert_synced(&synced).unwrap();
+
+    let rules = IgnoreRules::default_only();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    // Should NOT delete the remote file — just clean up synced record
+    assert_eq!(ops.len(), 1, "ops: {ops:?}");
+    match &ops[0] {
+        PlanResult::Op(SyncOp::DeleteSynced { local_id }) => {
+            assert_eq!(*local_id, lid);
+        }
+        other => panic!("Expected DeleteSynced, got {:?}", other),
+    }
+}
