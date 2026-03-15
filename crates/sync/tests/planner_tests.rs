@@ -1749,3 +1749,90 @@ fn test_both_deleted_generates_delete_synced() {
         "Planner should not modify the store; the synced record should still exist"
     );
 }
+
+#[test]
+fn test_orphaned_remote_node_is_not_treated_as_cycle() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // Root
+    let synced_root = make_synced(
+        local_id(1, 1),
+        remote_id("root"),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(local_id(1, 1), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
+
+    // A remote file whose parent ("missing_parent") is NOT in the remote tree
+    // (e.g., incomplete fetch). This should NOT be treated as a cycle.
+    let orphan = make_remote_file(
+        remote_id("orphan1"),
+        Some(remote_id("missing_parent")),
+        "orphan.txt",
+        "abc",
+    );
+    store.insert_remote_node(&orphan).unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let cycle_conflicts: Vec<_> = ops
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Conflict(c) if c.kind == ConflictKind::CycleDetected))
+        .collect();
+    assert!(
+        cycle_conflicts.is_empty(),
+        "Orphaned nodes should not produce CycleDetected conflicts, got {cycle_conflicts:?}"
+    );
+}
+
+#[test]
+fn test_actual_cycle_is_detected() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // Root
+    let synced_root = make_synced(
+        local_id(1, 1),
+        remote_id("root"),
+        "",
+        None,
+        NodeType::Directory,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(local_id(1, 1), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(remote_id("root"), None, ""))
+        .unwrap();
+
+    // Two directories forming a cycle: A→B→A
+    let dir_a = make_remote_dir(remote_id("dir_a"), Some(remote_id("dir_b")), "dir_a");
+    let dir_b = make_remote_dir(remote_id("dir_b"), Some(remote_id("dir_a")), "dir_b");
+    store.insert_remote_node(&dir_a).unwrap();
+    store.insert_remote_node(&dir_b).unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let cycle_conflicts: Vec<_> = ops
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Conflict(c) if c.kind == ConflictKind::CycleDetected))
+        .collect();
+    assert_eq!(
+        cycle_conflicts.len(),
+        2,
+        "Both nodes in the cycle should produce CycleDetected conflicts"
+    );
+}

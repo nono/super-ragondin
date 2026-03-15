@@ -584,38 +584,38 @@ impl<'a> Planner<'a> {
     /// This includes nodes directly in a cycle (e.g., A→B→A) and nodes
     /// whose ancestor is in a cycle (unreachable descendants).
     fn find_remote_cycles(remote_by_id: &HashMap<RemoteId, &RemoteNode>) -> HashSet<RemoteId> {
-        let mut unreachable = HashSet::new();
+        let mut cyclic = HashSet::new();
 
         for id in remote_by_id.keys() {
             let mut visited = HashSet::new();
             let mut current = Some(id.clone());
-            let mut reaches_root = false;
+            let mut is_cycle = false;
             while let Some(ref cid) = current {
                 if !visited.insert(cid.clone()) {
-                    break; // cycle detected
+                    is_cycle = true;
+                    break;
                 }
                 match remote_by_id.get(cid) {
                     None => {
-                        // Parent node not found — orphaned (ancestor was deleted).
-                        // This is unreachable, not a root.
+                        // Parent not in map — orphaned / incomplete tree.
+                        // Not a cycle; just skip this node silently.
                         break;
                     }
                     Some(node) => match node.parent_id.as_ref() {
                         None => {
                             // Reached a root node (no parent).
-                            reaches_root = true;
                             break;
                         }
                         Some(pid) => current = Some(pid.clone()),
                     },
                 }
             }
-            if !reaches_root {
-                unreachable.insert(id.clone());
+            if is_cycle {
+                cyclic.insert(id.clone());
             }
         }
 
-        unreachable
+        cyclic
     }
 
     fn compute_local_path(&self, remote: &RemoteNode) -> PathBuf {
