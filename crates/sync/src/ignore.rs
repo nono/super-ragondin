@@ -40,19 +40,28 @@ impl IgnoreRules {
     /// If the user file does not exist or cannot be read, only defaults apply.
     #[must_use]
     pub fn load(user_rules_path: Option<&Path>) -> Self {
-        let user_content = user_rules_path
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_default();
+        let user_content =
+            user_rules_path.map_or_else(String::new, |p| match std::fs::read_to_string(p) {
+                Ok(content) => content,
+                Err(e) => {
+                    tracing::warn!(path = %p.display(), error = %e, "⚠️ Failed to read user syncignore file, using defaults only");
+                    String::new()
+                }
+            });
         Self::build(DEFAULT_RULES, &user_content)
     }
 
     fn build(default_content: &str, user_content: &str) -> Self {
         let mut builder = GitignoreBuilder::new("");
         for line in default_content.lines() {
-            builder.add_line(None, line).ok();
+            if let Err(e) = builder.add_line(None, line) {
+                tracing::warn!(line, error = %e, "⚠️ Malformed default syncignore pattern");
+            }
         }
         for line in user_content.lines() {
-            builder.add_line(None, line).ok();
+            if let Err(e) = builder.add_line(None, line) {
+                tracing::warn!(line, error = %e, "⚠️ Malformed user syncignore pattern");
+            }
         }
         let gitignore = builder.build().expect("failed to build gitignore rules");
         Self { gitignore }
