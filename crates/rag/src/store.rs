@@ -113,13 +113,31 @@ impl MetadataFilter {
     }
 }
 
-fn str_col<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
+fn str_col<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray> {
+    let col = batch
         .column_by_name(name)
-        .unwrap()
-        .as_any()
+        .ok_or_else(|| anyhow::anyhow!("missing column: {name}"))?;
+    col.as_any()
         .downcast_ref::<StringArray>()
-        .unwrap()
+        .ok_or_else(|| anyhow::anyhow!("column {name} is not StringArray"))
+}
+
+fn int64_col<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int64Array> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("missing column: {name}"))?;
+    col.as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| anyhow::anyhow!("column {name} is not Int64Array"))
+}
+
+fn uint32_col<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt32Array> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("missing column: {name}"))?;
+    col.as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| anyhow::anyhow!("column {name} is not UInt32Array"))
 }
 
 fn skipped_schema() -> Arc<Schema> {
@@ -155,8 +173,8 @@ async fn collect_doc_id_md5sum(
     result: &mut Vec<IndexedDoc>,
 ) -> Result<()> {
     while let Some(batch) = stream.try_next().await? {
-        let doc_ids = str_col(&batch, "doc_id");
-        let md5sums = str_col(&batch, "md5sum");
+        let doc_ids = str_col(&batch, "doc_id")?;
+        let md5sums = str_col(&batch, "md5sum")?;
         for i in 0..batch.num_rows() {
             let doc_id = doc_ids.value(i).to_string();
             if seen.insert(doc_id.clone()) {
@@ -276,11 +294,15 @@ impl RagStore {
     /// Stores the `doc_id` and its `md5sum` so that [`list_indexed`] can return it
     /// and [`reconcile`] will skip re-processing the file unless the content changes.
     ///
-    /// Callers should call [`delete_doc`] first to remove any stale entry.
+    /// Idempotent: deletes any existing entry for `doc_id` before inserting.
     ///
     /// # Errors
     /// Returns error if the database operation fails.
     pub async fn upsert_skipped(&self, doc_id: &str, md5sum: &str) -> Result<()> {
+        let safe = doc_id.replace('\'', "\\'");
+        self.skipped_table
+            .delete(&format!("doc_id = '{safe}'"))
+            .await?;
         let schema = skipped_schema();
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -325,10 +347,7 @@ impl RagStore {
     }
 
     /// # Errors
-    /// Returns error if the vector search query fails.
-    ///
-    /// # Panics
-    /// Panics if the expected columns are not present in the result batch.
+    /// Returns error if the vector search query fails or if result columns are missing or mistyped.
     #[allow(clippy::similar_names)]
     pub async fn search(
         &self,
@@ -346,15 +365,10 @@ impl RagStore {
 
         let mut results = Vec::new();
         while let Some(batch) = stream.try_next().await? {
-            let doc_ids = str_col(&batch, "doc_id");
-            let mimes = str_col(&batch, "mime_type");
-            let mtimes = batch
-                .column_by_name("mtime")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let texts = str_col(&batch, "chunk_text");
+            let doc_ids = str_col(&batch, "doc_id")?;
+            let mimes = str_col(&batch, "mime_type")?;
+            let mtimes = int64_col(&batch, "mtime")?;
+            let texts = str_col(&batch, "chunk_text")?;
             for i in 0..batch.num_rows() {
                 results.push(SearchResult {
                     doc_id: doc_ids.value(i).to_string(),
@@ -373,10 +387,7 @@ impl RagStore {
     /// `limit` is applied after de-duplication.
     ///
     /// # Errors
-    /// Returns error if the database query fails.
-    ///
-    /// # Panics
-    /// Panics if expected columns are absent from the result batch.
+    /// Returns error if the database query fails or if result columns are missing or mistyped.
     #[allow(clippy::similar_names)]
     pub async fn list_docs(
         &self,
@@ -398,14 +409,9 @@ impl RagStore {
 
         let mut map: HashMap<String, DocInfo> = HashMap::new();
         while let Some(batch) = stream.try_next().await? {
-            let doc_ids = str_col(&batch, "doc_id");
-            let mimes = str_col(&batch, "mime_type");
-            let mtimes = batch
-                .column_by_name("mtime")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+            let doc_ids = str_col(&batch, "doc_id")?;
+            let mimes = str_col(&batch, "mime_type")?;
+            let mtimes = int64_col(&batch, "mtime")?;
             for i in 0..batch.num_rows() {
                 let doc_id = doc_ids.value(i).to_string();
                 let mtime = mtimes.value(i);
@@ -462,10 +468,7 @@ impl RagStore {
     /// Return all chunks for a document, ordered by `chunk_index`.
     ///
     /// # Errors
-    /// Returns error if the database query fails.
-    ///
-    /// # Panics
-    /// Panics if expected columns are absent from the result batch.
+    /// Returns error if the database query fails or if result columns are missing or mistyped.
     pub async fn get_chunks(&self, doc_id: &str) -> Result<Vec<ChunkInfo>> {
         let safe = doc_id.replace('\'', "\\'");
         let mut stream: SendableRecordBatchStream = self
@@ -481,13 +484,8 @@ impl RagStore {
 
         let mut chunks = Vec::new();
         while let Some(batch) = stream.try_next().await? {
-            let indices = batch
-                .column_by_name("chunk_index")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap();
-            let texts = str_col(&batch, "chunk_text");
+            let indices = uint32_col(&batch, "chunk_index")?;
+            let texts = str_col(&batch, "chunk_text")?;
             for i in 0..batch.num_rows() {
                 chunks.push(ChunkInfo {
                     chunk_index: indices.value(i),
