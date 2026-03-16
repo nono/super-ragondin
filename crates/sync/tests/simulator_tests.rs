@@ -880,6 +880,535 @@ fn sync_is_idempotent_after_local_create() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Successive/Chained Move Tests ====================
+
+/// Helper: set up a runner with root + initial sync, return (runner, root_id).
+fn setup_runner_with_root(dir: &std::path::Path) -> (SimulationRunner, RemoteId) {
+    let store = TreeStore::open(dir).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    (runner, root_id)
+}
+
+/// Find the local ID for a node by name.
+fn find_local_id_by_name(runner: &SimulationRunner, name: &str) -> LocalFileId {
+    runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == name)
+        .map(|n| n.id.clone())
+        .unwrap_or_else(|| panic!("local node '{name}' not found"))
+}
+
+// -- move_file_successive: src/file → dst1/file, sync, dst1/file → dst2/file --
+
+#[test]
+fn move_file_successive_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create dirs and file on remote, then sync to get local copies
+    for (id, name) in [
+        ("dir-src", "src"),
+        ("dir-dst1", "dst1"),
+        ("dir-dst2", "dst2"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let dst1_id = find_local_id_by_name(&runner, "dst1");
+    let dst2_id = find_local_id_by_name(&runner, "dst2");
+
+    // Move 1: src/file → dst1/file
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id.clone(),
+            new_parent_local_id: Some(dst1_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move 2: dst1/file → dst2/file
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(dst2_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    let remote_files: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(remote_files.len(), 1, "Exactly one 'file' on remote");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_file_successive_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    for (id, name) in [
+        ("dir-src", "src"),
+        ("dir-dst1", "dst1"),
+        ("dir-dst2", "dst2"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let dst1_id = find_local_id_by_name(&runner, "dst1");
+    let dst2_id = find_local_id_by_name(&runner, "dst2");
+
+    // Stop client, perform both moves while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id.clone(),
+            new_parent_local_id: Some(dst1_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(dst2_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_file_successive_remote: same pattern but changes happen on remote side --
+
+#[test]
+fn move_file_successive_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    for (id, name) in [
+        ("dir-src", "src"),
+        ("dir-dst1", "dst1"),
+        ("dir-dst2", "dst2"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move 1: src/file → dst1/file on remote
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-1"),
+            new_parent_id: RemoteId::new("dir-dst1"),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move 2: dst1/file → dst2/file on remote
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-1"),
+            new_parent_id: RemoteId::new("dir-dst2"),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1);
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_dir_a_to_b_to_c_to_b: cyclic rename A→B, sync, B→C, sync, C→B --
+
+#[test]
+fn move_dir_a_to_b_to_c_to_b_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create parent dir "src" and dir "A" inside it on remote
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-src"),
+            parent_id: Some(root_id.clone()),
+            name: "src".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a"),
+            parent_id: Some(RemoteId::new("dir-src")),
+            name: "A".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let dir_a_id = find_local_id_by_name(&runner, "A");
+    let src_id = find_local_id_by_name(&runner, "src");
+
+    // Rename A → B
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_a_id.clone(),
+            new_parent_local_id: Some(src_id.clone()),
+            new_name: "B".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Rename B → C
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_a_id.clone(),
+            new_parent_local_id: Some(src_id.clone()),
+            new_name: "C".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Rename C → B (reuse name B)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_a_id,
+            new_parent_local_id: Some(src_id),
+            new_name: "B".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_stale: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "A" || n.name == "C")
+        .collect();
+    assert!(local_stale.is_empty(), "A and C should not exist locally");
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(local_b.len(), 1, "Exactly one B should exist locally");
+
+    let remote_b: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(remote_b.len(), 1, "Exactly one B should exist on remote");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_dir_a_to_b_to_c_to_b_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-src"),
+            parent_id: Some(root_id.clone()),
+            name: "src".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a"),
+            parent_id: Some(RemoteId::new("dir-src")),
+            name: "A".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let dir_a_id = find_local_id_by_name(&runner, "A");
+    let src_id = find_local_id_by_name(&runner, "src");
+
+    // Stop, do all three renames, restart
+    runner.apply(SimAction::StopClient).unwrap();
+    for name in ["B", "C", "B"] {
+        runner
+            .apply(SimAction::LocalMove {
+                local_id: dir_a_id.clone(),
+                new_parent_local_id: Some(src_id.clone()),
+                new_name: name.to_string(),
+            })
+            .unwrap();
+    }
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(local_b.len(), 1, "Exactly one B should exist locally");
+
+    let remote_stale: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "A" || n.name == "C")
+        .collect();
+    assert!(
+        remote_stale.is_empty(),
+        "A and C should not exist on remote"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_file_a_to_b_to_c_to_b: same cyclic pattern but for files --
+
+#[test]
+fn move_file_a_to_b_to_c_to_b_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-src"),
+            parent_id: Some(root_id.clone()),
+            name: "src".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "A".to_string(),
+            content: b"foo".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_a_id = find_local_id_by_name(&runner, "A");
+    let src_id = find_local_id_by_name(&runner, "src");
+
+    // Rename A → B
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a_id.clone(),
+            new_parent_local_id: Some(src_id.clone()),
+            new_name: "B".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Rename B → C
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a_id.clone(),
+            new_parent_local_id: Some(src_id.clone()),
+            new_name: "C".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Rename C → B (reuse name B)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a_id,
+            new_parent_local_id: Some(src_id),
+            new_name: "B".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(local_b.len(), 1, "Exactly one B should exist locally");
+
+    let local_stale: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "A" || n.name == "C")
+        .collect();
+    assert!(local_stale.is_empty(), "A and C should not exist locally");
+
+    let remote_b: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(remote_b.len(), 1, "Exactly one B should exist on remote");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_file_a_to_b_to_c_to_b_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-src"),
+            parent_id: Some(root_id.clone()),
+            name: "src".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "A".to_string(),
+            content: b"foo".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_a_id = find_local_id_by_name(&runner, "A");
+    let src_id = find_local_id_by_name(&runner, "src");
+
+    // Stop, do all three renames, restart
+    runner.apply(SimAction::StopClient).unwrap();
+    for name in ["B", "C", "B"] {
+        runner
+            .apply(SimAction::LocalMove {
+                local_id: file_a_id.clone(),
+                new_parent_local_id: Some(src_id.clone()),
+                new_name: name.to_string(),
+            })
+            .unwrap();
+    }
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "B")
+        .collect();
+    assert_eq!(local_b.len(), 1, "Exactly one B should exist locally");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
