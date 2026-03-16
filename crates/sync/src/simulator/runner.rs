@@ -766,6 +766,18 @@ impl SimulationRunner {
                     continue;
                 }
 
+                // If the node's parent no longer exists in remote.nodes, the node
+                // is orphaned (e.g., moved under a parent that was already deleted).
+                // Treat it as deleted to trigger a DeleteLocal for the local counterpart.
+                if node
+                    .parent_id
+                    .as_ref()
+                    .is_some_and(|p| self.remote.get_node(p).is_none())
+                {
+                    self.delete_remote_tree_from_store(&node.id)?;
+                    continue;
+                }
+
                 self.store
                     .insert_remote_node(&node)
                     .map_err(|e| e.to_string())?;
@@ -1376,9 +1388,11 @@ impl SimulationRunner {
 
     fn execute_delete_remote(&mut self, remote_id: &RemoteId) -> Result<(), String> {
         self.remote.delete_node(remote_id);
-        self.store
-            .delete_remote_node(remote_id)
-            .map_err(|e| e.to_string())?;
+        // Cascade-delete the entire subtree from the remote store so the planner
+        // can generate DeleteLocal ops for all descendants in the same sync cycle,
+        // instead of waiting for the next fetch_remote_changes to process the
+        // cascaded change records.
+        self.delete_remote_tree_from_store(remote_id)?;
         if let Some(local_id) = self.remote_to_local.remove(remote_id) {
             self.store
                 .delete_synced(&local_id)
@@ -1407,13 +1421,20 @@ impl SimulationRunner {
         else {
             return Ok(());
         };
-        let new_parent_local = remote_node
-            .parent_id
-            .as_ref()
-            .and_then(|pid| self.remote_to_local.get(pid).cloned());
-        // If the target parent was deleted locally, skip the move to avoid
-        // placing the file under a non-existent directory. A CreateRemoteDir
-        // for the new local parent (or the next sync round) will resolve this.
+        // Determine the new local parent from the remote node's parent.
+        let new_parent_local = if let Some(remote_parent_id) = remote_node.parent_id.as_ref() {
+            // Remote file has a parent directory; it must already be mapped to a
+            // local directory. If not yet mapped (parent not yet synced), defer
+            // the move — the parent will be created and this will be retried.
+            let Some(lpid) = self.remote_to_local.get(remote_parent_id).cloned() else {
+                return Ok(());
+            };
+            Some(lpid)
+        } else {
+            None // Remote file is at root (no parent)
+        };
+        // If the mapped local parent no longer exists, skip the move to avoid
+        // placing the file under a non-existent directory.
         if let Some(ref pid) = new_parent_local
             && !self.local_fs.exists(pid)
         {
