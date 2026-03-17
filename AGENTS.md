@@ -48,8 +48,11 @@ Cargo workspace with three crates:
 - `crates/sync/` (`super-ragondin-sync`) - File synchronization library
   - `src/config.rs` - Configuration (with `src/config/` submodules)
   - `src/error.rs` - Error types
+  - `src/ignore.rs` - `IgnoreRules` — gitignore-style file filtering (wraps `ignore` crate)
+  - `src/logging.rs` - File-based tracing appender setup
   - `src/model.rs` - Core data types (Node, NodeId, SyncOp)
   - `src/planner.rs` - Sync operation planning
+  - `src/util.rs` - Shared utilities (e.g. MD5 helpers, serde helpers)
   - `src/local.rs` - Local filesystem watching (with `src/local/` submodules)
   - `src/remote.rs` - Remote Cozy API client (with `src/remote/` submodules)
   - `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
@@ -75,6 +78,7 @@ Cargo workspace with three crates:
   - `src/tools/list_dirs.rs` - `listDirs(prefix?)` JS global — list immediate subdirectory names at a path within sync_dir
   - `src/tools/generate_image.rs` - `generateImage(prompt, options?)` JS global — image generation via OpenRouter, returns base64 string, optionally saves to sync_dir
   - `src/tools/path_utils.rs` - `check_relative_path()` — shared path traversal validation used by `save_file` and `generate_image`
+  - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
   - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
 
 ## Findings
