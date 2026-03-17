@@ -1,5 +1,4 @@
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
-use super_ragondin_rag::config::{OPENROUTER_API_URL, OPENROUTER_REFERER};
 
 use crate::sandbox::SANDBOX_CTX;
 
@@ -36,8 +35,12 @@ fn sub_agent_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         })?;
         let api_key = sandbox.config.api_key.clone();
         let model = sandbox.config.subagent_model.clone();
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": system_prompt}),
+            serde_json::json!({"role": "user", "content": user_prompt}),
+        ];
         sandbox.handle.block_on(async move {
-            call_sub_agent(&api_key, &model, &system_prompt, &user_prompt)
+            crate::llm::call_llm(&api_key, &model, messages)
                 .await
                 .map_err(|e| JsNativeError::error().with_message(e.to_string()))
         })
@@ -46,39 +49,6 @@ fn sub_agent_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     Ok(JsValue::String(boa_engine::JsString::from(
         response.as_str(),
     )))
-}
-
-async fn call_sub_agent(
-    api_key: &str,
-    model: &str,
-    system_prompt: &str,
-    user_prompt: &str,
-) -> anyhow::Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()?;
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-    });
-
-    let resp = client
-        .post(OPENROUTER_API_URL)
-        .bearer_auth(api_key)
-        .header("HTTP-Referer", OPENROUTER_REFERER)
-        .json(&body)
-        .send()
-        .await?;
-
-    let json: serde_json::Value = resp.json().await?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    Ok(content)
 }
 
 #[cfg(test)]
