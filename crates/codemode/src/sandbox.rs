@@ -365,15 +365,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_scratchpad_persists_across_execute_calls() {
+    async fn test_scratchpad_persists_across_execute_calls()
+    -> Result<(), Box<dyn std::error::Error>> {
         use crate::tools::scratchpad::new_scratchpad;
         // Use two independent temp dirs to avoid opening two RagStore handles
         // on the same LanceDB path simultaneously.
-        let db_a = tempdir().unwrap();
-        let db_b = tempdir().unwrap();
-        let sync_dir = tempdir().unwrap();
-        let store_a = Arc::new(RagStore::open(db_a.path()).await.unwrap());
-        let store_b = Arc::new(RagStore::open(db_b.path()).await.unwrap());
+        let db_a = tempdir()?;
+        let db_b = tempdir()?;
+        let sync_dir = tempdir()?;
+        let store_a = Arc::new(RagStore::open(db_a.path()).await?);
+        let store_b = Arc::new(RagStore::open(db_b.path()).await?);
         let config_a = RagConfig::from_env_with_db_path(db_a.path().to_path_buf());
         let config_b = RagConfig::from_env_with_db_path(db_b.path().to_path_buf());
         let scratchpad = new_scratchpad();
@@ -389,29 +390,33 @@ mod tests {
             sync_dir.path().to_path_buf(),
             Arc::clone(&scratchpad),
         );
-        sandbox_a.execute(r#"remember("x", 42)"#).unwrap();
-        let result = sandbox_b.execute(r#"recall("x")"#).unwrap();
+        sandbox_a.execute(r#"remember("x", 42)"#)?;
+        let result = sandbox_b.execute(r#"recall("x")"#)?;
         assert_eq!(
             result, "42",
             "recall should return the value stored by remember"
         );
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_scratchpad_recall_missing_key_returns_null() {
+    async fn test_scratchpad_recall_missing_key_returns_null()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (sandbox, _db, _sync) = make_sandbox().await;
-        let result = sandbox.execute(r#"recall("nonexistent")"#).unwrap();
+        let result = sandbox.execute(r#"recall("nonexistent")"#)?;
         assert_eq!(result, "null");
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_scratchpad_overwrite() {
+    async fn test_scratchpad_overwrite() -> Result<(), Box<dyn std::error::Error>> {
         // make_sandbox() creates one scratchpad, so all three execute() calls share it.
         let (sandbox, _db, _sync) = make_sandbox().await;
-        sandbox.execute(r#"remember("k", "first")"#).unwrap();
-        sandbox.execute(r#"remember("k", "second")"#).unwrap();
-        let result = sandbox.execute(r#"recall("k")"#).unwrap();
+        sandbox.execute(r#"remember("k", "first")"#)?;
+        sandbox.execute(r#"remember("k", "second")"#)?;
+        let result = sandbox.execute(r#"recall("k")"#)?;
         assert_eq!(result, r#""second""#);
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
