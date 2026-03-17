@@ -332,8 +332,9 @@ fn cmd_ask(args: &[String]) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("no files indexed") {
+                    if e.downcast_ref::<super_ragondin_codemode::suggestions::NoFilesIndexed>()
+                        .is_some()
+                    {
                         println!("No files indexed yet. Run super-ragondin sync first.");
                     } else {
                         println!(

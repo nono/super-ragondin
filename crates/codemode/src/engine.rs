@@ -62,13 +62,7 @@ pub(crate) fn extract_tool_calls(response: &serde_json::Value) -> Vec<ToolCall> 
         .collect()
 }
 
-/// Extract the text content from an `OpenRouter` response, if present.
-#[must_use]
-pub(crate) fn extract_text(response: &serde_json::Value) -> Option<String> {
-    response["choices"][0]["message"]["content"]
-        .as_str()
-        .map(str::to_string)
-}
+use crate::llm::extract_text;
 
 /// Drives the code-mode ask loop for a single user question.
 ///
