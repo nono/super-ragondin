@@ -33,6 +33,16 @@ pub fn register(ctx: &mut Context) -> Result<(), JsError> {
     Ok(())
 }
 
+fn get_scratchpad() -> JsResult<Scratchpad> {
+    SANDBOX_CTX.with(|cell| {
+        let borrow = cell.borrow();
+        let sandbox = borrow.as_ref().ok_or_else(|| {
+            JsNativeError::error().with_message("sandbox context not initialized")
+        })?;
+        Ok(Arc::clone(&sandbox.scratchpad))
+    })
+}
+
 fn remember_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     use boa_engine::JsArgs;
 
@@ -43,13 +53,7 @@ fn remember_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult
 
     let value = jsvalue_to_serde(args.get_or_undefined(1).clone(), ctx);
 
-    let scratchpad = SANDBOX_CTX.with(|cell| {
-        let borrow = cell.borrow();
-        let sandbox = borrow.as_ref().ok_or_else(|| {
-            JsNativeError::error().with_message("sandbox context not initialized")
-        })?;
-        Ok::<Scratchpad, JsError>(Arc::clone(&sandbox.scratchpad))
-    })?;
+    let scratchpad = get_scratchpad()?;
 
     scratchpad
         .lock()
@@ -67,13 +71,7 @@ fn recall_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         .to_string(ctx)?
         .to_std_string_escaped();
 
-    let scratchpad = SANDBOX_CTX.with(|cell| {
-        let borrow = cell.borrow();
-        let sandbox = borrow.as_ref().ok_or_else(|| {
-            JsNativeError::error().with_message("sandbox context not initialized")
-        })?;
-        Ok::<Scratchpad, JsError>(Arc::clone(&sandbox.scratchpad))
-    })?;
+    let scratchpad = get_scratchpad()?;
 
     let value = scratchpad
         .lock()
