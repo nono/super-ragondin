@@ -8,6 +8,7 @@ use super_ragondin_rag::{
 
 use crate::prompt::system_prompt;
 use crate::sandbox::Sandbox;
+use crate::tools::scratchpad::new_scratchpad;
 
 const MAX_ITERATIONS: usize = 10;
 
@@ -151,7 +152,12 @@ impl CodeModeEngine {
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
-                        let sandbox = Sandbox::new(store_clone, config_clone, sync_dir_clone);
+                        let sandbox = Sandbox::new(
+                            store_clone,
+                            config_clone,
+                            sync_dir_clone,
+                            new_scratchpad(),
+                        );
                         (id_clone, sandbox.execute(&code_clone))
                     }));
                 }
