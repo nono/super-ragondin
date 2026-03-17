@@ -2999,6 +2999,227 @@ fn remote_trash_dir_removes_children_locally() {
     runner.check_convergence().unwrap();
 }
 
+// ==================== Move + Trash Tests ====================
+
+/// Move src/file → dst/file, then trash dst/file.
+/// Expected: file is trashed (absent locally), tree is just src/ and dst/.
+#[test]
+fn move_and_trash_file() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create src/ and dst/ dirs, and src/file on remote
+    for (id, name) in [("dir-src", "src"), ("dir-dst", "dst")] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move file from src/ to dst/ on remote
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-1"),
+            new_parent_id: RemoteId::new("dir-dst"),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Trash dst/file on remote
+    runner
+        .apply(SimAction::RemoteTrash {
+            id: RemoteId::new("file-1"),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // File should be gone locally; only src/ and dst/ remain (plus root)
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 0, "file should be trashed");
+
+    let local_names: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert_eq!(local_names.len(), 2, "Only src/ and dst/ should remain");
+    assert!(local_names.contains(&"src".to_string()));
+    assert!(local_names.contains(&"dst".to_string()));
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Move dir/file out to root as "file", then trash the now-empty dir.
+/// Expected: file survives at root, dir is trashed.
+#[test]
+fn move_dir_content_and_trash_dir() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create dir/ with a file inside on remote
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-1"),
+            parent_id: Some(root_id.clone()),
+            name: "dir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-1"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move file out of dir/ to root
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-1"),
+            new_parent_id: root_id,
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Trash the now-empty dir
+    runner
+        .apply(SimAction::RemoteTrash {
+            id: RemoteId::new("dir-1"),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // File should survive at root, dir should be gone
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "file should survive at root");
+
+    let local_dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "dir")
+        .collect();
+    assert_eq!(local_dirs.len(), 0, "dir should be trashed");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Trash src/subdir/file, then move src/subdir → dst/subdir.
+/// Tests dependency ordering: child trash before parent move.
+/// Expected: file is trashed, subdir ends up under dst/.
+#[test]
+fn trash_file_and_move_parent() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create src/, dst/, src/subdir/, and src/subdir/file
+    for (id, parent, name) in [
+        ("dir-src", root_id.clone(), "src"),
+        ("dir-dst", root_id, "dst"),
+        ("dir-subdir", RemoteId::new("dir-src"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(parent),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Trash the file inside subdir
+    runner
+        .apply(SimAction::RemoteTrash {
+            id: RemoteId::new("file-1"),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move subdir from src/ to dst/
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("dir-subdir"),
+            new_parent_id: RemoteId::new("dir-dst"),
+            new_name: "subdir".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // File should be gone
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 0, "file should be trashed");
+
+    // subdir should be under dst/
+    let subdir_nodes: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "subdir")
+        .collect();
+    assert_eq!(subdir_nodes.len(), 1, "subdir should exist");
+
+    // Verify subdir's parent is dst/
+    let dst_local_id = find_local_id_by_name(&runner, "dst");
+    assert_eq!(
+        subdir_nodes[0].parent_id,
+        Some(dst_local_id),
+        "subdir should be under dst/"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Atomic save (write-to-temp, delete, rename) ====================
 
 #[test]
