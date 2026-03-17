@@ -63,7 +63,11 @@ impl SuggestionEngine {
                 .collect::<Vec<_>>()
                 .join(" ");
             let text = if text.len() > 2000 {
-                text[..2000].to_string()
+                let end = (0..=2000)
+                    .rev()
+                    .find(|&i| text.is_char_boundary(i))
+                    .unwrap_or(0);
+                text[..end].to_string()
             } else {
                 text
             };
@@ -97,7 +101,7 @@ impl SuggestionEngine {
 
         // Phase 2: generate suggestions with single 4s timeout (covers initial call + retry)
         let api_key = self.config.api_key.clone();
-        let model = self.config.subagent_model.clone();
+        let model = self.config.chat_model.clone();
         tokio::time::timeout(
             std::time::Duration::from_secs(4),
             generate_suggestions_with_fn(contexts, move |messages| {
