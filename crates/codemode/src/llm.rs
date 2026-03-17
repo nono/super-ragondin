@@ -1,5 +1,13 @@
 use super_ragondin_rag::config::{OPENROUTER_API_URL, OPENROUTER_REFERER};
 
+/// Extract the text content from an `OpenRouter` response, if present.
+#[must_use]
+pub fn extract_text(response: &serde_json::Value) -> Option<String> {
+    response["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_string)
+}
+
 /// Call the `OpenRouter` chat completions endpoint.
 ///
 /// `messages` is a list of objects with `role` and `content` fields.
@@ -24,18 +32,30 @@ pub async fn call_llm(
         .header("HTTP-Referer", OPENROUTER_REFERER)
         .json(&body)
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
     let json: serde_json::Value = resp.json().await?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    Ok(content)
+    if let Some(msg) = json["error"]["message"].as_str() {
+        anyhow::bail!("OpenRouter error: {msg}");
+    }
+    extract_text(&json).ok_or_else(|| anyhow::anyhow!("missing content in OpenRouter response"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_text_present() {
+        let json = serde_json::json!({"choices": [{"message": {"content": "hello"}}]});
+        assert_eq!(extract_text(&json).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_extract_text_missing() {
+        let json = serde_json::json!({"error": {"message": "rate limit exceeded"}});
+        assert!(extract_text(&json).is_none());
+    }
 
     #[test]
     fn test_call_llm_signature_compiles() {

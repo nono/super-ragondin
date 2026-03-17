@@ -6,6 +6,11 @@ use super_ragondin_rag::{
     store::{DocInfo, DocSort, MetadataFilter, RagStore},
 };
 
+/// Returned when `generate` is called but no files have been indexed yet.
+#[derive(Debug, thiserror::Error)]
+#[error("no files indexed")]
+pub struct NoFilesIndexed;
+
 /// Per-file context collected during Phase 1.
 #[derive(Debug, serde::Serialize)]
 pub struct FileContext {
@@ -119,7 +124,7 @@ impl SuggestionEngine {
 /// Returns up to 10 `DocInfo` sorted by most-recently-modified.
 ///
 /// # Errors
-/// Returns `"no files indexed"` error if the store is empty.
+/// Returns a [`NoFilesIndexed`] error if the store is empty.
 pub(crate) async fn query_docs(
     store: &RagStore,
     sync_dir: &std::path::Path,
@@ -156,7 +161,7 @@ pub(crate) async fn query_docs(
     };
 
     if docs.is_empty() {
-        bail!("no files indexed");
+        return Err(NoFilesIndexed.into());
     }
     Ok(docs)
 }
@@ -288,7 +293,12 @@ mod tests {
         let cwd = Some(PathBuf::from("/home/user/other"));
         let result = super::query_docs(&store, sync_dir.as_path(), cwd).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no files indexed"));
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<super::NoFilesIndexed>()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -297,7 +307,12 @@ mod tests {
         let sync_dir = PathBuf::from("/tmp/sync");
         let result = super::query_docs(&store, sync_dir.as_path(), None).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no files indexed"));
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<super::NoFilesIndexed>()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -308,7 +323,12 @@ mod tests {
         let cwd = Some(PathBuf::from("/tmp/sync"));
         let result = super::query_docs(&store, sync_dir.as_path(), cwd).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no files indexed"));
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<super::NoFilesIndexed>()
+                .is_some()
+        );
     }
 
     /// Spec row 1: "cwd inside sync_dir → prefix query used"

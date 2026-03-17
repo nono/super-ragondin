@@ -6363,6 +6363,7 @@ dependencies = [
  "serde_json",
  "super-ragondin-rag",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
