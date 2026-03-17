@@ -25,7 +25,7 @@ pub(crate) fn execute_js_tool_definition() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "execute_js",
-            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), and generateImage() functions to query the document database, write files, and generate images.",
+            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), generateImage(), remember(), and recall() functions to query the document database, write files, generate images, and store values across tool calls.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -117,6 +117,7 @@ impl CodeModeEngine {
         messages.push(serde_json::json!({"role": "user", "content": question}));
 
         let tools = vec![execute_js_tool_definition()];
+        let scratchpad = new_scratchpad();
 
         for iteration in 0..MAX_ITERATIONS {
             let body = serde_json::json!({
@@ -149,6 +150,7 @@ impl CodeModeEngine {
                     let store_clone = Arc::clone(&self.store);
                     let config_clone = self.config.clone();
                     let sync_dir_clone = self.sync_dir.clone();
+                    let scratchpad_clone = Arc::clone(&scratchpad);
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
@@ -156,7 +158,7 @@ impl CodeModeEngine {
                             store_clone,
                             config_clone,
                             sync_dir_clone,
-                            new_scratchpad(),
+                            scratchpad_clone,
                         );
                         (id_clone, sandbox.execute(&code_clone))
                     }));
