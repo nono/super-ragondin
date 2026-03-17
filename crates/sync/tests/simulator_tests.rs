@@ -1409,6 +1409,326 @@ fn move_file_a_to_b_to_c_to_b_local_while_stopped() {
     runner.check_idempotency().unwrap();
 }
 
+// -- file_swap: move a→c, sync, move b→a — tests identity tracking, not path-based matching --
+
+#[test]
+fn file_swap_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create two files on remote, then sync
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id.clone(),
+            name: "a".to_string(),
+            content: b"content a".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-b"),
+            parent_id: root_id,
+            name: "b".to_string(),
+            content: b"content b".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let root_local_id = find_local_id_by_name(&runner, "");
+    let a_id = find_local_id_by_name(&runner, "a");
+    let b_id = find_local_id_by_name(&runner, "b");
+
+    // Move a → c, sync
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: a_id,
+            new_parent_local_id: Some(root_local_id.clone()),
+            new_name: "c".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move b → a
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: b_id,
+            new_parent_local_id: Some(root_local_id),
+            new_name: "a".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify: "a" has content b, "c" has content a, no "b" exists
+    let local_a: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "a")
+        .collect();
+    assert_eq!(local_a.len(), 1, "Exactly one 'a' locally");
+
+    let local_c: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "c")
+        .collect();
+    assert_eq!(local_c.len(), 1, "Exactly one 'c' locally");
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "b")
+        .collect();
+    assert!(local_b.is_empty(), "No 'b' should remain locally");
+
+    // Content verification via remote (canonical source)
+    let remote_a: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "a")
+        .collect();
+    assert_eq!(remote_a.len(), 1, "Exactly one 'a' on remote");
+
+    let remote_c: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "c")
+        .collect();
+    assert_eq!(remote_c.len(), 1, "Exactly one 'c' on remote");
+
+    let remote_b: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "b")
+        .collect();
+    assert!(remote_b.is_empty(), "No 'b' should remain on remote");
+
+    // Verify content: "a" should have "content b", "c" should have "content a"
+    let a_content = runner.remote.get_content(&remote_a[0].id);
+    assert_eq!(
+        a_content,
+        Some(&b"content b".to_vec()),
+        "'a' should have content b"
+    );
+
+    let c_content = runner.remote.get_content(&remote_c[0].id);
+    assert_eq!(
+        c_content,
+        Some(&b"content a".to_vec()),
+        "'c' should have content a"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn file_swap_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create two files on remote, then sync
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id.clone(),
+            name: "a".to_string(),
+            content: b"content a".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-b"),
+            parent_id: root_id,
+            name: "b".to_string(),
+            content: b"content b".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let root_local_id = find_local_id_by_name(&runner, "");
+    let a_id = find_local_id_by_name(&runner, "a");
+    let b_id = find_local_id_by_name(&runner, "b");
+
+    // Stop client, perform both moves while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: a_id,
+            new_parent_local_id: Some(root_local_id.clone()),
+            new_name: "c".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: b_id,
+            new_parent_local_id: Some(root_local_id),
+            new_name: "a".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify: "a" has content b, "c" has content a, no "b" exists
+    let local_a: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "a")
+        .collect();
+    assert_eq!(local_a.len(), 1, "Exactly one 'a' locally");
+
+    let local_c: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "c")
+        .collect();
+    assert_eq!(local_c.len(), 1, "Exactly one 'c' locally");
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "b")
+        .collect();
+    assert!(local_b.is_empty(), "No 'b' should remain locally");
+
+    // Content verification via remote
+    let remote_a: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "a")
+        .collect();
+    assert_eq!(remote_a.len(), 1, "Exactly one 'a' on remote");
+
+    let remote_c: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "c")
+        .collect();
+    assert_eq!(remote_c.len(), 1, "Exactly one 'c' on remote");
+
+    let a_content = runner.remote.get_content(&remote_a[0].id);
+    assert_eq!(
+        a_content,
+        Some(&b"content b".to_vec()),
+        "'a' should have content b"
+    );
+
+    let c_content = runner.remote.get_content(&remote_c[0].id);
+    assert_eq!(
+        c_content,
+        Some(&b"content a".to_vec()),
+        "'c' should have content a"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn file_swap_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create two files on remote, then sync
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id.clone(),
+            name: "a".to_string(),
+            content: b"content a".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-b"),
+            parent_id: root_id,
+            name: "b".to_string(),
+            content: b"content b".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move a → c on remote, sync
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-a"),
+            new_parent_id: RemoteId::new("io.cozy.files.root-dir"),
+            new_name: "c".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move b → a on remote
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-b"),
+            new_parent_id: RemoteId::new("io.cozy.files.root-dir"),
+            new_name: "a".to_string(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify locally
+    let local_a: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "a")
+        .collect();
+    assert_eq!(local_a.len(), 1, "Exactly one 'a' locally");
+
+    let local_c: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "c")
+        .collect();
+    assert_eq!(local_c.len(), 1, "Exactly one 'c' locally");
+
+    let local_b: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "b")
+        .collect();
+    assert!(local_b.is_empty(), "No 'b' should remain locally");
+
+    // Verify content via local fs
+    let a_local_content = runner.local_fs.read_file(&local_a[0].id);
+    assert_eq!(
+        a_local_content,
+        Some(&b"content b".to_vec()),
+        "'a' should have content b"
+    );
+
+    let c_local_content = runner.local_fs.read_file(&local_c[0].id);
+    assert_eq!(
+        c_local_content,
+        Some(&b"content a".to_vec()),
+        "'c' should have content a"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
