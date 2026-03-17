@@ -327,4 +327,93 @@ mod tests {
     async fn test_query_docs_prefix_empty_falls_back_to_whole_store_with_results() {
         todo!("seed store without data under prefix, verify fallback returns whole-store results")
     }
+
+    #[tokio::test]
+    async fn test_collect_summaries_partial_timeout_retains_completed() {
+        use std::time::Duration;
+
+        let doc_texts = vec![
+            super::DocText {
+                path: "fast.md".to_string(),
+                mime_type: "text/plain".to_string(),
+                text: "fast".to_string(),
+            },
+            super::DocText {
+                path: "slow.md".to_string(),
+                mime_type: "text/plain".to_string(),
+                text: "slow".to_string(),
+            },
+        ];
+        // Deadline: 100ms — fast doc completes immediately, slow doc takes 500ms
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+        let contexts = super::collect_summaries(doc_texts, deadline, |text: String| async move {
+            if text == "slow" {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Ok(format!("summary of {text}"))
+        })
+        .await;
+
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].summary.as_deref(), Some("summary of fast"));
+        assert!(
+            contexts[1].summary.is_none(),
+            "slow doc should have no summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_phase2_bad_json_then_corrective_retry_succeeds() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let count = Arc::new(AtomicUsize::new(0));
+        let count2 = count.clone();
+        let result = super::generate_suggestions_with_fn(vec![], move |_messages| {
+            let n = count2.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n == 0 {
+                    Ok("not valid json".to_string())
+                } else {
+                    Ok(r#"["a","b","c","d","e","f"]"#.to_string())
+                }
+            }
+        })
+        .await;
+
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+        assert_eq!(result.unwrap().len(), 6);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_phase2_bad_json_twice_returns_err() {
+        let result = super::generate_suggestions_with_fn(vec![], |_| async {
+            Ok("not valid json".to_string())
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_phase2_wrong_length_returns_err() {
+        let result = super::generate_suggestions_with_fn(vec![], |_| async {
+            Ok(r#"["a","b","c"]"#.to_string())
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_phase2_markdown_fenced_json_parses_ok() {
+        let json = "```json\n[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\"]\n```";
+        let result = super::generate_suggestions_with_fn(vec![], |_| {
+            let json = json.to_string();
+            async move { Ok(json) }
+        })
+        .await;
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
 }
