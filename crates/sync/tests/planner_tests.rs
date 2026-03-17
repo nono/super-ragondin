@@ -1944,3 +1944,226 @@ fn test_synced_file_now_ignored_with_local_deleted_just_cleans_up() {
         other => panic!("Expected DeleteSynced, got {:?}", other),
     }
 }
+
+#[test]
+fn test_local_move_and_update_generates_move_and_upload() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let src_lid = local_id(1, 10);
+    let src_rid = remote_id("dir-src");
+    let dst_lid = local_id(1, 20);
+    let dst_rid = remote_id("dir-dst");
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+
+    // Set up root
+    let synced_root = make_synced_with_location(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    // Set up src and dst dirs
+    for (l, r, name) in [
+        (src_lid.clone(), src_rid.clone(), "src"),
+        (dst_lid.clone(), dst_rid.clone(), "dst"),
+    ] {
+        let synced_dir = make_synced_with_location(
+            l.clone(),
+            r.clone(),
+            name,
+            None,
+            NodeType::Directory,
+            name,
+            Some(root_lid.clone()),
+            name,
+            Some(root_rid.clone()),
+        );
+        store.insert_synced(&synced_dir).unwrap();
+        store
+            .insert_local_node(&make_local_dir(l.clone(), Some(root_lid.clone()), name))
+            .unwrap();
+        store
+            .insert_remote_node(&make_remote_dir(r, Some(root_rid.clone()), name))
+            .unwrap();
+    }
+
+    // File was synced at src/file with old_hash
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "src/file",
+        Some("old_hash"),
+        NodeType::File,
+        "file",
+        Some(src_lid.clone()),
+        "file",
+        Some(src_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    // Local: file moved to dst/file AND content updated (new_hash)
+    let local_file = make_local_file(lid.clone(), Some(dst_lid), "file", "new_hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    // Remote: file still at src/file with old content
+    let remote_file = make_remote_file(rid.clone(), Some(src_rid), "file", "old_hash");
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let has_move = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::MoveRemote { .. })));
+    let has_upload = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })));
+
+    assert!(has_move, "Should plan MoveRemote for the path change");
+    assert!(
+        has_upload,
+        "Should plan UploadUpdate for the content change"
+    );
+
+    // Move should be ordered before upload
+    let move_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::MoveRemote { .. })))
+        .unwrap();
+    let upload_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::UploadUpdate { .. })))
+        .unwrap();
+    assert!(
+        move_idx < upload_idx,
+        "MoveRemote should be sorted before UploadUpdate"
+    );
+}
+
+#[test]
+fn test_remote_move_and_update_generates_move_and_download() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let lid = local_id(1, 100);
+    let rid = remote_id("f1");
+    let src_lid = local_id(1, 10);
+    let src_rid = remote_id("dir-src");
+    let dst_lid = local_id(1, 20);
+    let dst_rid = remote_id("dir-dst");
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+
+    let synced_root = make_synced_with_location(
+        root_lid.clone(),
+        root_rid.clone(),
+        "",
+        None,
+        NodeType::Directory,
+        "",
+        None,
+        "",
+        None,
+    );
+    store.insert_synced(&synced_root).unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    for (l, r, name) in [
+        (src_lid.clone(), src_rid.clone(), "src"),
+        (dst_lid.clone(), dst_rid.clone(), "dst"),
+    ] {
+        let synced_dir = make_synced_with_location(
+            l.clone(),
+            r.clone(),
+            name,
+            None,
+            NodeType::Directory,
+            name,
+            Some(root_lid.clone()),
+            name,
+            Some(root_rid.clone()),
+        );
+        store.insert_synced(&synced_dir).unwrap();
+        store
+            .insert_local_node(&make_local_dir(l.clone(), Some(root_lid.clone()), name))
+            .unwrap();
+        store
+            .insert_remote_node(&make_remote_dir(r, Some(root_rid.clone()), name))
+            .unwrap();
+    }
+
+    let synced = make_synced_with_location(
+        lid.clone(),
+        rid.clone(),
+        "src/file",
+        Some("old_hash"),
+        NodeType::File,
+        "file",
+        Some(src_lid.clone()),
+        "file",
+        Some(src_rid.clone()),
+    );
+    store.insert_synced(&synced).unwrap();
+
+    // Local: file still at src/file with old content
+    let local_file = make_local_file(lid.clone(), Some(src_lid), "file", "old_hash");
+    store.insert_local_node(&local_file).unwrap();
+
+    // Remote: file moved to dst/file AND content updated (new_hash, new rev)
+    let mut remote_file = make_remote_file(rid.clone(), Some(dst_rid), "file", "new_hash");
+    remote_file.rev = "2-abc".to_string();
+    store.insert_remote_node(&remote_file).unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let has_move = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })));
+    let has_download = ops
+        .iter()
+        .any(|r| matches!(r, PlanResult::Op(SyncOp::DownloadUpdate { .. })));
+
+    assert!(has_move, "Should plan MoveLocal for the path change");
+    assert!(
+        has_download,
+        "Should plan DownloadUpdate for the content change"
+    );
+
+    let move_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::MoveLocal { .. })))
+        .unwrap();
+    let download_idx = ops
+        .iter()
+        .position(|r| matches!(r, PlanResult::Op(SyncOp::DownloadUpdate { .. })))
+        .unwrap();
+    assert!(
+        move_idx < download_idx,
+        "MoveLocal should be sorted before DownloadUpdate"
+    );
+}

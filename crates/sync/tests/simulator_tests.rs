@@ -1117,6 +1117,305 @@ fn move_file_successive_remote() {
     runner.check_idempotency().unwrap();
 }
 
+// -- move_and_update_file: move src/file → dst/file AND update content in the same sync cycle --
+
+#[test]
+fn move_and_update_file_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create dirs and file on remote, then sync
+    for (id, name) in [("dir-src", "src"), ("dir-dst", "dst")] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+
+    // Move src/file → dst/file AND update content in the same cycle
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id.clone(),
+            new_parent_local_id: Some(dst_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: file_id.clone(),
+            content: b"updated content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify file is at dst/file
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    // Verify content is updated locally
+    let local_content = runner.local_fs.read_file(&file_id);
+    assert_eq!(
+        local_content,
+        Some(&b"updated content".to_vec()),
+        "Local file should have updated content"
+    );
+
+    // Verify content is updated on remote
+    let remote_file: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(remote_file.len(), 1, "Exactly one 'file' on remote");
+    let remote_content = runner.remote.get_content(&remote_file[0].id);
+    assert_eq!(
+        remote_content,
+        Some(&b"updated content".to_vec()),
+        "Remote file should have updated content"
+    );
+
+    // Verify dirs still exist
+    let dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "src" || n.name == "dst")
+        .collect();
+    assert_eq!(dirs.len(), 2, "Both src/ and dst/ should exist");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_and_update_file_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    for (id, name) in [("dir-src", "src"), ("dir-dst", "dst")] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+
+    // Stop client, perform move + update while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id.clone(),
+            new_parent_local_id: Some(dst_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: file_id.clone(),
+            content: b"updated content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    let local_content = runner.local_fs.read_file(&file_id);
+    assert_eq!(
+        local_content,
+        Some(&b"updated content".to_vec()),
+        "Local file should have updated content"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_and_update_file_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    for (id, name) in [("dir-src", "src"), ("dir-dst", "dst")] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Move and update on remote in the same cycle
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-1"),
+            new_parent_id: RemoteId::new("dir-dst"),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteModifyFile {
+            id: RemoteId::new("file-1"),
+            content: b"updated content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify file is at dst/file locally
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    // Verify content is updated locally
+    let local_content = runner.local_fs.read_file(&local_files[0].id);
+    assert_eq!(
+        local_content,
+        Some(&b"updated content".to_vec()),
+        "Local file should have updated content"
+    );
+
+    // Verify dirs still exist
+    let dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "src" || n.name == "dst")
+        .collect();
+    assert_eq!(dirs.len(), 2, "Both src/ and dst/ should exist");
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_and_update_file_local_atomic_save() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    for (id, name) in [("dir-src", "src"), ("dir-dst", "dst")] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: Some(root_id.clone()),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-src"),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+
+    // Move + atomic save (simulates editors that write-to-temp then rename)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id.clone(),
+            new_parent_local_id: Some(dst_id),
+            new_name: "file".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalAtomicSave {
+            local_id: file_id,
+            content: b"updated content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    let remote_files: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(remote_files.len(), 1, "Exactly one 'file' on remote");
+    let remote_content = runner.remote.get_content(&remote_files[0].id);
+    assert_eq!(
+        remote_content,
+        Some(&b"updated content".to_vec()),
+        "Remote file should have updated content"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // -- move_dir_a_to_b_to_c_to_b: cyclic rename A→B, sync, B→C, sync, C→B --
 
 #[test]
