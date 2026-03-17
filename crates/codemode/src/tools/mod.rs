@@ -5,5 +5,6 @@ pub mod list_files;
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) mod path_utils;
 pub mod save_file;
+pub mod scratchpad;
 pub mod search;
 pub mod sub_agent;

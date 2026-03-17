@@ -19,6 +19,7 @@ pub struct SandboxContext {
     pub config: RagConfig,
     pub handle: tokio::runtime::Handle,
     pub sync_dir: std::path::PathBuf,
+    pub scratchpad: crate::tools::scratchpad::Scratchpad,
 }
 
 thread_local! {
@@ -63,21 +64,24 @@ pub struct Sandbox {
     store: Arc<RagStore>,
     config: RagConfig,
     sync_dir: std::path::PathBuf,
+    scratchpad: crate::tools::scratchpad::Scratchpad,
 }
 
 #[allow(dead_code)]
 impl Sandbox {
-    /// Create a new sandbox with the given store, config, and sync directory.
+    /// Create a new sandbox with the given store, config, sync directory, and scratchpad.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         store: Arc<RagStore>,
         config: RagConfig,
         sync_dir: std::path::PathBuf,
+        scratchpad: crate::tools::scratchpad::Scratchpad,
     ) -> Self {
         Self {
             store,
             config,
             sync_dir,
+            scratchpad,
         }
     }
 
@@ -98,6 +102,7 @@ impl Sandbox {
                 config: self.config.clone(),
                 handle,
                 sync_dir: self.sync_dir.clone(),
+                scratchpad: Arc::clone(&self.scratchpad),
             });
         });
 
@@ -127,6 +132,8 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register listDirs: {e}"))?;
         tools::generate_image::register(&mut ctx)
             .map_err(|e| format!("JS error: register generateImage: {e}"))?;
+        tools::scratchpad::register(&mut ctx)
+            .map_err(|e| format!("JS error: register scratchpad: {e}"))?;
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -147,6 +154,7 @@ mod tests {
     use tempfile::tempdir;
 
     async fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
+        use crate::tools::scratchpad::new_scratchpad;
         let db_dir = tempdir().expect("failed to create temp db dir");
         let sync_dir = tempdir().expect("failed to create temp sync dir");
         let store = Arc::new(
@@ -155,7 +163,12 @@ mod tests {
                 .expect("failed to open RagStore"),
         );
         let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
-        let sandbox = Sandbox::new(store, config, sync_dir.path().to_path_buf());
+        let sandbox = Sandbox::new(
+            store,
+            config,
+            sync_dir.path().to_path_buf(),
+            new_scratchpad(),
+        );
         (sandbox, db_dir, sync_dir)
     }
 
@@ -212,6 +225,8 @@ mod tests {
             "saveFile",
             "listDirs",
             "generateImage",
+            "remember",
+            "recall",
         ] {
             let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
             assert_eq!(
@@ -347,6 +362,56 @@ mod tests {
         assert!(file_path.exists(), "file should have been written");
         let bytes = std::fs::read(&file_path).unwrap();
         assert!(!bytes.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scratchpad_persists_across_execute_calls() {
+        use crate::tools::scratchpad::new_scratchpad;
+        // Use two independent temp dirs to avoid opening two RagStore handles
+        // on the same LanceDB path simultaneously.
+        let db_a = tempdir().unwrap();
+        let db_b = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+        let store_a = Arc::new(RagStore::open(db_a.path()).await.unwrap());
+        let store_b = Arc::new(RagStore::open(db_b.path()).await.unwrap());
+        let config_a = RagConfig::from_env_with_db_path(db_a.path().to_path_buf());
+        let config_b = RagConfig::from_env_with_db_path(db_b.path().to_path_buf());
+        let scratchpad = new_scratchpad();
+        let sandbox_a = Sandbox::new(
+            store_a,
+            config_a,
+            sync_dir.path().to_path_buf(),
+            Arc::clone(&scratchpad),
+        );
+        let sandbox_b = Sandbox::new(
+            store_b,
+            config_b,
+            sync_dir.path().to_path_buf(),
+            Arc::clone(&scratchpad),
+        );
+        sandbox_a.execute(r#"remember("x", 42)"#).unwrap();
+        let result = sandbox_b.execute(r#"recall("x")"#).unwrap();
+        assert_eq!(
+            result, "42",
+            "recall should return the value stored by remember"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scratchpad_recall_missing_key_returns_null() {
+        let (sandbox, _db, _sync) = make_sandbox().await;
+        let result = sandbox.execute(r#"recall("nonexistent")"#).unwrap();
+        assert_eq!(result, "null");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_scratchpad_overwrite() {
+        // make_sandbox() creates one scratchpad, so all three execute() calls share it.
+        let (sandbox, _db, _sync) = make_sandbox().await;
+        sandbox.execute(r#"remember("k", "first")"#).unwrap();
+        sandbox.execute(r#"remember("k", "second")"#).unwrap();
+        let result = sandbox.execute(r#"recall("k")"#).unwrap();
+        assert_eq!(result, r#""second""#);
     }
 
     #[tokio::test(flavor = "multi_thread")]
