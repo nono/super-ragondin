@@ -306,17 +306,18 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     use super_ragondin_codemode::engine::CodeModeEngine;
     use super_ragondin_rag::config::RagConfig;
 
+    let config = Config::load(&config_path())?
+        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+    let db_path = config.rag_dir();
+    let rag_config = RagConfig::from_env_with_db_path(db_path);
+    if rag_config.api_key.is_empty() {
+        return Err(Error::Permanent(
+            "OPENROUTER_API_KEY environment variable not set".to_string(),
+        ));
+    }
+    let rt = tokio::runtime::Runtime::new()?;
+
     if args.is_empty() {
-        let config = Config::load(&config_path())?
-            .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
-        let db_path = config.rag_dir();
-        let rag_config = RagConfig::from_env_with_db_path(db_path);
-        if rag_config.api_key.is_empty() {
-            return Err(Error::Permanent(
-                "OPENROUTER_API_KEY environment variable not set".to_string(),
-            ));
-        }
-        let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
             let engine =
                 super_ragondin_codemode::suggestions::SuggestionEngine::new(rag_config, config.sync_dir)
@@ -341,25 +342,12 @@ fn cmd_ask(args: &[String]) -> Result<()> {
                     }
                 }
             }
-            Ok::<(), Error>(())
+            Ok::<_, Error>(())
         })?;
         return Ok(());
     }
     let question = args.join(" ");
 
-    let config = Config::load(&config_path())?
-        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
-
-    let db_path = config.rag_dir();
-    let rag_config = RagConfig::from_env_with_db_path(db_path);
-
-    if rag_config.api_key.is_empty() {
-        return Err(Error::Permanent(
-            "OPENROUTER_API_KEY environment variable not set".to_string(),
-        ));
-    }
-
-    let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let engine = CodeModeEngine::new(rag_config, config.sync_dir)
             .await
