@@ -2784,6 +2784,542 @@ fn atomic_save_same_content_converges() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Move + create at old path ====================
+
+// -- move_a_to_b_and_create_a (file version): move file a→b, create new file "a" --
+
+#[test]
+fn move_a_to_b_and_create_a_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create file "a" on remote and sync
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id,
+            name: "a".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Local actions: move a→b, then create new file "a"
+    let file_a_local_id = find_local_id_by_name(&runner, "a");
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a_local_id,
+            new_parent_local_id: Some(root_local_id.clone()),
+            new_name: "b".to_string(),
+        })
+        .unwrap();
+
+    let new_a_local_id = LocalFileId::new(1, 9990);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_a_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "a".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Both "a" and "b" should exist locally
+    let local_names: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        local_names.contains(&"a".to_string()),
+        "File 'a' must exist locally"
+    );
+    assert!(
+        local_names.contains(&"b".to_string()),
+        "File 'b' must exist locally"
+    );
+
+    // Both should exist on remote
+    let remote_names: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        remote_names.contains(&"a".to_string()),
+        "File 'a' must exist on remote"
+    );
+    assert!(
+        remote_names.contains(&"b".to_string()),
+        "File 'b' must exist on remote"
+    );
+
+    // Check contents: "b" has initial content, "a" has new content
+    let remote_b = runner
+        .remote
+        .nodes
+        .values()
+        .find(|n| n.name == "b")
+        .unwrap();
+    let remote_a = runner
+        .remote
+        .nodes
+        .values()
+        .find(|n| n.name == "a")
+        .unwrap();
+    let content_b = runner.remote.get_content(&remote_b.id).unwrap();
+    let content_a = runner.remote.get_content(&remote_a.id).unwrap();
+    assert_eq!(
+        content_b, b"initial content",
+        "'b' should have original content"
+    );
+    assert_eq!(content_a, b"new content", "'a' should have new content");
+
+    // Original remote ID must be preserved for "b" (the moved file)
+    assert!(
+        runner.remote.get_node(&RemoteId::new("file-a")).is_some(),
+        "Original remote node must still exist (as 'b')"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_a_to_b_and_create_a_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id,
+            name: "a".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_a_local_id = find_local_id_by_name(&runner, "a");
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop client, perform both operations while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_a_local_id,
+            new_parent_local_id: Some(root_local_id.clone()),
+            new_name: "b".to_string(),
+        })
+        .unwrap();
+
+    let new_a_local_id = LocalFileId::new(1, 9991);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_a_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "a".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_names: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        local_names.contains(&"a".to_string()),
+        "File 'a' must exist locally"
+    );
+    assert!(
+        local_names.contains(&"b".to_string()),
+        "File 'b' must exist locally"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_a_to_b_and_create_a_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create file "a" on remote and sync
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a"),
+            parent_id: root_id.clone(),
+            name: "a".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Remote actions: move a→b, then create new file "a"
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("file-a"),
+            new_parent_id: root_id.clone(),
+            new_name: "b".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-new-a"),
+            parent_id: root_id,
+            name: "a".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Both "a" and "b" should exist locally
+    let local_names: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        local_names.contains(&"a".to_string()),
+        "File 'a' must exist locally"
+    );
+    assert!(
+        local_names.contains(&"b".to_string()),
+        "File 'b' must exist locally"
+    );
+
+    // Check local contents via md5
+    let local_b = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "b")
+        .unwrap();
+    let local_a = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "a")
+        .unwrap();
+    let content_b = runner.local_fs.read_file(&local_b.id).unwrap();
+    let content_a = runner.local_fs.read_file(&local_a.id).unwrap();
+    assert_eq!(
+        content_b.as_slice(),
+        b"initial content",
+        "'b' should have original content"
+    );
+    assert_eq!(
+        content_a.as_slice(),
+        b"new content",
+        "'a' should have new content"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_dir_a_to_b_and_create_a (directory version): move dir a→b, create new dir "a" with contents --
+
+// TODO: the planner incorrectly triggers a NameCollision on the new local dir "a"
+// because the remote still has the old dir "a" (not yet moved to "b"). The collision
+// resolver deletes the new local "a" tree, losing the newly created files. The fix
+// needs the planner to recognize that the old remote "a" is the same identity as the
+// locally-moved "b" (tracked by LocalFileId), so the new local "a" is truly new.
+#[test]
+#[ignore = "planner confuses local move+create with name collision (dir version)"]
+fn move_dir_a_to_b_and_create_a_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create dir "a" with file "a/file.txt" and subdir "a/subdir/child.txt" on remote
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a"),
+            parent_id: Some(root_id.clone()),
+            name: "a".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a-txt"),
+            parent_id: RemoteId::new("dir-a"),
+            name: "file.txt".to_string(),
+            content: b"initial file content".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a-subdir"),
+            parent_id: Some(RemoteId::new("dir-a")),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a-child"),
+            parent_id: RemoteId::new("dir-a-subdir"),
+            name: "child.txt".to_string(),
+            content: b"initial child content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Local actions: move dir a→b
+    let dir_a_local_id = find_local_id_by_name(&runner, "a");
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_a_local_id,
+            new_parent_local_id: Some(root_local_id.clone()),
+            new_name: "b".to_string(),
+        })
+        .unwrap();
+
+    // Create new dir "a" with new contents
+    let new_dir_a_id = LocalFileId::new(1, 9980);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: new_dir_a_id.clone(),
+            parent_local_id: Some(root_local_id.clone()),
+            name: "a".to_string(),
+        })
+        .unwrap();
+
+    let new_file_a_txt_id = LocalFileId::new(1, 9981);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_file_a_txt_id,
+            parent_local_id: Some(new_dir_a_id.clone()),
+            name: "file.txt".to_string(),
+            content: b"new file content".to_vec(),
+        })
+        .unwrap();
+
+    let new_subdir_id = LocalFileId::new(1, 9982);
+    runner
+        .apply(SimAction::LocalCreateDir {
+            local_id: new_subdir_id.clone(),
+            parent_local_id: Some(new_dir_a_id),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+
+    let new_child_id = LocalFileId::new(1, 9983);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_child_id,
+            parent_local_id: Some(new_subdir_id),
+            name: "child.txt".to_string(),
+            content: b"new child content".to_vec(),
+        })
+        .unwrap();
+
+    // May need multiple sync rounds: move is processed first, then new dirs,
+    // then files inside new dirs need parent dirs to exist on remote.
+    runner.apply(SimAction::Sync).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Both trees should exist
+    let local_dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        local_dirs.contains(&"a".to_string()),
+        "Dir 'a' must exist locally"
+    );
+    assert!(
+        local_dirs.contains(&"b".to_string()),
+        "Dir 'b' must exist locally"
+    );
+
+    // Check file counts: should have file.txt and child.txt in both a/ and b/
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.node_type == NodeType::File)
+        .map(|n| n.name.clone())
+        .collect();
+    let file_txt_count = local_files.iter().filter(|n| *n == "file.txt").count();
+    let child_txt_count = local_files.iter().filter(|n| *n == "child.txt").count();
+    assert_eq!(
+        file_txt_count, 2,
+        "Should have two 'file.txt' (one in a/, one in b/)"
+    );
+    assert_eq!(
+        child_txt_count, 2,
+        "Should have two 'child.txt' (one in a/subdir/, one in b/subdir/)"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_dir_a_to_b_and_create_a_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create dir "a" with file and subdir on remote, sync
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a"),
+            parent_id: Some(root_id.clone()),
+            name: "a".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a-txt"),
+            parent_id: RemoteId::new("dir-a"),
+            name: "file.txt".to_string(),
+            content: b"initial file content".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-a-subdir"),
+            parent_id: Some(RemoteId::new("dir-a")),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-a-child"),
+            parent_id: RemoteId::new("dir-a-subdir"),
+            name: "child.txt".to_string(),
+            content: b"initial child content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Remote actions: move dir a→b, create new dir "a" with new contents
+    runner
+        .apply(SimAction::RemoteMove {
+            id: RemoteId::new("dir-a"),
+            new_parent_id: root_id.clone(),
+            new_name: "b".to_string(),
+        })
+        .unwrap();
+
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-new-a"),
+            parent_id: Some(root_id.clone()),
+            name: "a".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-new-a-txt"),
+            parent_id: RemoteId::new("dir-new-a"),
+            name: "file.txt".to_string(),
+            content: b"new file content".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: RemoteId::new("dir-new-a-subdir"),
+            parent_id: Some(RemoteId::new("dir-new-a")),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-new-a-child"),
+            parent_id: RemoteId::new("dir-new-a-subdir"),
+            name: "child.txt".to_string(),
+            content: b"new child content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Both trees should exist locally
+    let local_dirs: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.node_type == NodeType::Directory && !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(
+        local_dirs.contains(&"a".to_string()),
+        "Dir 'a' must exist locally"
+    );
+    assert!(
+        local_dirs.contains(&"b".to_string()),
+        "Dir 'b' must exist locally"
+    );
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.node_type == NodeType::File)
+        .map(|n| n.name.clone())
+        .collect();
+    let file_txt_count = local_files.iter().filter(|n| *n == "file.txt").count();
+    let child_txt_count = local_files.iter().filter(|n| *n == "child.txt").count();
+    assert_eq!(file_txt_count, 2, "Should have two 'file.txt'");
+    assert_eq!(child_txt_count, 2, "Should have two 'child.txt'");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Regression: deeply nested local dirs must sync ====================
 
 #[test]
