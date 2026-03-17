@@ -1,6 +1,6 @@
 use super_ragondin_rag::config::{OPENROUTER_API_URL, OPENROUTER_REFERER};
 
-/// Call the OpenRouter chat completions endpoint.
+/// Call the `OpenRouter` chat completions endpoint.
 ///
 /// `messages` is a list of objects with `role` and `content` fields.
 ///
