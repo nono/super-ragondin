@@ -46,8 +46,19 @@ Available JavaScript functions:
     Returns: base64-encoded image string (without the data: prefix)
     Side effect: if path is given, the image is written to sync_dir/path
 
+  remember(key, value)
+    Store a JSON-serializable value under a string key for this session.
+    Only JSON-serializable values are stored (objects, arrays, strings, numbers, booleans).
+    Returns: null
+
+  recall(key)
+    Retrieve a value previously stored with remember().
+    Returns: the stored value, or null if the key was not set.
+
 Rules:
-- Each execute_js call is a fresh context — variables do not persist between calls
+- Each execute_js call is a fresh context — JS variables do not persist between calls
+- Use remember(key, value) / recall(key) to store values across execute_js calls
+- Do not write to the same key from two concurrent tool calls in the same iteration — order is non-deterministic
 - The last expression in your JS code is the return value (JSON-serialized)
 - Dates in mtime, after, before are ISO 8601 strings
 - Use multiple execute_js calls when gathering information in stages
@@ -91,7 +102,11 @@ saveFile("images/chart.png", base64EncodedPngString, { encoding: "base64" })
 const b64 = generateImage(
   "Watercolor mindmap: key topics from the meeting notes",
   { path: "images/mindmap.png", aspect: "4:3", size: "1K" }
-)"##
+)
+
+// Store an intermediate result and reuse it in a later call
+const files = listFiles({ sort: "recent", limit: 5 });
+remember("recent_ids", files.map(f => f.doc_id));"##
 }
 
 #[cfg(test)]
@@ -110,6 +125,8 @@ mod tests {
         assert!(p.contains("saveFile("));
         assert!(p.contains("listDirs("));
         assert!(p.contains("generateImage("));
+        assert!(p.contains("remember("));
+        assert!(p.contains("recall("));
         assert!(p.contains("ISO 8601"));
     }
 }
