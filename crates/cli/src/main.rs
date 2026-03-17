@@ -307,7 +307,42 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     use super_ragondin_rag::config::RagConfig;
 
     if args.is_empty() {
-        println!("Usage: super-ragondin ask <question>");
+        let config = Config::load(&config_path())?
+            .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+        let db_path = config.rag_dir();
+        let rag_config = RagConfig::from_env_with_db_path(db_path);
+        if rag_config.api_key.is_empty() {
+            return Err(Error::Permanent(
+                "OPENROUTER_API_KEY environment variable not set".to_string(),
+            ));
+        }
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            let engine =
+                super_ragondin_codemode::suggestions::SuggestionEngine::new(rag_config, config.sync_dir)
+                    .await
+                    .map_err(|e| Error::Permanent(format!("{e:#}")))?;
+            let cwd = std::env::current_dir().ok();
+            match engine.generate(cwd).await {
+                Ok(suggestions) => {
+                    println!("Not sure what to ask? Here are some ideas:\n");
+                    for (i, s) in suggestions.iter().enumerate() {
+                        println!("{}. {}", i + 1, s);
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("no files indexed") {
+                        println!("No files indexed yet. Run super-ragondin sync first.");
+                    } else {
+                        println!(
+                            "Could not generate suggestions. Try: super-ragondin ask <your question>"
+                        );
+                    }
+                }
+            }
+            Ok::<(), Error>(())
+        })?;
         return Ok(());
     }
     let question = args.join(" ");
