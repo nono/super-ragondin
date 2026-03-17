@@ -81,10 +81,9 @@ fn recall_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         .get(&key)
         .cloned();
 
-    match value {
-        Some(v) => serde_to_jsvalue(&v, ctx).or(Ok(JsValue::Null)),
-        None => Ok(JsValue::Null),
-    }
+    value.map_or(Ok(JsValue::Null), |v| {
+        serde_to_jsvalue(&v, ctx).or(Ok(JsValue::Null))
+    })
 }
 
 #[cfg(test)]

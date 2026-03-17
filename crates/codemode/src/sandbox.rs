@@ -71,7 +71,7 @@ pub struct Sandbox {
 impl Sandbox {
     /// Create a new sandbox with the given store, config, sync directory, and scratchpad.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         store: Arc<RagStore>,
         config: RagConfig,
         sync_dir: std::path::PathBuf,
