@@ -383,8 +383,7 @@ mod tests {
         })
         .await;
 
-        assert!(result.is_ok(), "expected Ok, got: {result:?}");
-        assert_eq!(result.unwrap().len(), 6);
+        assert_eq!(result.unwrap(), vec!["a", "b", "c", "d", "e", "f"]);
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -414,6 +413,6 @@ mod tests {
             async move { Ok(json) }
         })
         .await;
-        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+        assert_eq!(result.unwrap(), vec!["a", "b", "c", "d", "e", "f"]);
     }
 }
