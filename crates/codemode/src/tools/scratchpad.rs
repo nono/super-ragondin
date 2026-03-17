@@ -19,7 +19,6 @@ pub fn new_scratchpad() -> Scratchpad {
 ///
 /// # Errors
 /// Returns error if the global function cannot be registered.
-#[allow(dead_code)]
 pub fn register(ctx: &mut Context) -> Result<(), JsError> {
     ctx.register_global_callable(
         js_string!("remember"),
