@@ -6378,11 +6378,11 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
 fn resolve_action_choices(choices: &[ActionChoice], state: &mut SimState) -> Vec<SimAction> {
     choices
         .iter()
-        .map(|c| resolve_single_action(c, state))
+        .flat_map(|c| resolve_action_choice(c, state))
         .collect()
 }
 
-fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimAction {
+fn resolve_action_choice(choice: &ActionChoice, state: &mut SimState) -> Vec<SimAction> {
     match choice {
         ActionChoice::RemoteCreateFile {
             parent_idx,
@@ -6390,36 +6390,36 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             content,
         } => {
             if state.remote_dir_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.next_remote_id();
             let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
             state.remote_file_ids.push(id.clone());
             state.remote_parents.insert(id.clone(), parent.clone());
-            SimAction::RemoteCreateFile {
+            vec![SimAction::RemoteCreateFile {
                 id,
                 parent_id: parent,
                 name: name.clone(),
                 content: content.clone(),
-            }
+            }]
         }
         ActionChoice::RemoteDeleteFile { idx } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
-            SimAction::RemoteDeleteFile { id }
+            vec![SimAction::RemoteDeleteFile { id }]
         }
         ActionChoice::RemoteModifyFile { idx, content } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
-            SimAction::RemoteModifyFile {
+            vec![SimAction::RemoteModifyFile {
                 id,
                 content: content.clone(),
-            }
+            }]
         }
         ActionChoice::RemoteMoveFile {
             idx,
@@ -6427,16 +6427,16 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             new_name,
         } => {
             if state.remote_file_ids.is_empty() || state.remote_dir_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             let new_parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
             state.remote_parents.insert(id.clone(), new_parent.clone());
-            SimAction::RemoteMove {
+            vec![SimAction::RemoteMove {
                 id,
                 new_parent_id: new_parent,
                 new_name: new_name.clone(),
-            }
+            }]
         }
         ActionChoice::LocalCreateFile {
             parent_idx,
@@ -6453,59 +6453,59 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             if let Some(ref p) = parent {
                 state.local_parents.insert(local_id.clone(), p.clone());
             }
-            SimAction::LocalCreateFile {
+            vec![SimAction::LocalCreateFile {
                 local_id,
                 parent_local_id: parent,
                 name: name.clone(),
                 content: content.clone(),
-            }
+            }]
         }
         ActionChoice::LocalDeleteFile { idx } => {
             if state.local_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
             state.local_file_ids.retain(|x| x != &id);
-            SimAction::LocalDeleteFile { local_id: id }
+            vec![SimAction::LocalDeleteFile { local_id: id }]
         }
         ActionChoice::LocalModifyFile { idx, content } => {
             if state.local_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
-            SimAction::LocalModifyFile {
+            vec![SimAction::LocalModifyFile {
                 local_id: id,
                 content: content.clone(),
-            }
+            }]
         }
-        ActionChoice::Sync => SimAction::Sync,
+        ActionChoice::Sync => vec![SimAction::Sync],
         ActionChoice::StopClient => {
             if state.stopped {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             state.stopped = true;
-            SimAction::StopClient
+            vec![SimAction::StopClient]
         }
         ActionChoice::RestartClient => {
             if !state.stopped {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             state.stopped = false;
-            SimAction::RestartClient
+            vec![SimAction::RestartClient]
         }
         ActionChoice::RemoteCreateDir { parent_idx, name } => {
             if state.remote_dir_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.next_remote_id();
             let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
             state.remote_dir_ids.push(id.clone());
             state.remote_parents.insert(id.clone(), parent.clone());
-            SimAction::RemoteCreateDir {
+            vec![SimAction::RemoteCreateDir {
                 id,
                 parent_id: Some(parent),
                 name: name.clone(),
-            }
+            }]
         }
         ActionChoice::LocalCreateDir { parent_idx, name } => {
             let local_id = state.next_local_file_id();
@@ -6518,11 +6518,11 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             if let Some(ref p) = parent {
                 state.local_parents.insert(local_id.clone(), p.clone());
             }
-            SimAction::LocalCreateDir {
+            vec![SimAction::LocalCreateDir {
                 local_id,
                 parent_local_id: parent,
                 name: name.clone(),
-            }
+            }]
         }
         ActionChoice::LocalMoveFile {
             idx,
@@ -6530,16 +6530,16 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             new_name,
         } => {
             if state.local_file_ids.is_empty() || state.local_dir_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
             let new_parent = state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone();
             state.local_parents.insert(id.clone(), new_parent.clone());
-            SimAction::LocalMove {
+            vec![SimAction::LocalMove {
                 local_id: id,
                 new_parent_local_id: Some(new_parent),
                 new_name: new_name.clone(),
-            }
+            }]
         }
         ActionChoice::RemoteMoveDir {
             idx,
@@ -6547,18 +6547,18 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             new_name,
         } => {
             if state.remote_dir_ids.len() <= 1 {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
             let new_parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
             // Allow cyclic moves — the planner must handle them gracefully
             state.remote_parents.insert(id.clone(), new_parent.clone());
-            SimAction::RemoteMove {
+            vec![SimAction::RemoteMove {
                 id,
                 new_parent_id: new_parent,
                 new_name: new_name.clone(),
-            }
+            }]
         }
         ActionChoice::LocalMoveDir {
             idx,
@@ -6566,121 +6566,129 @@ fn resolve_single_action(choice: &ActionChoice, state: &mut SimState) -> SimActi
             new_name,
         } => {
             if state.local_dir_ids.len() <= 1 {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
             let new_parent = state.local_dir_ids[parent_idx % state.local_dir_ids.len()].clone();
             // Skip cyclic local moves — the local FS can't have cycles
             if state.would_create_local_cycle(&id, &new_parent) {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             state.local_parents.insert(id.clone(), new_parent.clone());
-            SimAction::LocalMove {
+            vec![SimAction::LocalMove {
                 local_id: id,
                 new_parent_local_id: Some(new_parent),
                 new_name: new_name.clone(),
-            }
+            }]
         }
         ActionChoice::LocalDeleteDir { idx } => {
             if state.local_dir_ids.len() <= 1 {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let non_root: Vec<_> = state.local_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
             state.remove_local_tree(&id);
-            SimAction::LocalDeleteFile { local_id: id }
+            vec![SimAction::LocalDeleteFile { local_id: id }]
         }
         ActionChoice::RemoteDeleteDir { idx } => {
             if state.remote_dir_ids.len() <= 1 {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
             state.remove_remote_tree(&id);
-            SimAction::RemoteDeleteFile { id }
+            vec![SimAction::RemoteDeleteFile { id }]
         }
-        ActionChoice::FailNextDownload => SimAction::FailNextDownload,
-        ActionChoice::FailNextUpload => SimAction::FailNextUpload,
+        ActionChoice::FailNextDownload => vec![SimAction::FailNextDownload],
+        ActionChoice::FailNextUpload => vec![SimAction::FailNextUpload],
         ActionChoice::ConcurrentRemoteCreate {
             parent_idx,
             name,
             content,
         } => {
             if state.remote_dir_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.next_remote_id();
             let parent = state.remote_dir_ids[parent_idx % state.remote_dir_ids.len()].clone();
             // Don't track in remote_file_ids — the file won't exist on MockRemote
             // until the concurrent change fires mid-sync.
-            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::CreateFile {
-                id,
-                parent_id: parent,
-                name: name.clone(),
-                content: content.clone(),
-            })
+            vec![SimAction::ConcurrentRemoteChange(
+                ConcurrentRemoteOp::CreateFile {
+                    id,
+                    parent_id: parent,
+                    name: name.clone(),
+                    content: content.clone(),
+                },
+            )]
         }
         ActionChoice::ConcurrentRemoteModify { idx, content } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
-            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::ModifyFile {
-                id,
-                content: content.clone(),
-            })
+            vec![SimAction::ConcurrentRemoteChange(
+                ConcurrentRemoteOp::ModifyFile {
+                    id,
+                    content: content.clone(),
+                },
+            )]
         }
         ActionChoice::ConcurrentRemoteDelete { idx } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
-            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::DeleteFile { id })
+            vec![SimAction::ConcurrentRemoteChange(
+                ConcurrentRemoteOp::DeleteFile { id },
+            )]
         }
         ActionChoice::ConcurrentRemoteTrash { idx } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
-            SimAction::ConcurrentRemoteChange(ConcurrentRemoteOp::TrashFile { id })
+            vec![SimAction::ConcurrentRemoteChange(
+                ConcurrentRemoteOp::TrashFile { id },
+            )]
         }
         ActionChoice::RemoteTrashFile { idx } => {
             if state.remote_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.remote_file_ids[idx % state.remote_file_ids.len()].clone();
             state.remote_file_ids.retain(|x| x != &id);
-            SimAction::RemoteTrash { id }
+            vec![SimAction::RemoteTrash { id }]
         }
         ActionChoice::RemoteTrashDir { idx } => {
             if state.remote_dir_ids.len() <= 1 {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let non_root: Vec<_> = state.remote_dir_ids[1..].to_vec();
             let id = non_root[idx % non_root.len()].clone();
             state.remove_remote_tree(&id);
-            SimAction::RemoteTrash { id }
+            vec![SimAction::RemoteTrash { id }]
         }
         ActionChoice::LocalAtomicSave { idx, content } => {
             if state.local_file_ids.is_empty() {
-                return SimAction::Sync;
+                return vec![SimAction::Sync];
             }
             let id = state.local_file_ids[idx % state.local_file_ids.len()].clone();
-            SimAction::LocalAtomicSave {
+            vec![SimAction::LocalAtomicSave {
                 local_id: id,
                 content: content.clone(),
-            }
+            }]
         }
         ActionChoice::SnapshotState => {
             state.take_snapshot();
-            SimAction::SnapshotState
+            vec![SimAction::SnapshotState]
         }
         ActionChoice::RollbackToSnapshot => {
             state.rollback();
-            SimAction::RollbackToSnapshot
+            vec![SimAction::RollbackToSnapshot]
         }
     }
 }
