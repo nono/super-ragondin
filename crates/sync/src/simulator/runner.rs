@@ -12,10 +12,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-fn compute_md5(content: &[u8]) -> String {
-    compute_md5_from_bytes(content)
-}
-
 /// Simulation runner that orchestrates mock local fs, mock remote, and the real planner/store
 pub struct SimulationRunner {
     pub local_fs: MockFs,
@@ -426,7 +422,7 @@ impl SimulationRunner {
         name: String,
         content: Vec<u8>,
     ) -> Result<(), String> {
-        let md5sum = compute_md5(&content);
+        let md5sum = compute_md5_from_bytes(&content);
         // Resolve stale parent reference: if parent no longer exists in local_fs
         // (e.g. deleted by resolve_name_collision), fall back to the root dir.
         let effective_parent = self.resolve_parent(parent_local_id);
@@ -510,7 +506,7 @@ impl SimulationRunner {
         let Some(node) = self.local_fs.get_node(&local_id).cloned() else {
             return Ok(());
         };
-        let md5sum = compute_md5(&content);
+        let md5sum = compute_md5_from_bytes(&content);
         let mut updated = node;
         updated.md5sum = Some(md5sum);
         updated.size = Some(content.len() as u64);
@@ -550,7 +546,7 @@ impl SimulationRunner {
 
         // Create new inode with same name and parent
         let new_local_id = self.next_local_id();
-        let md5sum = compute_md5(&content);
+        let md5sum = compute_md5_from_bytes(&content);
         let new_node = LocalNode {
             id: new_local_id.clone(),
             parent_id,
@@ -577,7 +573,7 @@ impl SimulationRunner {
         name: String,
         content: Vec<u8>,
     ) {
-        let md5sum = compute_md5(&content);
+        let md5sum = compute_md5_from_bytes(&content);
         let node = RemoteNode {
             id: id.clone(),
             parent_id: Some(parent_id.clone()),
@@ -616,7 +612,7 @@ impl SimulationRunner {
             // Treat as a no-op, consistent with ConcurrentRemoteOp::ModifyFile.
             return;
         };
-        let md5sum = compute_md5(&content);
+        let md5sum = compute_md5_from_bytes(&content);
         let mut updated = node;
         updated.md5sum = Some(md5sum);
         updated.size = Some(content.len() as u64);
@@ -796,12 +792,14 @@ impl SimulationRunner {
     /// records, so we recursively clean them up.
     fn delete_remote_tree_from_store(&self, id: &RemoteId) -> Result<(), String> {
         let all_remote = self.store.list_all_remote().map_err(|e| e.to_string())?;
-        let mut to_delete = vec![id.clone()];
+        let mut to_delete: Vec<RemoteId> = vec![id.clone()];
+        let mut to_delete_set: HashSet<RemoteId> = HashSet::from([id.clone()]);
         let mut i = 0;
         while i < to_delete.len() {
             let current = to_delete[i].clone();
             for node in &all_remote {
-                if node.parent_id.as_ref() == Some(&current) && !to_delete.contains(&node.id) {
+                if node.parent_id.as_ref() == Some(&current) && !to_delete_set.contains(&node.id) {
+                    to_delete_set.insert(node.id.clone());
                     to_delete.push(node.id.clone());
                 }
             }
@@ -1684,9 +1682,8 @@ impl SimulationRunner {
     /// # Errors
     /// Returns an error describing the convergence mismatch
     pub fn check_convergence(&self) -> Result<(), String> {
-        let local_files: BTreeSet<(String, String)> = self
-            .local_fs
-            .list_all()
+        let local_all = self.local_fs.list_all();
+        let local_files: BTreeSet<(String, String)> = local_all
             .iter()
             .filter(|n| n.is_file())
             .filter_map(|n| {
@@ -1718,9 +1715,7 @@ impl SimulationRunner {
             ));
         }
 
-        let local_dirs: BTreeSet<String> = self
-            .local_fs
-            .list_all()
+        let local_dirs: BTreeSet<String> = local_all
             .iter()
             .filter(|n| n.is_dir() && !n.name.is_empty())
             .map(|n| self.local_path(n))
@@ -1980,18 +1975,15 @@ impl SimulationRunner {
                     reachable = false;
                     break;
                 }
-                match self.local_fs.get_node(pid) {
-                    Some(parent) => {
-                        if parent.name.is_empty() {
-                            break; // reached root
-                        }
-                        parts.push(parent.name.clone());
-                        current.clone_from(&parent.parent_id);
+                if let Some(parent) = self.local_fs.get_node(pid) {
+                    if parent.name.is_empty() {
+                        break; // reached root
                     }
-                    None => {
-                        reachable = false;
-                        break;
-                    }
+                    parts.push(parent.name.clone());
+                    current.clone_from(&parent.parent_id);
+                } else {
+                    reachable = false;
+                    break;
                 }
             }
             if !reachable {
