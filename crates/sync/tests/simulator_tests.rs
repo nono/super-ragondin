@@ -906,6 +906,9 @@ fn check_content_integrity_detects_mismatch() {
         .unwrap();
     runner.apply(SimAction::Sync).unwrap();
 
+    // Integrity should pass after a clean sync
+    runner.check_content_integrity().unwrap();
+
     // Tamper with remote content directly (bypassing sync)
     runner.remote.set_content(&file_id, b"tampered".to_vec());
 
