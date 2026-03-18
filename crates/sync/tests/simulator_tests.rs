@@ -920,6 +920,44 @@ fn check_content_integrity_detects_mismatch() {
     );
 }
 
+
+#[test]
+fn check_no_orphaned_store_nodes_detects_orphan() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "orphan.txt".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Should pass after a clean sync
+    runner.check_no_orphaned_store_nodes().unwrap();
+
+    // Directly delete from MockRemote without going through sync
+    runner.remote.delete_node(&file_id);
+
+    // The store still has the remote node — orphan detected
+    let result = runner.check_no_orphaned_store_nodes();
+    assert!(result.is_err(), "should detect orphaned remote store node");
+}
+
 // ==================== Successive/Chained Move Tests ====================
 
 /// Helper: set up a runner with root + initial sync, return (runner, root_id).

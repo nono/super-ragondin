@@ -1915,4 +1915,45 @@ impl SimulationRunner {
             ))
         }
     }
+
+    /// Check invariant: every local node in the store exists in `MockFs`, and every
+    /// remote node in the store exists in `MockRemote`. Orphans indicate a delete
+    /// was not cleaned up.
+    ///
+    /// # Errors
+    /// Returns a list of all orphaned IDs found.
+    pub fn check_no_orphaned_store_nodes(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+
+        let local_nodes = self.store.list_all_local().map_err(|e| e.to_string())?;
+        for node in &local_nodes {
+            if !self.local_fs.exists(&node.id) {
+                errors.push(format!(
+                    "orphaned local store node: {:?} ({})",
+                    node.id, node.name
+                ));
+            }
+        }
+
+        let remote_nodes = self.store.list_all_remote().map_err(|e| e.to_string())?;
+        for node in &remote_nodes {
+            if self.remote.get_node(&node.id).is_none() {
+                errors.push(format!(
+                    "orphaned remote store node: {} ({})",
+                    node.id.as_str(),
+                    node.name
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Orphaned store node check failed ({} errors):\n  {}",
+                errors.len(),
+                errors.join("\n  ")
+            ))
+        }
+    }
 }
