@@ -4192,6 +4192,265 @@ fn atomic_save_same_content_converges() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Application save patterns (save-through-temp-file) ====================
+
+/// LibreOffice save pattern: rename file.ods → file.ods.osl-tmp, create new
+/// file.ods, update file.ods with new content, delete file.ods.osl-tmp.
+/// The remote identity of file.ods must be preserved (update, not delete+create).
+#[test]
+fn ods_update_through_osl_tmp_file() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create file.ods on remote and sync
+    let file_remote_id = RemoteId::new("file-ods");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id,
+            name: "file.ods".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_local_id = find_local_id_by_name(&runner, "file.ods");
+
+    // Stop client — all changes happen while stopped (single scan after restart)
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Step 1: rename file.ods → file.ods.osl-tmp
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_local_id.clone(),
+            new_parent_local_id: None, // keep same parent
+            new_name: "file.ods.osl-tmp".to_string(),
+        })
+        .unwrap();
+
+    // Step 2: create new file.ods (new inode)
+    let new_file_local_id = LocalFileId::new(1, 50_000);
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .expect("root dir must exist");
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "file.ods".to_string(),
+            content: b"temporary content".to_vec(),
+        })
+        .unwrap();
+
+    // Step 3: update file.ods with final content
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: new_file_local_id.clone(),
+            content: b"updated content #1".to_vec(),
+        })
+        .unwrap();
+
+    // Step 4: delete the temp file (file.ods.osl-tmp)
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: file_local_id,
+        })
+        .unwrap();
+
+    // Restart and sync
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // file.ods must exist locally with updated content
+    let local_ods: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file.ods")
+        .collect();
+    assert_eq!(local_ods.len(), 1, "Exactly one file.ods locally");
+    let ods_content = runner.local_fs.read_file(&new_file_local_id);
+    assert_eq!(
+        ods_content,
+        Some(&b"updated content #1".to_vec()),
+        "file.ods must have updated content"
+    );
+
+    // No temp file should remain locally
+    let tmp_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name.contains("osl-tmp"))
+        .collect();
+    assert!(
+        tmp_files.is_empty(),
+        "No .osl-tmp file should remain locally"
+    );
+
+    // No temp file on remote either (nothing in trash)
+    let remote_tmp: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name.contains("osl-tmp"))
+        .collect();
+    assert!(
+        remote_tmp.is_empty(),
+        "No .osl-tmp file should exist on remote"
+    );
+
+    // Remote must have exactly one file.ods
+    let remote_ods: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file.ods")
+        .collect();
+    assert_eq!(remote_ods.len(), 1, "Exactly one file.ods on remote");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Generic save-through-rename pattern: rename file.ods → other-file.ods,
+/// create new file.ods, update file.ods, delete other-file.ods, update file.ods
+/// again. Expected: file.ods with final content, nothing else.
+#[test]
+fn update_through_unignored_tmp_file() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create file.ods on remote and sync
+    let file_remote_id = RemoteId::new("file-ods");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id,
+            name: "file.ods".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_local_id = find_local_id_by_name(&runner, "file.ods");
+
+    // Stop client — all changes happen while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Step 1: rename file.ods → other-file.ods
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_local_id.clone(),
+            new_parent_local_id: None,
+            new_name: "other-file.ods".to_string(),
+        })
+        .unwrap();
+
+    // Step 2: create new file.ods (new inode)
+    let new_file_local_id = LocalFileId::new(1, 50_001);
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .expect("root dir must exist");
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_file_local_id.clone(),
+            parent_local_id: Some(root_local_id),
+            name: "file.ods".to_string(),
+            content: b"temporary content".to_vec(),
+        })
+        .unwrap();
+
+    // Step 3: update file.ods with content #1
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: new_file_local_id.clone(),
+            content: b"updated content #1".to_vec(),
+        })
+        .unwrap();
+
+    // Step 4: delete other-file.ods (the original renamed away)
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: file_local_id,
+        })
+        .unwrap();
+
+    // Step 5: update file.ods again with content #2
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id: new_file_local_id.clone(),
+            content: b"updated content #2".to_vec(),
+        })
+        .unwrap();
+
+    // Restart and sync
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // file.ods must exist locally with final content
+    let local_ods: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file.ods")
+        .collect();
+    assert_eq!(local_ods.len(), 1, "Exactly one file.ods locally");
+    let ods_content = runner.local_fs.read_file(&new_file_local_id);
+    assert_eq!(
+        ods_content,
+        Some(&b"updated content #2".to_vec()),
+        "file.ods must have final content"
+    );
+
+    // No other-file.ods should remain
+    let other_local: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "other-file.ods")
+        .collect();
+    assert!(
+        other_local.is_empty(),
+        "No other-file.ods should remain locally"
+    );
+
+    let other_remote: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "other-file.ods")
+        .collect();
+    assert!(
+        other_remote.is_empty(),
+        "No other-file.ods should exist on remote"
+    );
+
+    // Remote must have exactly one file.ods
+    let remote_ods: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file.ods")
+        .collect();
+    assert_eq!(remote_ods.len(), 1, "Exactly one file.ods on remote");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Move + create at old path ====================
 
 // -- move_a_to_b_and_create_a (file version): move file a→b, create new file "a" --
