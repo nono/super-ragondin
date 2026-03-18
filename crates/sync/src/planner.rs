@@ -738,15 +738,18 @@ impl<'a> Planner<'a> {
     /// - Different content → both ops are replaced with a `NameCollision`
     ///   conflict.
     #[allow(clippy::unused_self)]
+    #[allow(clippy::too_many_lines)]
     fn resolve_path_collisions(
         &self,
         results: &mut Vec<PlanResult>,
         remote_by_id: &HashMap<RemoteId, &RemoteNode>,
         local_by_id: &HashMap<LocalFileId, &LocalNode>,
     ) {
-        // Build index: local_path → index for remote-side and local-side new ops
+        // Build index: local_path → index for remote-side ops, local-side new ops,
+        // and local-side move ops (by target/to_path).
         let mut remote_new_by_path: HashMap<&PathBuf, usize> = HashMap::new();
         let mut local_new_by_path: HashMap<&PathBuf, usize> = HashMap::new();
+        let mut move_local_by_to_path: HashMap<&PathBuf, usize> = HashMap::new();
 
         for (i, result) in results.iter().enumerate() {
             match result {
@@ -762,6 +765,9 @@ impl<'a> Planner<'a> {
                 ) => {
                     local_new_by_path.insert(local_path, i);
                 }
+                PlanResult::Op(SyncOp::MoveLocal { to_path, .. }) => {
+                    move_local_by_to_path.insert(to_path, i);
+                }
                 _ => {}
             }
         }
@@ -769,6 +775,9 @@ impl<'a> Planner<'a> {
         // Find paths that appear in both maps
         let mut indices_to_remove = Vec::new();
         let mut replacements: Vec<(usize, PlanResult)> = Vec::new();
+        // Extra conflicts appended after all replacements (keeps DownloadNew in ops
+        // so it runs after resolve_name_collision frees the path).
+        let mut extra_conflicts: Vec<PlanResult> = Vec::new();
 
         for (path, &remote_idx) in &remote_new_by_path {
             if let Some(&local_idx) = local_new_by_path.get(path) {
@@ -810,20 +819,53 @@ impl<'a> Planner<'a> {
                             path = %path.display(),
                             "⚠️ New remote and local at same path with different content"
                         );
+                        // Remove the local-only upload and keep the DownloadNew op
+                        // unchanged.  A NameCollision conflict is appended separately
+                        // so that resolve_name_collision frees the path (by renaming
+                        // the local file) before DownloadNew executes in the same
+                        // planning round.
                         indices_to_remove.push(local_idx);
-                        replacements.push((
-                            remote_idx,
-                            PlanResult::Conflict(Conflict {
-                                local_id: Some(local_id),
-                                remote_id: Some(remote_id),
-                                local_path: Some((*path).clone()),
-                                reason: "Created on both sides with different content".to_string(),
-                                kind: ConflictKind::NameCollision,
-                            }),
-                        ));
+                        extra_conflicts.push(PlanResult::Conflict(Conflict {
+                            local_id: Some(local_id),
+                            remote_id: Some(remote_id),
+                            local_path: Some((*path).clone()),
+                            reason: "Created on both sides with different content".to_string(),
+                            kind: ConflictKind::NameCollision,
+                        }));
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // A MoveLocal's target path may collide with an UploadNew at the same path.
+        // The remote-dictated move wins; conflict-name the local-only file to free
+        // the path. The NameCollision handler renames the local file before the
+        // MoveLocal executes.
+        for (path, &move_idx) in &move_local_by_to_path {
+            if let Some(&upload_idx) = local_new_by_path.get(path) {
+                let local_id = match &results[upload_idx] {
+                    PlanResult::Op(
+                        SyncOp::UploadNew { local_id, .. }
+                        | SyncOp::CreateRemoteDir { local_id, .. },
+                    ) => local_id.clone(),
+                    _ => continue,
+                };
+                tracing::debug!(
+                    path = %path.display(),
+                    "⚠️ MoveLocal target collides with UploadNew — conflict-naming local file"
+                );
+                indices_to_remove.push(upload_idx);
+                replacements.push((
+                    move_idx,
+                    PlanResult::Conflict(Conflict {
+                        local_id: Some(local_id),
+                        remote_id: None,
+                        local_path: Some((*path).clone()),
+                        reason: "MoveLocal target occupied by local-only file".to_string(),
+                        kind: ConflictKind::NameCollision,
+                    }),
+                ));
             }
         }
 
@@ -838,6 +880,10 @@ impl<'a> Planner<'a> {
         for idx in indices_to_remove.into_iter().rev() {
             results.remove(idx);
         }
+
+        // Append any extra NameCollision conflicts that keep their paired
+        // DownloadNew/CreateLocalDir op alive (path freed before op runs).
+        results.extend(extra_conflicts);
     }
 
     fn sort_operations(results: &mut [PlanResult]) {
