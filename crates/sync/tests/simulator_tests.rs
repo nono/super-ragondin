@@ -4192,6 +4192,411 @@ fn atomic_save_same_content_converges() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Replace file with file (delete + create at same path) ====================
+
+/// Local side: delete 'file' then create a new 'file' with different content.
+/// The new file has a different inode so it must not be confused with an update.
+#[test]
+fn replace_file_with_file_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Init: create file on remote and sync
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id,
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let old_local_id = runner
+        .remote_to_local
+        .get(&file_remote_id)
+        .cloned()
+        .unwrap();
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Delete the old file locally
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: old_local_id,
+        })
+        .unwrap();
+
+    // Create a new file at the same path with different content (new inode)
+    let new_local_id = LocalFileId::new(1, 99_001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "file".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    // Sync
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Exactly one 'file' locally
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    // Exactly one 'file' on remote (not trashed)
+    let remote_files: Vec<_> = runner
+        .remote
+        .nodes
+        .values()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(remote_files.len(), 1, "Exactly one 'file' on remote");
+
+    // Content should be the new content
+    let remote_file = remote_files[0];
+    let remote_content = runner.remote.get_content(&remote_file.id);
+    assert_eq!(
+        remote_content,
+        Some(&b"new content".to_vec()),
+        "Remote should have the new content"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Local side while stopped: delete + create at same path happen before sync resumes.
+#[test]
+fn replace_file_with_file_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id,
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let old_local_id = runner
+        .remote_to_local
+        .get(&file_remote_id)
+        .cloned()
+        .unwrap();
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop client, perform delete + create while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: old_local_id,
+        })
+        .unwrap();
+
+    let new_local_id = LocalFileId::new(1, 99_002);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "file".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Remote side: delete file on remote and create a new one at the same path.
+#[test]
+fn replace_file_with_file_remote() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id.clone(),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Delete old file on remote
+    runner
+        .apply(SimAction::RemoteDeleteFile { id: file_remote_id })
+        .unwrap();
+
+    // Create a new file at the same path with different content (new remote ID)
+    let new_remote_id = RemoteId::new("file-2");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: new_remote_id,
+            parent_id: root_id,
+            name: "file".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    // Verify content is updated
+    let local_file = local_files[0];
+    let local_content = runner.local_fs.read_file(&local_file.id);
+    assert_eq!(
+        local_content,
+        Some(&b"new content".to_vec()),
+        "Local should have the new content"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Remote side with trash: trash file on remote then create a new one at the same path.
+#[test]
+fn replace_file_with_file_remote_trash() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id.clone(),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    // Trash old file on remote (like a user would via the Cozy UI)
+    runner
+        .apply(SimAction::RemoteTrash { id: file_remote_id })
+        .unwrap();
+
+    // Create a new file at the same path
+    let new_remote_id = RemoteId::new("file-2");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: new_remote_id,
+            parent_id: root_id,
+            name: "file".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Both sides: local replaces file AND remote replaces file concurrently.
+/// Both create new identities at the same path with different content.
+/// This should be detected as a conflict.
+#[test]
+fn replace_file_with_file_both_sides() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: root_id.clone(),
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let old_local_id = runner
+        .remote_to_local
+        .get(&file_remote_id)
+        .cloned()
+        .unwrap();
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Stop client so both sides change independently
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Local: delete + create with "local new content"
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: old_local_id,
+        })
+        .unwrap();
+    let new_local_id = LocalFileId::new(1, 99_003);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "file".to_string(),
+            content: b"local new content".to_vec(),
+        })
+        .unwrap();
+
+    // Remote: delete + create with "remote new content"
+    runner
+        .apply(SimAction::RemoteDeleteFile { id: file_remote_id })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-2"),
+            parent_id: root_id,
+            name: "file".to_string(),
+            content: b"remote new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Both versions should be present (one possibly with a conflict name)
+    // or resolved in some way — at minimum, convergence must hold
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+/// Replace file in a subdirectory (not root) — ensures parent resolution works.
+#[test]
+fn replace_file_with_file_in_subdir_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, root_id) = setup_runner_with_root(dir.path());
+
+    // Create a subdirectory
+    let subdir_remote_id = RemoteId::new("dir-sub");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: subdir_remote_id.clone(),
+            parent_id: Some(root_id),
+            name: "subdir".to_string(),
+        })
+        .unwrap();
+
+    // Create a file inside the subdirectory
+    let file_remote_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_remote_id.clone(),
+            parent_id: subdir_remote_id,
+            name: "file".to_string(),
+            content: b"initial content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let old_local_id = runner
+        .remote_to_local
+        .get(&file_remote_id)
+        .cloned()
+        .unwrap();
+    let subdir_local_id = find_local_id_by_name(&runner, "subdir");
+
+    // Delete the old file locally
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: old_local_id,
+        })
+        .unwrap();
+
+    // Create a new file at the same path
+    let new_local_id = LocalFileId::new(1, 99_004);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_local_id,
+            parent_local_id: Some(subdir_local_id),
+            name: "file".to_string(),
+            content: b"new content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    let local_files: Vec<_> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| n.name == "file")
+        .collect();
+    assert_eq!(local_files.len(), 1, "Exactly one 'file' locally");
+
+    runner.check_convergence().unwrap();
+    runner.check_store_consistency().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Application save patterns (save-through-temp-file) ====================
 
 /// LibreOffice save pattern: rename file.ods → file.ods.osl-tmp, create new
