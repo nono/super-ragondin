@@ -984,26 +984,31 @@ fn check_no_duplicate_local_paths_detects_duplicate() {
     // Clean state should pass
     runner.check_no_duplicate_local_paths().unwrap();
 
-    // Create two files with the same name under the same parent
+    // Create two files with the same name under the same parent directly via MockFs
+    // (bypassing the runner's duplicate-name guard, which mirrors real filesystem enforcement).
     let id1 = LocalFileId::new(1, 40_000);
-    runner
-        .apply(SimAction::LocalCreateFile {
-            local_id: id1,
-            parent_local_id: Some(root_local_id.clone()),
-            name: "dup.txt".to_string(),
-            content: b"a".to_vec(),
-        })
-        .unwrap();
+    let node1 = LocalNode {
+        id: id1.clone(),
+        parent_id: Some(root_local_id.clone()),
+        name: "dup.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: None,
+        size: None,
+        mtime: 1000,
+    };
+    runner.local_fs.create_file(id1, node1, b"a".to_vec());
 
     let id2 = LocalFileId::new(1, 40_001);
-    runner
-        .apply(SimAction::LocalCreateFile {
-            local_id: id2,
-            parent_local_id: Some(root_local_id),
-            name: "dup.txt".to_string(),
-            content: b"b".to_vec(),
-        })
-        .unwrap();
+    let node2 = LocalNode {
+        id: id2.clone(),
+        parent_id: Some(root_local_id),
+        name: "dup.txt".to_string(),
+        node_type: NodeType::File,
+        md5sum: None,
+        size: None,
+        mtime: 1000,
+    };
+    runner.local_fs.create_file(id2, node2, b"b".to_vec());
 
     let result = runner.check_no_duplicate_local_paths();
     assert!(result.is_err(), "should detect duplicate local paths");

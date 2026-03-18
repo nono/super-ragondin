@@ -345,7 +345,14 @@ impl SimulationRunner {
                 new_parent_id,
                 new_name,
             } => {
-                self.remote.move_node(&id, new_parent_id, new_name);
+                // Skip if the target (parent, name) already exists for a different node.
+                // A real server would reject a rename/move that collides with an existing entry.
+                let collision = self.remote.nodes.values().any(|n| {
+                    n.id != id && n.parent_id.as_ref() == Some(&new_parent_id) && n.name == new_name
+                });
+                if !collision {
+                    self.remote.move_node(&id, new_parent_id, new_name);
+                }
                 Ok(())
             }
             SimAction::Sync => {
@@ -426,6 +433,16 @@ impl SimulationRunner {
         // Resolve stale parent reference: if parent no longer exists in local_fs
         // (e.g. deleted by resolve_name_collision), fall back to the root dir.
         let effective_parent = self.resolve_parent(parent_local_id);
+        // A real filesystem rejects creating a file whose name already exists in the
+        // same directory. Skip the create to keep MockFs consistent.
+        let already_exists = self
+            .local_fs
+            .nodes
+            .values()
+            .any(|n| n.parent_id == effective_parent && n.name == name);
+        if already_exists {
+            return Ok(());
+        }
         let node = LocalNode {
             id: local_id.clone(),
             parent_id: effective_parent,
@@ -453,6 +470,16 @@ impl SimulationRunner {
         // Resolve stale parent reference: if parent no longer exists in local_fs
         // (e.g. deleted by resolve_name_collision), fall back to the root dir.
         let effective_parent = self.resolve_parent(parent_local_id);
+        // A real filesystem rejects creating a directory whose name already exists in
+        // the same parent. Skip the create to keep MockFs consistent.
+        let already_exists = self
+            .local_fs
+            .nodes
+            .values()
+            .any(|n| n.parent_id == effective_parent && n.name == name);
+        if already_exists {
+            return Ok(());
+        }
         let node = LocalNode {
             id: local_id.clone(),
             parent_id: effective_parent,
@@ -573,6 +600,17 @@ impl SimulationRunner {
         name: String,
         content: Vec<u8>,
     ) {
+        // A real Cozy Stack server rejects creating a file whose name already
+        // exists under the same parent. Enforce the same constraint here so the
+        // simulator never enters an invalid state with duplicate (parent, name) pairs.
+        let already_exists = self
+            .remote
+            .nodes
+            .values()
+            .any(|n| n.parent_id.as_ref() == Some(parent_id) && n.name == name);
+        if already_exists {
+            return;
+        }
         let md5sum = compute_md5_from_bytes(&content);
         let node = RemoteNode {
             id: id.clone(),
@@ -593,6 +631,18 @@ impl SimulationRunner {
         parent_id: Option<&RemoteId>,
         name: String,
     ) {
+        // A real Cozy Stack server rejects creating a directory whose name already
+        // exists under the same parent. Enforce the same constraint here.
+        if let Some(pid) = parent_id {
+            let already_exists = self
+                .remote
+                .nodes
+                .values()
+                .any(|n| n.parent_id.as_ref() == Some(pid) && n.name == name);
+            if already_exists {
+                return;
+            }
+        }
         let node = RemoteNode {
             id: id.clone(),
             parent_id: parent_id.cloned(),
@@ -663,6 +713,16 @@ impl SimulationRunner {
         new_parent_local_id: Option<LocalFileId>,
         new_name: String,
     ) -> Result<(), String> {
+        // Skip if the target (parent, name) already belongs to a different node.
+        // A real filesystem rename to an occupied name would replace (for files)
+        // or fail (for dirs); skipping keeps MockFs free of duplicate-path pairs.
+        let collision =
+            self.local_fs.nodes.values().any(|n| {
+                &n.id != local_id && n.parent_id == new_parent_local_id && n.name == new_name
+            });
+        if collision {
+            return Ok(());
+        }
         self.local_fs
             .move_node(local_id, new_parent_local_id, new_name);
         if !self.stopped
@@ -1164,6 +1224,20 @@ impl SimulationRunner {
         let Ok(local_parent_id) = self.validate_local_parent(remote_node.parent_id.as_ref()) else {
             return Ok(());
         };
+
+        // If a different local node already occupies (parent, name), skip this
+        // download and let the inner planning loop retry. The occupant will be
+        // removed (DeleteLocal, MoveLocal) or resolved (NameCollision) in the
+        // same or next inner-loop iteration, freeing the path for the download.
+        let path_occupied = self
+            .local_fs
+            .nodes
+            .values()
+            .any(|n| n.parent_id == local_parent_id && n.name == remote_node.name);
+        if path_occupied {
+            return Ok(());
+        }
+
         let local_id = self.next_local_id();
         let content = self
             .remote
@@ -1224,6 +1298,17 @@ impl SimulationRunner {
             None
         };
 
+        // If a different local node already occupies (parent, name), skip — the
+        // inner planning loop will retry once the occupant is removed or moved.
+        let path_occupied = self
+            .local_fs
+            .nodes
+            .values()
+            .any(|n| n.parent_id == local_parent_id && n.name == remote_node.name);
+        if path_occupied {
+            return Ok(());
+        }
+
         let local_id = self.next_local_id();
 
         let local_node = LocalNode {
@@ -1283,6 +1368,17 @@ impl SimulationRunner {
             .unwrap_or_default();
         let remote_id = RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
 
+        // Skip if a remote node with the same name already exists under this parent
+        // (mirrors Cozy Stack's rejection of duplicate names in the same directory)
+        let name_taken = self
+            .remote
+            .nodes
+            .values()
+            .any(|n| n.parent_id.as_ref() == Some(parent_remote_id) && n.name == name);
+        if name_taken {
+            return Ok(());
+        }
+
         let remote_node = RemoteNode {
             id: remote_id.clone(),
             parent_id: Some(parent_remote_id.clone()),
@@ -1333,6 +1429,16 @@ impl SimulationRunner {
             return Ok(());
         };
         let remote_id = RemoteId::new(format!("remote-{}-{}", local_id.device_id, local_id.inode));
+
+        // Skip if a remote node with the same name already exists under this parent
+        let name_taken = self
+            .remote
+            .nodes
+            .values()
+            .any(|n| n.parent_id.as_ref() == Some(parent_remote_id) && n.name == name);
+        if name_taken {
+            return Ok(());
+        }
 
         let remote_node = RemoteNode {
             id: remote_id.clone(),
@@ -1438,6 +1544,15 @@ impl SimulationRunner {
         {
             return Ok(());
         }
+        // Skip if a different local node already occupies (parent, name).
+        // A real filesystem rename to an occupied name would replace (for files)
+        // or fail (for dirs); skipping keeps MockFs free of duplicate-path pairs.
+        let collision = self.local_fs.nodes.values().any(|n| {
+            &n.id != local_id && n.parent_id == new_parent_local && n.name == remote_node.name
+        });
+        if collision {
+            return Ok(());
+        }
         self.local_fs
             .move_node(local_id, new_parent_local.clone(), remote_node.name.clone());
         if let Some(node) = self.local_fs.get_node(local_id).cloned() {
@@ -1468,6 +1583,46 @@ impl SimulationRunner {
         new_parent_id: &RemoteId,
         new_name: &str,
     ) -> Result<(), String> {
+        // If a different remote node already occupies (parent, name), check
+        // whether it is orphaned (no local synced pair). If so, conflict-name
+        // it to free the path. If it is synced, skip — the real server would
+        // reject the rename with 409 Conflict.
+        let occupant_id = self
+            .remote
+            .nodes
+            .values()
+            .find(|n| {
+                &n.id != remote_id
+                    && n.parent_id.as_ref() == Some(new_parent_id)
+                    && n.name == new_name
+            })
+            .map(|n| n.id.clone());
+        if let Some(ref occ_id) = occupant_id {
+            let occ_is_synced = self
+                .store
+                .get_synced_by_remote(occ_id)
+                .ok()
+                .flatten()
+                .is_some();
+            if occ_is_synced {
+                // Real conflict with a synced file: skip.
+                return Ok(());
+            }
+            // Orphaned remote occupant: conflict-name it to free the path.
+            let occ_name = self
+                .remote
+                .get_node(occ_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_default();
+            let conflict_name = generate_conflict_name(&PathBuf::from(&occ_name));
+            self.remote
+                .move_node(occ_id, new_parent_id.clone(), conflict_name);
+            if let Some(node) = self.remote.get_node(occ_id).cloned() {
+                self.store
+                    .insert_remote_node(&node)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         self.remote
             .move_node(remote_id, new_parent_id.clone(), new_name.to_string());
         if let Some(node) = self.remote.get_node(remote_id).cloned() {
