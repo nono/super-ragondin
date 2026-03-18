@@ -1956,4 +1956,70 @@ impl SimulationRunner {
             ))
         }
     }
+
+    /// Check invariant: no two nodes in `MockFs` have the same full path.
+    /// Nodes whose parent chain leads to a missing node are skipped
+    /// (defensive: callers should invoke this after a complete sync).
+    ///
+    /// # Errors
+    /// Returns an error listing any duplicated paths.
+    pub fn check_no_duplicate_local_paths(&self) -> Result<(), String> {
+        use std::collections::HashMap;
+        let mut path_to_ids: HashMap<String, Vec<String>> = HashMap::new();
+
+        for node in self.local_fs.list_all() {
+            if node.name.is_empty() {
+                continue; // skip root
+            }
+            // Walk parent chain; skip if any parent is missing
+            let mut parts = vec![node.name.clone()];
+            let mut current = node.parent_id.clone();
+            let mut visited = HashSet::new();
+            let mut reachable = true;
+            while let Some(ref pid) = current {
+                if !visited.insert(pid.clone()) {
+                    reachable = false;
+                    break;
+                }
+                match self.local_fs.get_node(pid) {
+                    Some(parent) => {
+                        if parent.name.is_empty() {
+                            break; // reached root
+                        }
+                        parts.push(parent.name.clone());
+                        current.clone_from(&parent.parent_id);
+                    }
+                    None => {
+                        reachable = false;
+                        break;
+                    }
+                }
+            }
+            if !reachable {
+                continue;
+            }
+            parts.reverse();
+            let path = parts.join("/");
+            path_to_ids
+                .entry(path)
+                .or_default()
+                .push(format!("{:?}", node.id));
+        }
+
+        let duplicates: Vec<String> = path_to_ids
+            .into_iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(path, ids)| format!("'{}' (ids: {})", path, ids.join(", ")))
+            .collect();
+
+        if duplicates.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Duplicate local path check failed ({} paths):\n  {}",
+                duplicates.len(),
+                duplicates.join("\n  ")
+            ))
+        }
+    }
 }

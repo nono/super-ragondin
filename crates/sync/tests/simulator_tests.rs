@@ -958,6 +958,59 @@ fn check_no_orphaned_store_nodes_detects_orphan() {
     assert!(result.is_err(), "should detect orphaned remote store node");
 }
 
+
+#[test]
+fn check_no_duplicate_local_paths_detects_duplicate() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    // Clean state should pass
+    runner.check_no_duplicate_local_paths().unwrap();
+
+    // Create two files with the same name under the same parent
+    let id1 = LocalFileId::new(1, 40_000);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: id1,
+            parent_local_id: Some(root_local_id.clone()),
+            name: "dup.txt".to_string(),
+            content: b"a".to_vec(),
+        })
+        .unwrap();
+
+    let id2 = LocalFileId::new(1, 40_001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: id2,
+            parent_local_id: Some(root_local_id),
+            name: "dup.txt".to_string(),
+            content: b"b".to_vec(),
+        })
+        .unwrap();
+
+    let result = runner.check_no_duplicate_local_paths();
+    assert!(result.is_err(), "should detect duplicate local paths");
+}
+
 // ==================== Successive/Chained Move Tests ====================
 
 /// Helper: set up a runner with root + initial sync, return (runner, root_id).
