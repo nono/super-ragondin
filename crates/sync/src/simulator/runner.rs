@@ -8,7 +8,7 @@ use crate::planner::Planner;
 use crate::store::{StoreSnapshot, TreeStore};
 use crate::sync::conflict_name::generate_conflict_name;
 use crate::util::compute_md5_from_bytes;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -1964,7 +1964,6 @@ impl SimulationRunner {
     /// # Errors
     /// Returns an error listing any duplicated paths.
     pub fn check_no_duplicate_local_paths(&self) -> Result<(), String> {
-        use std::collections::HashMap;
         let mut path_to_ids: HashMap<String, Vec<String>> = HashMap::new();
 
         for node in self.local_fs.list_all() {
