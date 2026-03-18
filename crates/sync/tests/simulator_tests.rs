@@ -2909,6 +2909,35 @@ fn simulation_runner_local_move_dir_then_sync() {
     runner.check_convergence().unwrap();
 }
 
+#[test]
+fn check_all_invariants_passes_on_clean_state() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "hello.txt".to_string(),
+            content: b"world".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_all_invariants().unwrap();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(50))]
 
@@ -2941,9 +2970,8 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence and idempotency
-        runner.check_convergence().unwrap();
-        runner.check_idempotency().unwrap();
+        // Check all invariants
+        runner.check_all_invariants().unwrap();
     }
 
     #[test]
@@ -2983,9 +3011,8 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence and idempotency
-        runner.check_convergence().unwrap();
-        runner.check_idempotency().unwrap();
+        // Check all invariants
+        runner.check_all_invariants().unwrap();
     }
 
     #[test]
@@ -3023,7 +3050,7 @@ proptest! {
 
         runner.apply(SimAction::Sync).unwrap();
 
-        runner.check_convergence().unwrap();
+        runner.check_all_invariants().unwrap();
     }
 
     #[test]
@@ -3059,9 +3086,8 @@ proptest! {
         // Sync
         runner.apply(SimAction::Sync).unwrap();
 
-        // Check convergence and idempotency
-        runner.check_convergence().unwrap();
-        runner.check_idempotency().unwrap();
+        // Check all invariants
+        runner.check_all_invariants().unwrap();
     }
 
     #[test]
@@ -3103,10 +3129,8 @@ proptest! {
             runner.apply(SimAction::Sync).unwrap();
         }
 
-        // After sync, local and remote must converge and be idempotent
-        runner.check_convergence().unwrap();
-        runner.check_idempotency().unwrap();
-        runner.check_store_consistency().unwrap();
+        // After sync, check all invariants
+        runner.check_all_invariants().unwrap();
     }
 
     #[test]
@@ -3197,9 +3221,7 @@ proptest! {
         }
 
         // Final invariant checks
-        runner.check_convergence().unwrap();
-        runner.check_idempotency().unwrap();
-        runner.check_store_consistency().unwrap();
+        runner.check_all_invariants().unwrap();
     }
 }
 

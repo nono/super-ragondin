@@ -2021,4 +2021,49 @@ impl SimulationRunner {
             ))
         }
     }
+
+    /// Run all six invariant checks and collect all errors (no short-circuit).
+    ///
+    /// Order (root-cause / structural first, derived / planner-level last):
+    /// 1. `check_no_orphaned_store_nodes`
+    /// 2. `check_store_consistency`
+    /// 3. `check_no_duplicate_local_paths`
+    /// 4. `check_convergence`
+    /// 5. `check_content_integrity`
+    /// 6. `check_idempotency`
+    ///
+    /// # Errors
+    /// Returns a combined error string if any check fails.
+    pub fn check_all_invariants(&self) -> Result<(), String> {
+        let mut errors = Vec::new();
+
+        if let Err(e) = self.check_no_orphaned_store_nodes() {
+            errors.push(format!("[check_no_orphaned_store_nodes] {e}"));
+        }
+        if let Err(e) = self.check_store_consistency() {
+            errors.push(format!("[check_store_consistency] {e}"));
+        }
+        if let Err(e) = self.check_no_duplicate_local_paths() {
+            errors.push(format!("[check_no_duplicate_local_paths] {e}"));
+        }
+        if let Err(e) = self.check_convergence() {
+            errors.push(format!("[check_convergence] {e}"));
+        }
+        if let Err(e) = self.check_content_integrity() {
+            errors.push(format!("[check_content_integrity] {e}"));
+        }
+        if let Err(e) = self.check_idempotency() {
+            errors.push(format!("[check_idempotency] {e}"));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Invariant checks failed ({} failures):\n{}",
+                errors.len(),
+                errors.join("\n")
+            ))
+        }
+    }
 }
