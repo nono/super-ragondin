@@ -2028,6 +2028,574 @@ fn file_swap_remote() {
     runner.check_idempotency().unwrap();
 }
 
+// ==================== Nested/Cascading Move Tests ====================
+
+// -- move_file_inside_move: rename child, move parent dir, rename another child --
+// Init: parent/, parent/dst/, parent/src/, parent/src/dir/, parent/src/dir/empty-subdir/,
+//       parent/src/dir/subdir/, parent/src/dir/subdir/file, parent/src/dir/subdir/file2
+// Actions: rename file→filerenamed, move src/dir→dst/dir, rename file2→filerenamed2
+// Expected: parent/, parent/dst/, parent/dst/dir/, parent/dst/dir/empty-subdir/,
+//           parent/dst/dir/subdir/, parent/dst/dir/subdir/filerenamed,
+//           parent/dst/dir/subdir/filerenamed2, parent/src/
+
+#[test]
+fn move_file_inside_move_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    // Build initial tree on remote
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-dst", Some("dir-parent"), "dst"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content1".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-2"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file2".to_string(),
+            content: b"content2".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let file2_id = find_local_id_by_name(&runner, "file2");
+    let dir_id = find_local_id_by_name(&runner, "dir");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+
+    // Action 1: rename file → filerenamed (keep same parent: subdir)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(subdir_id.clone()),
+            new_name: "filerenamed".to_string(),
+        })
+        .unwrap();
+
+    // Action 2: move src/dir → dst/dir
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_id,
+            new_parent_local_id: Some(dst_id),
+            new_name: "dir".to_string(),
+        })
+        .unwrap();
+
+    // Action 3: rename file2 → filerenamed2 (keep same parent: subdir)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file2_id,
+            new_parent_local_id: Some(subdir_id),
+            new_name: "filerenamed2".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify expected tree
+    let names: Vec<String> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(names.contains(&"parent".to_string()));
+    assert!(names.contains(&"dst".to_string()));
+    assert!(names.contains(&"dir".to_string()));
+    assert!(names.contains(&"empty-subdir".to_string()));
+    assert!(names.contains(&"subdir".to_string()));
+    assert!(names.contains(&"filerenamed".to_string()));
+    assert!(names.contains(&"filerenamed2".to_string()));
+    assert!(names.contains(&"src".to_string()));
+    // Old names should be gone
+    assert!(
+        !names.contains(&"file".to_string()),
+        "'file' should be renamed"
+    );
+    assert!(
+        !names.contains(&"file2".to_string()),
+        "'file2' should be renamed"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_file_inside_move_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-dst", Some("dir-parent"), "dst"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content1".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-2"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file2".to_string(),
+            content: b"content2".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let file_id = find_local_id_by_name(&runner, "file");
+    let file2_id = find_local_id_by_name(&runner, "file2");
+    let dir_id = find_local_id_by_name(&runner, "dir");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+
+    // All actions while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(subdir_id.clone()),
+            new_name: "filerenamed".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_id,
+            new_parent_local_id: Some(dst_id),
+            new_name: "dir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file2_id,
+            new_parent_local_id: Some(subdir_id),
+            new_name: "filerenamed2".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let names: Vec<String> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(names.contains(&"filerenamed".to_string()));
+    assert!(names.contains(&"filerenamed2".to_string()));
+    assert!(!names.contains(&"file".to_string()));
+    assert!(!names.contains(&"file2".to_string()));
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_from_inside_move: move parent dir, then extract a child out --
+// Init: parent/, parent/dst/, parent/dst2/, parent/src/, parent/src/dir/,
+//       parent/src/dir/empty-subdir/, parent/src/dir/subdir/, parent/src/dir/subdir/file
+// Actions: move src/dir→dst/dir, move dst/dir/subdir→dst2/subdir
+// Expected: parent/, parent/dst/, parent/dst/dir/, parent/dst/dir/empty-subdir/,
+//           parent/dst2/, parent/dst2/subdir/, parent/dst2/subdir/file, parent/src/
+
+#[test]
+fn move_from_inside_move_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-dst", Some("dir-parent"), "dst"),
+        ("dir-dst2", Some("dir-parent"), "dst2"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let dir_id = find_local_id_by_name(&runner, "dir");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+    let dst2_id = find_local_id_by_name(&runner, "dst2");
+
+    // Action 1: move src/dir → dst/dir
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_id,
+            new_parent_local_id: Some(dst_id),
+            new_name: "dir".to_string(),
+        })
+        .unwrap();
+
+    // Action 2: move dst/dir/subdir → dst2/subdir
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: subdir_id,
+            new_parent_local_id: Some(dst2_id.clone()),
+            new_name: "subdir".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify expected tree
+    let names: Vec<String> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(names.contains(&"parent".to_string()));
+    assert!(names.contains(&"dst".to_string()));
+    assert!(names.contains(&"dir".to_string()));
+    assert!(names.contains(&"empty-subdir".to_string()));
+    assert!(names.contains(&"dst2".to_string()));
+    assert!(names.contains(&"subdir".to_string()));
+    assert!(names.contains(&"file".to_string()));
+    assert!(names.contains(&"src".to_string()));
+
+    // subdir should be under dst2, not under dir
+    let subdir_node = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "subdir")
+        .unwrap();
+    assert_eq!(
+        subdir_node.parent_id,
+        Some(dst2_id),
+        "subdir should be under dst2"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_from_inside_move_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-dst", Some("dir-parent"), "dst"),
+        ("dir-dst2", Some("dir-parent"), "dst2"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let dir_id = find_local_id_by_name(&runner, "dir");
+    let dst_id = find_local_id_by_name(&runner, "dst");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+    let dst2_id = find_local_id_by_name(&runner, "dst2");
+
+    // All actions while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_id,
+            new_parent_local_id: Some(dst_id),
+            new_name: "dir".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: subdir_id,
+            new_parent_local_id: Some(dst2_id.clone()),
+            new_name: "subdir".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let subdir_node = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "subdir")
+        .unwrap();
+    assert_eq!(
+        subdir_node.parent_id,
+        Some(dst2_id),
+        "subdir should be under dst2"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+// -- move_dir_parent_and_child: move parent + rename child dir + rename grandchild file --
+// Init: parent/, parent/src/, parent/src/dir/, parent/src/dir/empty-subdir/,
+//       parent/src/dir/subdir/, parent/src/dir/subdir/file
+// Actions: move src→dst, rename dir→dir2, rename file→file2
+// Expected: parent/, parent/dst/, parent/dst/dir2/, parent/dst/dir2/empty-subdir/,
+//           parent/dst/dir2/subdir/, parent/dst/dir2/subdir/file2
+
+#[test]
+fn move_dir_parent_and_child_local() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let src_id = find_local_id_by_name(&runner, "src");
+    let parent_id = find_local_id_by_name(&runner, "parent");
+    let dir_local_id = find_local_id_by_name(&runner, "dir");
+    let file_id = find_local_id_by_name(&runner, "file");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+
+    // Action 1: rename src → dst (move under same parent)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: src_id.clone(),
+            new_parent_local_id: Some(parent_id),
+            new_name: "dst".to_string(),
+        })
+        .unwrap();
+
+    // Action 2: rename dir → dir2 (keep same parent: src, now named dst)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_local_id,
+            new_parent_local_id: Some(src_id),
+            new_name: "dir2".to_string(),
+        })
+        .unwrap();
+
+    // Action 3: rename file → file2 (keep same parent: subdir)
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(subdir_id),
+            new_name: "file2".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Verify expected tree
+    let names: Vec<String> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(names.contains(&"parent".to_string()));
+    assert!(names.contains(&"dst".to_string()));
+    assert!(names.contains(&"dir2".to_string()));
+    assert!(names.contains(&"empty-subdir".to_string()));
+    assert!(names.contains(&"subdir".to_string()));
+    assert!(names.contains(&"file2".to_string()));
+    // Old names should be gone
+    assert!(
+        !names.contains(&"src".to_string()),
+        "'src' should be renamed to 'dst'"
+    );
+    assert!(
+        !names.contains(&"dir".to_string()),
+        "'dir' should be renamed to 'dir2'"
+    );
+    assert!(
+        !names.contains(&"file".to_string()),
+        "'file' should be renamed to 'file2'"
+    );
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
+#[test]
+fn move_dir_parent_and_child_local_while_stopped() {
+    let dir = tempdir().unwrap();
+    let (mut runner, _root_id) = setup_runner_with_root(dir.path());
+
+    for (id, parent, name) in [
+        ("dir-parent", Some("io.cozy.files.root-dir"), "parent"),
+        ("dir-src", Some("dir-parent"), "src"),
+        ("dir-dir", Some("dir-src"), "dir"),
+        ("dir-empty-subdir", Some("dir-dir"), "empty-subdir"),
+        ("dir-subdir", Some("dir-dir"), "subdir"),
+    ] {
+        runner
+            .apply(SimAction::RemoteCreateDir {
+                id: RemoteId::new(id),
+                parent_id: parent.map(RemoteId::new),
+                name: name.to_string(),
+            })
+            .unwrap();
+    }
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: RemoteId::new("file-1"),
+            parent_id: RemoteId::new("dir-subdir"),
+            name: "file".to_string(),
+            content: b"content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+    runner.check_convergence().unwrap();
+
+    let src_id = find_local_id_by_name(&runner, "src");
+    let parent_id = find_local_id_by_name(&runner, "parent");
+    let dir_local_id = find_local_id_by_name(&runner, "dir");
+    let file_id = find_local_id_by_name(&runner, "file");
+    let subdir_id = find_local_id_by_name(&runner, "subdir");
+
+    // All actions while stopped
+    runner.apply(SimAction::StopClient).unwrap();
+
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: src_id.clone(),
+            new_parent_local_id: Some(parent_id),
+            new_name: "dst".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: dir_local_id,
+            new_parent_local_id: Some(src_id),
+            new_name: "dir2".to_string(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::LocalMove {
+            local_id: file_id,
+            new_parent_local_id: Some(subdir_id),
+            new_name: "file2".to_string(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let names: Vec<String> = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .filter(|n| !n.name.is_empty())
+        .map(|n| n.name.clone())
+        .collect();
+    assert!(names.contains(&"dst".to_string()));
+    assert!(names.contains(&"dir2".to_string()));
+    assert!(names.contains(&"file2".to_string()));
+    assert!(!names.contains(&"src".to_string()));
+    assert!(!names.contains(&"dir".to_string()));
+    assert!(!names.contains(&"file".to_string()));
+
+    runner.check_convergence().unwrap();
+    runner.check_idempotency().unwrap();
+}
+
 // ==================== Property-Based Tests ====================
 
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
