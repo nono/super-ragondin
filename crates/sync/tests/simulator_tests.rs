@@ -6081,6 +6081,8 @@ struct SimState {
     stopped: bool,
     /// Saved snapshot for rollback
     snapshot: Option<Box<SimState>>,
+    /// Tracks (local, remote) ID pairs of files confirmed synced
+    synced_pairs: Vec<(LocalFileId, RemoteId)>,
 }
 
 impl SimState {
@@ -6096,6 +6098,7 @@ impl SimState {
             next_local_inode: 50_000,
             stopped: false,
             snapshot: None,
+            synced_pairs: Vec::new(),
         }
     }
 
@@ -6137,6 +6140,8 @@ impl SimState {
             self.remote_dir_ids.retain(|x| x != id);
             self.remote_parents.remove(id);
         }
+        self.synced_pairs
+            .retain(|(_, remote_id)| !to_remove.contains(remote_id));
     }
 
     /// Remove a local directory and all its descendants from tracking
@@ -6165,6 +6170,8 @@ impl SimState {
             self.local_dir_ids.retain(|x| x != id);
             self.local_parents.remove(id);
         }
+        self.synced_pairs
+            .retain(|(local_id, _)| !to_remove.contains(local_id));
     }
 
     fn next_remote_id(&mut self) -> RemoteId {
@@ -6292,6 +6299,19 @@ enum ActionChoice {
     },
     SnapshotState,
     RollbackToSnapshot,
+    BothModifyFile {
+        idx: usize,
+        local_content: Vec<u8>,
+        remote_content: Vec<u8>,
+    },
+    ModifyLocalDeleteRemote {
+        idx: usize,
+        content: Vec<u8>,
+    },
+    DeleteLocalModifyRemote {
+        idx: usize,
+        content: Vec<u8>,
+    },
 }
 
 fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
@@ -6372,6 +6392,17 @@ fn arbitrary_action_choice() -> impl Strategy<Value = ActionChoice> {
             .prop_map(|(idx, content)| ActionChoice::LocalAtomicSave { idx, content }),
         Just(ActionChoice::SnapshotState),
         Just(ActionChoice::RollbackToSnapshot),
+        (any::<usize>(), arbitrary_content(), arbitrary_content()).prop_map(
+            |(idx, local_content, remote_content)| ActionChoice::BothModifyFile {
+                idx,
+                local_content,
+                remote_content,
+            }
+        ),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::ModifyLocalDeleteRemote { idx, content }),
+        (any::<usize>(), arbitrary_content())
+            .prop_map(|(idx, content)| ActionChoice::DeleteLocalModifyRemote { idx, content }),
     ]
 }
 
@@ -6689,6 +6720,56 @@ fn resolve_action_choice(choice: &ActionChoice, state: &mut SimState) -> Vec<Sim
         ActionChoice::RollbackToSnapshot => {
             state.rollback();
             vec![SimAction::RollbackToSnapshot]
+        }
+        ActionChoice::BothModifyFile {
+            idx,
+            local_content,
+            remote_content,
+        } => {
+            if state.synced_pairs.is_empty() {
+                return vec![SimAction::Sync];
+            }
+            let (local_id, remote_id) = state.synced_pairs[idx % state.synced_pairs.len()].clone();
+            vec![
+                SimAction::LocalModifyFile {
+                    local_id,
+                    content: local_content.clone(),
+                },
+                SimAction::RemoteModifyFile {
+                    id: remote_id,
+                    content: remote_content.clone(),
+                },
+            ]
+        }
+        ActionChoice::ModifyLocalDeleteRemote { idx, content } => {
+            if state.synced_pairs.is_empty() {
+                return vec![SimAction::Sync];
+            }
+            let (local_id, remote_id) = state.synced_pairs[idx % state.synced_pairs.len()].clone();
+            state.remote_file_ids.retain(|x| x != &remote_id);
+            state.synced_pairs.retain(|(_, r)| r != &remote_id);
+            vec![
+                SimAction::LocalModifyFile {
+                    local_id,
+                    content: content.clone(),
+                },
+                SimAction::RemoteDeleteFile { id: remote_id },
+            ]
+        }
+        ActionChoice::DeleteLocalModifyRemote { idx, content } => {
+            if state.synced_pairs.is_empty() {
+                return vec![SimAction::Sync];
+            }
+            let (local_id, remote_id) = state.synced_pairs[idx % state.synced_pairs.len()].clone();
+            state.local_file_ids.retain(|x| x != &local_id);
+            state.synced_pairs.retain(|(l, _)| l != &local_id);
+            vec![
+                SimAction::LocalDeleteFile { local_id },
+                SimAction::RemoteModifyFile {
+                    id: remote_id,
+                    content: content.clone(),
+                },
+            ]
         }
     }
 }
