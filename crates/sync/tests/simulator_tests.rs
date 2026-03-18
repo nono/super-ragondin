@@ -3202,6 +3202,19 @@ proptest! {
             // to modify remote nodes that no longer exist.
             sim_state.remote_file_ids.retain(|id| runner.remote.get_node(id).is_some());
             sim_state.remote_dir_ids.retain(|id| runner.remote.get_node(id).is_some());
+            // Populate synced_pairs: file (non-directory) pairs confirmed synced
+            sim_state.synced_pairs.clear();
+            for (remote_id, local_id) in &runner.remote_to_local {
+                if let Some(node) = runner.local_fs.get_node(local_id) {
+                    if node.node_type == NodeType::File {
+                        sim_state.synced_pairs.push((local_id.clone(), remote_id.clone()));
+                    }
+                }
+            }
+            // Prune pairs whose local or remote side no longer exists
+            sim_state.synced_pairs.retain(|(local_id, remote_id)| {
+                runner.local_fs.exists(local_id) && runner.remote.get_node(remote_id).is_some()
+            });
 
             // Check convergence after every round. Allow up to 3 extra syncs
             // for concurrent remote changes (trashes, deletes) that arrived
