@@ -82,6 +82,11 @@ impl MockRemote {
         self.file_contents.get(id)
     }
 
+    /// Directly overwrite the content of a remote file (for testing purposes only).
+    pub fn set_content(&mut self, id: &RemoteId, content: Vec<u8>) {
+        self.file_contents.insert(id.clone(), content);
+    }
+
     /// Get changes since a given sequence number.
     /// Returns (seq, node, deleted) tuples for non-deleted nodes.
     #[must_use]

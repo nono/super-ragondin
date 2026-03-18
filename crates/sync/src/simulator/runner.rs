@@ -1880,4 +1880,39 @@ impl SimulationRunner {
         }
         Err(msg)
     }
+
+    /// Check invariant: for every synced file record, local and remote bytes are identical.
+    ///
+    /// # Errors
+    /// Returns an error listing every `rel_path` whose local and remote bytes differ.
+    pub fn check_content_integrity(&self) -> Result<(), String> {
+        let synced_records = self.store.list_all_synced().map_err(|e| e.to_string())?;
+        let mut errors = Vec::new();
+
+        for record in &synced_records {
+            if record.node_type == crate::model::NodeType::Directory {
+                continue;
+            }
+            let local_bytes = self.local_fs.read_file(&record.local_id);
+            let remote_bytes = self.remote.get_content(&record.remote_id);
+            if local_bytes != remote_bytes {
+                errors.push(format!(
+                    "'{}': local {:?} != remote {:?}",
+                    record.rel_path,
+                    local_bytes.map(Vec::len),
+                    remote_bytes.map(Vec::len),
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Content integrity check failed ({} errors):\n  {}",
+                errors.len(),
+                errors.join("\n  ")
+            ))
+        }
+    }
 }

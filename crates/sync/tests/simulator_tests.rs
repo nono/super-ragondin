@@ -880,6 +880,43 @@ fn sync_is_idempotent_after_local_create() {
     runner.check_idempotency().unwrap();
 }
 
+#[test]
+fn check_content_integrity_detects_mismatch() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-1");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "data.txt".to_string(),
+            content: b"original".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Tamper with remote content directly (bypassing sync)
+    runner.remote.set_content(&file_id, b"tampered".to_vec());
+
+    // check_content_integrity should now fail
+    let result = runner.check_content_integrity();
+    assert!(
+        result.is_err(),
+        "content integrity should fail when bytes differ"
+    );
+}
+
 // ==================== Successive/Chained Move Tests ====================
 
 /// Helper: set up a runner with root + initial sync, return (runner, root_id).
