@@ -920,7 +920,6 @@ fn check_content_integrity_detects_mismatch() {
     );
 }
 
-
 #[test]
 fn check_no_orphaned_store_nodes_detects_orphan() {
     let dir = tempdir().unwrap();
@@ -957,7 +956,6 @@ fn check_no_orphaned_store_nodes_detects_orphan() {
     let result = runner.check_no_orphaned_store_nodes();
     assert!(result.is_err(), "should detect orphaned remote store node");
 }
-
 
 #[test]
 fn check_no_duplicate_local_paths_detects_duplicate() {
@@ -2729,6 +2727,13 @@ fn move_dir_parent_and_child_local_while_stopped() {
 
 // ==================== Property-Based Tests ====================
 
+fn proptest_cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50)
+}
+
 fn arbitrary_file_name() -> impl Strategy<Value = String> {
     // 50% chance: pick from a fixed pool (collision pressure + unicode coverage)
     // 50% chance: generate a fresh short name (diverse inputs)
@@ -2939,7 +2944,7 @@ fn check_all_invariants_passes_on_clean_state() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(50))]
+    #![proptest_config(ProptestConfig::with_cases(proptest_cases()))]
 
     #[test]
     fn prop_remote_create_then_sync_converges(

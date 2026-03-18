@@ -23,6 +23,12 @@ cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 cargo test --test integration_tests -- --ignored  # Run integration tests (requires cozy-stack serve)
 ```
 
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROPTEST_CASES` | `50` | Number of cases for proptest-based simulator tests (set to `500` in CI via `.github/workflows/ci.yml`) |
+
 ### Cozy-stack
 
 We can start the cozy-stack server, create an instance (aka a cozy or a user), then register an OAuth client, and get an access token.
