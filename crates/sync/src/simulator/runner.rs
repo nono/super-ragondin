@@ -1481,9 +1481,11 @@ impl SimulationRunner {
             self.remote_to_local.remove(&synced.remote_id);
         }
         self.local_fs.delete(local_id);
-        self.store
-            .delete_local_node(local_id)
-            .map_err(|e| e.to_string())?;
+        // Use delete_local_recursive instead of delete_local_node so that when a
+        // directory is deleted, its children's local_nodes are also removed from the
+        // store. MockFs::delete already removes the entire subtree from local_fs, so
+        // only cleaning the parent node would leave children orphaned in the store.
+        self.delete_local_recursive(local_id)?;
         self.store
             .delete_synced(local_id)
             .map_err(|e| e.to_string())?;
