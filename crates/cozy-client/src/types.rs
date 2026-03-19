@@ -47,15 +47,18 @@ pub struct RemoteNode {
 }
 
 /// Content type of a mail part
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum MailContentType {
+    #[serde(rename = "text/plain")]
     TextPlain,
+    #[serde(rename = "text/html")]
     TextHtml,
 }
 
 /// A part of a mail message
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MailPart {
+    #[serde(rename = "type")]
     pub content_type: MailContentType,
     pub body: String,
 }

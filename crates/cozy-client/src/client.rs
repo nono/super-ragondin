@@ -1,9 +1,7 @@
 use base64::Engine;
 
 use crate::error::{Error, Result};
-use crate::types::{
-    MailContentType, MailPart, NodeType, RemoteId, RemoteNode, deserialize_string_or_u64,
-};
+use crate::types::{MailPart, NodeType, RemoteId, RemoteNode, deserialize_string_or_u64};
 use serde::Deserialize;
 
 pub struct CozyClient {
@@ -377,20 +375,6 @@ impl CozyClient {
         tracing::info!(subject, "📧 Sending mail");
         let url = format!("{}/jobs/queue/sendmail", self.instance_url);
 
-        let json_parts: Vec<serde_json::Value> = parts
-            .iter()
-            .map(|p| {
-                let content_type = match p.content_type {
-                    MailContentType::TextPlain => "text/plain",
-                    MailContentType::TextHtml => "text/html",
-                };
-                serde_json::json!({
-                    "type": content_type,
-                    "body": p.body,
-                })
-            })
-            .collect();
-
         self.http
             .post(&url)
             .bearer_auth(&self.access_token)
@@ -401,7 +385,7 @@ impl CozyClient {
                         "arguments": {
                             "mode": "noreply",
                             "subject": subject,
-                            "parts": json_parts,
+                            "parts": parts,
                         }
                     }
                 }
@@ -501,13 +485,14 @@ fn parse_old_version_md5sums(json: &serde_json::Value) -> Vec<String> {
 
     included
         .iter()
-        .filter(|entry| {
-            entry
+        .filter_map(|entry| {
+            if entry
                 .get("type")
                 .and_then(|t| t.as_str())
-                .is_some_and(|t| t == "io.cozy.files.versions")
-        })
-        .filter_map(|entry| {
+                .is_none_or(|t| t != "io.cozy.files.versions")
+            {
+                return None;
+            }
             let md5_raw = entry
                 .get("attributes")
                 .and_then(|a| a.get("md5sum"))

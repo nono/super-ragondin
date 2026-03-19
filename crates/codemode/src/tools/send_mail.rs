@@ -7,7 +7,6 @@ use crate::sandbox::SANDBOX_CTX;
 ///
 /// # Errors
 /// Returns error if the global function cannot be registered.
-#[allow(dead_code)]
 pub fn register(ctx: &mut Context) -> Result<(), JsError> {
     ctx.register_global_callable(
         js_string!("sendMail"),
@@ -23,7 +22,7 @@ fn send_mail_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     let subject = args
         .get_or_undefined(0)
         .to_string(ctx)?
-        .to_std_string_escaped();
+        .to_std_string_lossy();
 
     let body = args
         .get_or_undefined(1)

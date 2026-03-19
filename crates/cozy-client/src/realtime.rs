@@ -159,6 +159,7 @@ async fn check_auth_response(
                     if status == "403" {
                         return Err(StopReason::AuthRejected);
                     }
+                    return Err(StopReason::Disconnected(format!("Auth failed: {status}")));
                 }
                 return Ok(());
             }
