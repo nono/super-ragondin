@@ -17,3 +17,6 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 super-ragondin-sync = { path = "../sync" }
+
+[dev-dependencies]
+tempfile = "3"
