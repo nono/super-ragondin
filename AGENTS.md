@@ -48,8 +48,18 @@ cozy-stack instances rm --force alice.localhost:8080
 
 ## Project Structure
 
-Cargo workspace with three crates:
+Cargo workspace with crates and a Svelte frontend:
 
+- `crates/gui/` (`super-ragondin-gui`) - Tauri v2 desktop GUI binary
+  - `src/main.rs` - Tauri builder setup, registers commands and managed state
+  - `src/commands.rs` - All Tauri commands (`get_app_state`, `init_config`, `start_auth`, `start_sync`) + sync loop
+  - `tauri.conf.json` - Window size, frontend paths, app identifier
+  - `capabilities/default.json` - Tauri capability declarations
+- `gui-frontend/` - Svelte 4 + Vite frontend for the GUI
+  - `src/App.svelte` - State machine (Unconfigured → Unauthenticated → Ready)
+  - `src/lib/Setup.svelte` - Setup form (instance URL + sync directory)
+  - `src/lib/Auth.svelte` - OAuth wait screen with retry
+  - `src/lib/Syncing.svelte` - Sync status screen
 - `crates/cli/` (`super-ragondin`) - CLI binary entry point
 - `crates/sync/` (`super-ragondin-sync`) - File synchronization library
   - `src/config.rs` - Configuration (with `src/config/` submodules)
@@ -97,6 +107,8 @@ Cargo workspace with three crates:
 - `infer` crate only detects MIME by magic bytes, not file extension — plain text files (`.txt`, `.md`, `.csv`) need an extension-based fallback in `detect_mime()`
 - chonkie 0.1.1 feature is `tiktoken` (not `tiktoken-rs`)
 - Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
+- Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt-get install` before building `crates/gui`
+- Tauri v2 custom commands registered via `invoke_handler` are covered by `core:default` in capabilities — no per-command capability entries needed
 
 ## RAG Environment Variables
 

@@ -13,6 +13,8 @@ desktop client for Cozy Cloud.
 - A [Cozy Cloud](https://cozy.io) instance
 - (Optional) `OPENROUTER_API_KEY` for RAG indexing and the `ask` command
 - (Optional) `protoc` (Protocol Buffers compiler) — required by LanceDB at build time
+- (GUI only, Linux) `sudo apt-get install pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev`
+- (GUI only) Node.js + npm — for the Svelte frontend
 
 ### Build
 
@@ -20,7 +22,15 @@ desktop client for Cozy Cloud.
 cargo build --release
 ```
 
-The binary will be available at `target/release/super-ragondin`.
+The CLI binary will be available at `target/release/super-ragondin`.
+
+To build and run the desktop GUI (requires Node.js and the Linux packages listed above):
+
+```bash
+cargo install tauri-cli --version "^2"
+cd crates/gui && cargo tauri dev    # development mode
+cd crates/gui && cargo tauri build  # production build
+```
 
 ### Getting started
 
