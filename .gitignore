@@ -1,1 +1,3 @@
 /target
+gui-frontend/node_modules/
+gui-frontend/dist/
