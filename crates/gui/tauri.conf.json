@@ -10,12 +10,6 @@
     "beforeBuildCommand": "cd ../../gui-frontend && npm run build"
   },
   "app": {
-    "security": {
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["**"]
-      }
-    },
     "windows": [
       {
         "title": "Super Ragondin",
