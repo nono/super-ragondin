@@ -52,18 +52,15 @@ async fn run_auth_flow(
     let state = uuid::Uuid::new_v4().to_string();
     let auth_url = oauth.authorization_url(&state);
 
-    let listener = match TcpListener::bind("127.0.0.1:8080").await {
-        Ok(l) => l,
-        Err(_) => {
-            app.emit(
-                "auth_error",
-                AuthError {
-                    message: "Port 8080 is already in use. Close other applications and try again."
-                        .to_string(),
-                },
-            )?;
-            return Ok(());
-        }
+    let Ok(listener) = TcpListener::bind("127.0.0.1:8080").await else {
+        app.emit(
+            "auth_error",
+            AuthError {
+                message: "Port 8080 is already in use. Close other applications and try again."
+                    .to_string(),
+            },
+        )?;
+        return Ok(());
     };
 
     if let Err(e) = opener::open(&auth_url) {
@@ -94,17 +91,14 @@ async fn run_auth_flow(
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
 
-    let (code, received_state) = match parse_callback(request_line.trim()) {
-        Some(pair) => pair,
-        None => {
-            app.emit(
-                "auth_error",
-                AuthError {
-                    message: "Could not parse OAuth callback.".to_string(),
-                },
-            )?;
-            return Ok(());
-        }
+    let Some((code, received_state)) = parse_callback(request_line.trim()) else {
+        app.emit(
+            "auth_error",
+            AuthError {
+                message: "Could not parse OAuth callback.".to_string(),
+            },
+        )?;
+        return Ok(());
     };
 
     if received_state != state {
@@ -150,7 +144,7 @@ pub fn start_auth(app: tauri::AppHandle) {
     });
 }
 
-#[derive(Debug, serde::Serialize, PartialEq)]
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum AppState {
     Unconfigured,
@@ -166,20 +160,17 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn app_state_from_config(config: Option<&Config>) -> AppState {
-    match config {
-        None => AppState::Unconfigured,
-        Some(c) => {
-            if c.oauth_client
-                .as_ref()
-                .and_then(|o| o.access_token.as_ref())
-                .is_some()
-            {
-                AppState::Ready
-            } else {
-                AppState::Unauthenticated
-            }
+    config.map_or(AppState::Unconfigured, |c| {
+        if c.oauth_client
+            .as_ref()
+            .and_then(|o| o.access_token.as_ref())
+            .is_some()
+        {
+            AppState::Ready
+        } else {
+            AppState::Unauthenticated
         }
-    }
+    })
 }
 
 pub fn init_config_to(
@@ -264,11 +255,11 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
     Ok(chrono::Utc::now().to_rfc3339())
 }
 
-/// Run the sync loop indefinitely: emit sync_status events and sleep 30s between cycles.
+/// Run the sync loop indefinitely: emit `sync_status` events and sleep 30s between cycles.
 ///
 /// This runs on a dedicated OS thread with its own tokio runtime to work around
 /// HRTB lifetime constraints in `SyncEngine::run_cycle_async`.
-pub fn run_sync_loop(app: tauri::AppHandle) {
+pub fn run_sync_loop(app: &tauri::AppHandle) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -325,7 +316,7 @@ pub async fn start_sync(
     *running = true;
     drop(running);
 
-    std::thread::spawn(move || run_sync_loop(app));
+    std::thread::spawn(move || run_sync_loop(&app));
     Ok(())
 }
 
