@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use boa_engine::{Context, JsError, JsValue, Source, js_string};
 use serde_json::Value as SerdeValue;
+use super_ragondin_cozy_client::client::CozyClient;
 use super_ragondin_rag::{config::RagConfig, embedder::OpenRouterEmbedder, store::RagStore};
 
 use crate::tools;
@@ -20,6 +21,7 @@ pub struct SandboxContext {
     pub handle: tokio::runtime::Handle,
     pub sync_dir: std::path::PathBuf,
     pub scratchpad: crate::tools::scratchpad::Scratchpad,
+    pub cozy_client: Option<Arc<CozyClient>>,
 }
 
 thread_local! {
@@ -65,23 +67,26 @@ pub struct Sandbox {
     config: RagConfig,
     sync_dir: std::path::PathBuf,
     scratchpad: crate::tools::scratchpad::Scratchpad,
+    cozy_client: Option<Arc<CozyClient>>,
 }
 
 #[allow(dead_code)]
 impl Sandbox {
-    /// Create a new sandbox with the given store, config, sync directory, and scratchpad.
+    /// Create a new sandbox with the given store, config, sync directory, scratchpad, and optional Cozy client.
     #[must_use]
     pub const fn new(
         store: Arc<RagStore>,
         config: RagConfig,
         sync_dir: std::path::PathBuf,
         scratchpad: crate::tools::scratchpad::Scratchpad,
+        cozy_client: Option<Arc<CozyClient>>,
     ) -> Self {
         Self {
             store,
             config,
             sync_dir,
             scratchpad,
+            cozy_client,
         }
     }
 
@@ -103,6 +108,7 @@ impl Sandbox {
                 handle,
                 sync_dir: self.sync_dir.clone(),
                 scratchpad: Arc::clone(&self.scratchpad),
+                cozy_client: self.cozy_client.clone(),
             });
         });
 
@@ -134,6 +140,8 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register generateImage: {e}"))?;
         tools::scratchpad::register(&mut ctx)
             .map_err(|e| format!("JS error: register scratchpad: {e}"))?;
+        tools::send_mail::register(&mut ctx)
+            .map_err(|e| format!("JS error: register sendMail: {e}"))?;
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -168,6 +176,7 @@ mod tests {
             config,
             sync_dir.path().to_path_buf(),
             new_scratchpad(),
+            None,
         );
         (sandbox, db_dir, sync_dir)
     }
@@ -227,6 +236,7 @@ mod tests {
             "generateImage",
             "remember",
             "recall",
+            "sendMail",
         ] {
             let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
             assert_eq!(
@@ -383,12 +393,14 @@ mod tests {
             config_a,
             sync_dir.path().to_path_buf(),
             Arc::clone(&scratchpad),
+            None,
         );
         let sandbox_b = Sandbox::new(
             store_b,
             config_b,
             sync_dir.path().to_path_buf(),
             Arc::clone(&scratchpad),
+            None,
         );
         sandbox_a.execute(r#"remember("x", 42)"#)?;
         let result = sandbox_b.execute(r#"recall("x")"#)?;

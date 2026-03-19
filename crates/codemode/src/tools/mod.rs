@@ -7,4 +7,5 @@ pub(crate) mod path_utils;
 pub mod save_file;
 pub mod scratchpad;
 pub mod search;
+pub mod send_mail;
 pub mod sub_agent;
