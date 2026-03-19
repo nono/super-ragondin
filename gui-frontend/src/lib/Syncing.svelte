@@ -1,17 +1,25 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
 
-  let status = 'idle'
+  // status values match the Rust SyncState enum serialized with #[serde(rename_all = "PascalCase")].
+  // See crates/gui/src/commands.rs — SyncState enum.
+  let status = 'Idle'
   let lastSync = null
 
+  let unlistenSyncStatus
+
   onMount(async () => {
-    await listen('sync_status', (event) => {
+    unlistenSyncStatus = await listen('sync_status', (event) => {
       status = event.payload.status
       lastSync = event.payload.last_sync
     })
     invoke('start_sync')
+  })
+
+  onDestroy(() => {
+    unlistenSyncStatus?.()
   })
 
   function formatLastSync(iso) {
@@ -27,7 +35,7 @@
 <div class="container">
   <div class="icon">☁️</div>
   <h1>Synchronizing</h1>
-  <p class="status">{status === 'syncing' ? 'Syncing…' : 'Up to date'}</p>
+  <p class="status">{status === 'Syncing' ? 'Syncing…' : 'Up to date'}</p>
   <p class="hint">Last sync: {formatLastSync(lastSync)}</p>
 </div>
 
