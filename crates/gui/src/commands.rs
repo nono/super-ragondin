@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use super_ragondin_sync::config::Config;
 use super_ragondin_sync::remote::auth::OAuthClient;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct AuthError {
     pub message: String,
 }
@@ -22,14 +23,17 @@ pub fn parse_callback(request_line: &str) -> Option<(String, String)> {
     for pair in query.split('&') {
         let mut parts = pair.splitn(2, '=');
         let key = parts.next()?;
-        let val = parts.next().unwrap_or("").to_string();
         match key {
-            "code" => code = Some(val),
-            "state" => state = Some(val),
+            "code" => code = Some(parts.next().unwrap_or("").to_string()),
+            "state" => state = Some(parts.next().unwrap_or("").to_string()),
             _ => {}
         }
     }
-    Some((code?, state?))
+    let code = code?;
+    if code.is_empty() {
+        return None;
+    }
+    Some((code, state?))
 }
 
 async fn run_auth_flow(
@@ -42,8 +46,6 @@ async fn run_auth_flow(
 
     let state = uuid::Uuid::new_v4().to_string();
     let auth_url = oauth.authorization_url(&state);
-
-    opener::open(&auth_url)?;
 
     let listener = match TcpListener::bind("127.0.0.1:8080").await {
         Ok(l) => l,
@@ -59,7 +61,30 @@ async fn run_auth_flow(
         }
     };
 
-    let (mut stream, _) = listener.accept().await?;
+    if let Err(e) = opener::open(&auth_url) {
+        app.emit(
+            "auth_error",
+            AuthError {
+                message: format!("Failed to open browser: {e}"),
+            },
+        )?;
+        return Ok(());
+    }
+
+    let (mut stream, _) =
+        match tokio::time::timeout(Duration::from_secs(300), listener.accept()).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                app.emit(
+                    "auth_error",
+                    AuthError {
+                        message: "OAuth callback timed out after 5 minutes.".to_string(),
+                    },
+                )?;
+                return Ok(());
+            }
+        };
     let mut reader = BufReader::new(&mut stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
@@ -213,6 +238,26 @@ mod tests {
     #[test]
     fn parse_callback_invalid_format_returns_none() {
         assert_eq!(parse_callback("not a valid request"), None);
+    }
+
+    #[test]
+    fn parse_callback_reversed_order_works() {
+        let line = "GET /callback?state=Y&code=X HTTP/1.1";
+        let result = parse_callback(line);
+        assert_eq!(result, Some(("X".to_string(), "Y".to_string())));
+    }
+
+    #[test]
+    fn parse_callback_extra_params_works() {
+        let line = "GET /callback?code=X&scope=foo&state=Y HTTP/1.1";
+        let result = parse_callback(line);
+        assert_eq!(result, Some(("X".to_string(), "Y".to_string())));
+    }
+
+    #[test]
+    fn parse_callback_empty_code_returns_none() {
+        let line = "GET /callback?code=&state=Y HTTP/1.1";
+        assert_eq!(parse_callback(line), None);
     }
 
     fn config_no_oauth() -> Config {
