@@ -22,9 +22,6 @@ pub enum Error {
 
     #[error("Not found: {0}")]
     NotFound(String),
-
-    #[error("Revision mismatch: expected {expected}, got {actual}")]
-    RevisionMismatch { expected: String, actual: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
