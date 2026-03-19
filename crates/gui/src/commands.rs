@@ -1,8 +1,13 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 use super_ragondin_sync::config::Config;
+use super_ragondin_sync::ignore::IgnoreRules;
 use super_ragondin_sync::remote::auth::OAuthClient;
+use super_ragondin_sync::remote::client::CozyClient;
+use super_ragondin_sync::store::TreeStore;
+use super_ragondin_sync::sync::engine::SyncEngine;
 use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -212,6 +217,111 @@ pub fn get_app_state() -> AppState {
     app_state_from_config(config.as_ref())
 }
 
+/// Idempotency guard to prevent starting the sync loop twice.
+#[derive(Default)]
+pub struct SyncGuard(pub Mutex<bool>);
+
+/// Event payload emitted during the sync loop.
+#[derive(serde::Serialize, Clone)]
+pub struct SyncStatus {
+    pub status: String,
+    pub last_sync: Option<String>,
+}
+
+/// Run one sync cycle, returning an ISO 8601 timestamp on success.
+///
+/// # Errors
+///
+/// Returns an error if config loading, store opening, or the sync cycle fails.
+pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let config = Config::load(&config_path())?.ok_or("No config — run init first")?;
+    let access_token = config
+        .oauth_client
+        .as_ref()
+        .ok_or("No OAuth client")?
+        .access_token
+        .as_ref()
+        .ok_or("No access token")?
+        .clone();
+
+    let client = CozyClient::new(&config.instance_url, &access_token);
+
+    let store = TreeStore::open(&config.store_dir())?;
+    let rules = IgnoreRules::load(Some(&config.syncignore_path()));
+    let mut engine = SyncEngine::new(store, config.sync_dir.clone(), config.staging_dir(), rules);
+
+    let since = config.last_seq.as_deref();
+    let new_seq = engine
+        .fetch_and_apply_remote_changes(&client, since)
+        .await?;
+
+    engine.run_cycle_async(&client).await?;
+
+    // Persist the new sequence number
+    let mut updated = Config::load(&config_path())?.ok_or("Config disappeared")?;
+    updated.last_seq = Some(new_seq);
+    updated.save(&config_path())?;
+
+    Ok(chrono::Utc::now().to_rfc3339())
+}
+
+/// Run the sync loop indefinitely: emit sync_status events and sleep 30s between cycles.
+///
+/// This runs on a dedicated OS thread with its own tokio runtime to work around
+/// HRTB lifetime constraints in `SyncEngine::run_cycle_async`.
+pub fn run_sync_loop(app: tauri::AppHandle) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build sync runtime");
+    rt.block_on(async {
+        loop {
+            let _ = app.emit(
+                "sync_status",
+                SyncStatus {
+                    status: "syncing".to_string(),
+                    last_sync: None,
+                },
+            );
+
+            let last_sync = match do_sync_cycle().await {
+                Ok(ts) => Some(ts),
+                Err(e) => {
+                    eprintln!("Sync cycle failed: {e}");
+                    None
+                }
+            };
+
+            let _ = app.emit(
+                "sync_status",
+                SyncStatus {
+                    status: "idle".to_string(),
+                    last_sync,
+                },
+            );
+
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+}
+
+/// Start the background sync loop (idempotent: does nothing if already running).
+#[tauri::command]
+pub async fn start_sync(
+    app: tauri::AppHandle,
+    guard: tauri::State<'_, SyncGuard>,
+) -> Result<(), String> {
+    let mut running = guard.0.lock().map_err(|e| e.to_string())?;
+    if *running {
+        return Ok(());
+    }
+    *running = true;
+    drop(running);
+
+    std::thread::spawn(move || run_sync_loop(app));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +442,18 @@ mod tests {
         let mut c = config_no_oauth();
         c.oauth_client = Some(oauth_with_token());
         assert_eq!(app_state_from_config(Some(&c)), AppState::Ready);
+    }
+
+    #[test]
+    fn sync_guard_starts_unlocked() {
+        let guard = SyncGuard::default();
+        assert!(!*guard.0.lock().unwrap(), "guard should start false");
+    }
+
+    #[test]
+    fn sync_guard_can_be_set() {
+        let guard = SyncGuard::default();
+        *guard.0.lock().unwrap() = true;
+        assert!(*guard.0.lock().unwrap());
     }
 }
