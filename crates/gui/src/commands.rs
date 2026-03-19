@@ -144,6 +144,10 @@ pub fn start_auth(app: tauri::AppHandle) {
     });
 }
 
+/// Application state returned by `get_app_state`.
+///
+/// **Frontend contract:** serializes as `"Unconfigured"` / `"Unauthenticated"` / `"Ready"` —
+/// these string values are matched verbatim in `App.svelte`.
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum AppState {
@@ -183,17 +187,16 @@ pub fn init_config_to(
         .unwrap_or_else(|| PathBuf::from("."))
         .join("super-ragondin");
 
-    fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
-    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-    fs::create_dir_all(data_dir.join("staging")).map_err(|e| e.to_string())?;
-
     let config = Config {
         instance_url,
-        sync_dir,
-        data_dir,
+        sync_dir: sync_dir.clone(),
+        data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
     };
+    fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(config.staging_dir()).map_err(|e| e.to_string())?;
     config.save(config_path).map_err(|e| e.to_string())
 }
 
@@ -212,10 +215,21 @@ pub fn get_app_state() -> AppState {
 #[derive(Default)]
 pub struct SyncGuard(pub Mutex<bool>);
 
+/// Sync state reported via `sync_status` events.
+///
+/// **Frontend contract:** serializes as `"Syncing"` / `"Idle"` — matches
+/// `Syncing.svelte` which checks `event.payload.status`.
+#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum SyncState {
+    Syncing,
+    Idle,
+}
+
 /// Event payload emitted during the sync loop.
 #[derive(serde::Serialize, Clone)]
 pub struct SyncStatus {
-    pub status: String,
+    pub status: SyncState,
     pub last_sync: Option<String>,
 }
 
@@ -225,7 +239,8 @@ pub struct SyncStatus {
 ///
 /// Returns an error if config loading, store opening, or the sync cycle fails.
 pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let mut config = Config::load(&config_path())?.ok_or("No config — run init first")?;
+    let path = config_path();
+    let mut config = Config::load(&path)?.ok_or("No config — run init first")?;
     let access_token = config
         .oauth_client
         .as_ref()
@@ -250,7 +265,7 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
 
     // Persist the new sequence number (mutate original config to avoid TOCTOU)
     config.last_seq = Some(new_seq);
-    config.save(&config_path())?;
+    config.save(&path)?;
 
     Ok(chrono::Utc::now().to_rfc3339())
 }
@@ -276,7 +291,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
             let _ = app.emit(
                 "sync_status",
                 SyncStatus {
-                    status: "syncing".to_string(),
+                    status: SyncState::Syncing,
                     last_sync: last_sync.clone(),
                 },
             );
@@ -292,7 +307,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
             let _ = app.emit(
                 "sync_status",
                 SyncStatus {
-                    status: "idle".to_string(),
+                    status: SyncState::Idle,
                     last_sync: last_sync.clone(),
                 },
             );

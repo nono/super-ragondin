@@ -1,24 +1,34 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import Setup from './lib/Setup.svelte'
   import Auth from './lib/Auth.svelte'
   import Syncing from './lib/Syncing.svelte'
 
+  // String values match the Rust AppState enum serialized with #[serde(rename_all = "PascalCase")].
+  // See crates/gui/src/commands.rs — AppState enum.
   // null = loading; 'Unconfigured' | 'Unauthenticated' | 'Ready'
   let appState = null
   let authError = null
 
+  let unlistenAuthComplete
+  let unlistenAuthError
+
   onMount(async () => {
-    await listen('auth_complete', () => {
+    unlistenAuthComplete = await listen('auth_complete', () => {
       appState = 'Ready'
       authError = null
     })
-    await listen('auth_error', (event) => {
+    unlistenAuthError = await listen('auth_error', (event) => {
       authError = event.payload.message
     })
     appState = await invoke('get_app_state')
+  })
+
+  onDestroy(() => {
+    unlistenAuthComplete?.()
+    unlistenAuthError?.()
   })
 
   function handleSetupComplete() {
