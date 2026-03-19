@@ -842,7 +842,7 @@ impl<'a> Planner<'a> {
         // The remote-dictated move wins; conflict-name the local-only file to free
         // the path. The NameCollision handler renames the local file before the
         // MoveLocal executes.
-        for (path, &move_idx) in &move_local_by_to_path {
+        for path in move_local_by_to_path.keys() {
             if let Some(&upload_idx) = local_new_by_path.get(path) {
                 let local_id = match &results[upload_idx] {
                     PlanResult::Op(
@@ -856,16 +856,13 @@ impl<'a> Planner<'a> {
                     "⚠️ MoveLocal target collides with UploadNew — conflict-naming local file"
                 );
                 indices_to_remove.push(upload_idx);
-                replacements.push((
-                    move_idx,
-                    PlanResult::Conflict(Conflict {
-                        local_id: Some(local_id),
-                        remote_id: None,
-                        local_path: Some((*path).clone()),
-                        reason: "MoveLocal target occupied by local-only file".to_string(),
-                        kind: ConflictKind::NameCollision,
-                    }),
-                ));
+                extra_conflicts.push(PlanResult::Conflict(Conflict {
+                    local_id: Some(local_id),
+                    remote_id: None,
+                    local_path: Some((*path).clone()),
+                    reason: "MoveLocal target occupied by local-only file".to_string(),
+                    kind: ConflictKind::NameCollision,
+                }));
             }
         }
 
