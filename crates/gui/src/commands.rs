@@ -234,7 +234,7 @@ pub struct SyncStatus {
 ///
 /// Returns an error if config loading, store opening, or the sync cycle fails.
 pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let config = Config::load(&config_path())?.ok_or("No config — run init first")?;
+    let mut config = Config::load(&config_path())?.ok_or("No config — run init first")?;
     let access_token = config
         .oauth_client
         .as_ref()
@@ -257,10 +257,9 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
 
     engine.run_cycle_async(&client).await?;
 
-    // Persist the new sequence number
-    let mut updated = Config::load(&config_path())?.ok_or("Config disappeared")?;
-    updated.last_seq = Some(new_seq);
-    updated.save(&config_path())?;
+    // Persist the new sequence number (mutate original config to avoid TOCTOU)
+    config.last_seq = Some(new_seq);
+    config.save(&config_path())?;
 
     Ok(chrono::Utc::now().to_rfc3339())
 }
@@ -270,25 +269,32 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
 /// This runs on a dedicated OS thread with its own tokio runtime to work around
 /// HRTB lifetime constraints in `SyncEngine::run_cycle_async`.
 pub fn run_sync_loop(app: tauri::AppHandle) {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("failed to build sync runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!("Failed to build sync runtime: {e}");
+            return;
+        }
+    };
     rt.block_on(async {
+        let mut last_sync: Option<String> = None;
         loop {
             let _ = app.emit(
                 "sync_status",
                 SyncStatus {
                     status: "syncing".to_string(),
-                    last_sync: None,
+                    last_sync: last_sync.clone(),
                 },
             );
 
-            let last_sync = match do_sync_cycle().await {
+            last_sync = match do_sync_cycle().await {
                 Ok(ts) => Some(ts),
                 Err(e) => {
-                    eprintln!("Sync cycle failed: {e}");
-                    None
+                    tracing::error!("Sync cycle failed: {e}");
+                    last_sync
                 }
             };
 
@@ -296,13 +302,14 @@ pub fn run_sync_loop(app: tauri::AppHandle) {
                 "sync_status",
                 SyncStatus {
                     status: "idle".to_string(),
-                    last_sync,
+                    last_sync: last_sync.clone(),
                 },
             );
 
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     });
+    tracing::info!("Sync loop exited");
 }
 
 /// Start the background sync loop (idempotent: does nothing if already running).
