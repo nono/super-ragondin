@@ -1,0 +1,19 @@
+[package]
+name = "super-ragondin-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Super Ragondin desktop application"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+opener = "0.7"
+uuid = { version = "1", features = ["v4"] }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+super-ragondin-sync = { path = "../sync" }
