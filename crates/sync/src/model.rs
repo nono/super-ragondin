@@ -1,4 +1,6 @@
-use crate::util::deserialize_string_or_u64;
+use super_ragondin_cozy_client::types::deserialize_string_or_u64;
+pub use super_ragondin_cozy_client::types::{NodeType, RemoteId, RemoteNode};
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
@@ -46,36 +48,6 @@ impl fmt::Display for LocalFileId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.device_id, self.inode)
     }
-}
-
-/// Remote Cozy document ID
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RemoteId(pub String);
-
-impl RemoteId {
-    #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for RemoteId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// Type of filesystem node
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum NodeType {
-    File,
-    Directory,
 }
 
 /// Common interface for node-like types across all three trees
@@ -141,28 +113,6 @@ impl NodeInfo for LocalNode {
     fn size(&self) -> Option<u64> {
         self.size
     }
-}
-
-/// A node in the remote Cozy tree, keyed by `RemoteId`
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RemoteNode {
-    /// Remote Cozy document ID
-    pub id: RemoteId,
-    /// Parent directory ID (None for root)
-    pub parent_id: Option<RemoteId>,
-    /// File or directory name
-    pub name: String,
-    /// Node type
-    pub node_type: NodeType,
-    /// MD5 checksum (files only)
-    pub md5sum: Option<String>,
-    /// Size in bytes (files only)
-    #[serde(default, deserialize_with = "deserialize_string_or_u64")]
-    pub size: Option<u64>,
-    /// Last modification timestamp (Unix epoch seconds)
-    pub updated_at: i64,
-    /// `CouchDB` revision
-    pub rev: String,
 }
 
 impl NodeInfo for RemoteNode {

@@ -6,6 +6,8 @@ use super_ragondin_rag::{
     store::RagStore,
 };
 
+use super_ragondin_cozy_client::client::CozyClient;
+
 use crate::prompt::system_prompt;
 use crate::sandbox::Sandbox;
 use crate::tools::scratchpad::new_scratchpad;
@@ -25,7 +27,7 @@ pub(crate) fn execute_js_tool_definition() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "execute_js",
-            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), generateImage(), remember(), and recall() functions to query the document database, write files, generate images, and store values across tool calls.",
+            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), generateImage(), remember(), recall(), and sendMail(subject, body) functions to query the document database, write files, generate images, store values across tool calls, and send emails to the user.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -72,6 +74,7 @@ pub struct CodeModeEngine {
     store: Arc<RagStore>,
     config: RagConfig,
     sync_dir: std::path::PathBuf,
+    cozy_client: Option<Arc<CozyClient>>,
 }
 
 impl CodeModeEngine {
@@ -79,12 +82,17 @@ impl CodeModeEngine {
     ///
     /// # Errors
     /// Returns error if the RAG store cannot be opened.
-    pub async fn new(config: RagConfig, sync_dir: std::path::PathBuf) -> Result<Self> {
+    pub async fn new(
+        config: RagConfig,
+        sync_dir: std::path::PathBuf,
+        cozy_client: Option<Arc<CozyClient>>,
+    ) -> Result<Self> {
         let store = Arc::new(RagStore::open(&config.db_path).await?);
         Ok(Self {
             store,
             config,
             sync_dir,
+            cozy_client,
         })
     }
 
@@ -145,6 +153,7 @@ impl CodeModeEngine {
                     let config_clone = self.config.clone();
                     let sync_dir_clone = self.sync_dir.clone();
                     let scratchpad_clone = Arc::clone(&scratchpad);
+                    let cozy_client_clone = self.cozy_client.clone();
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
@@ -153,6 +162,7 @@ impl CodeModeEngine {
                             config_clone,
                             sync_dir_clone,
                             scratchpad_clone,
+                            cozy_client_clone,
                         );
                         (id_clone, sandbox.execute(&code_clone))
                     }));
@@ -247,6 +257,7 @@ mod tests {
             store: Arc::new(store),
             config,
             sync_dir: sync_dir.path().to_path_buf(),
+            cozy_client: None,
         };
         (engine, db_dir, sync_dir)
     }

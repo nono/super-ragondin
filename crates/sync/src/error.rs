@@ -8,6 +8,9 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Cozy client error: {0}")]
+    Cozy(#[from] super_ragondin_cozy_client::error::Error),
+
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 

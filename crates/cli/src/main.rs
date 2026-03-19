@@ -349,8 +349,10 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     }
     let question = args.join(" ");
 
+    let cozy_client = open_client(&config).ok().map(std::sync::Arc::new);
+
     rt.block_on(async {
-        let engine = CodeModeEngine::new(rag_config, config.sync_dir)
+        let engine = CodeModeEngine::new(rag_config, config.sync_dir, cozy_client)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
