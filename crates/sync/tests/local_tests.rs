@@ -49,7 +49,7 @@ fn test_watcher_detects_file_create() {
     let event: WatchEvent = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(matches!(
         event.kind,
-        WatchEventKind::Create | WatchEventKind::Modify
+        WatchEventKind::Create | WatchEventKind::Modify | WatchEventKind::CloseWrite
     ));
 }
 
@@ -111,6 +111,48 @@ fn test_scan_ignores_nested_hidden_files() {
     // subdir + normal.txt (but not .hidden)
     assert_eq!(nodes.len(), 2);
     assert!(nodes.iter().all(|n| n.name != ".hidden"));
+}
+
+#[test]
+fn test_watcher_emits_close_write() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = Watcher::new(&root, tx, IgnoreRules::none()).unwrap();
+
+    thread::spawn(move || {
+        let _ = watcher.run();
+    });
+
+    // Write a file using open/write/close to generate CLOSE_WRITE
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(root.join("written.txt")).unwrap();
+        f.write_all(b"content").unwrap();
+        // f is dropped here, triggering close()
+    }
+
+    // Collect events for a short window
+    let mut events = Vec::new();
+    while let Ok(event) = rx.recv_timeout(Duration::from_secs(2)) {
+        events.push(event);
+    }
+
+    // Should have a CloseWrite event (distinct from Modify)
+    let close_write_events: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e.kind, WatchEventKind::CloseWrite))
+        .collect();
+    assert!(
+        !close_write_events.is_empty(),
+        "Expected at least one CloseWrite event, got: {events:?}"
+    );
+    assert!(
+        close_write_events
+            .iter()
+            .any(|e| e.path.to_string_lossy().contains("written.txt"))
+    );
 }
 
 #[test]
