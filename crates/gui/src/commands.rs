@@ -8,12 +8,17 @@ use super_ragondin_sync::remote::auth::OAuthClient;
 use super_ragondin_sync::remote::client::CozyClient;
 use super_ragondin_sync::store::TreeStore;
 use super_ragondin_sync::sync::engine::SyncEngine;
-use tauri::Emitter;
+use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-#[derive(Debug, serde::Serialize, Clone)]
-pub struct AuthError {
+/// Emitted when OAuth completes successfully.
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct AuthCompleteEvent;
+
+/// Emitted when OAuth fails.
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct AuthErrorEvent {
     pub message: String,
 }
 
@@ -29,8 +34,20 @@ pub fn parse_callback(request_line: &str) -> Option<(String, String)> {
         let mut parts = pair.splitn(2, '=');
         let key = parts.next()?;
         match key {
-            "code" => code = Some(parts.next().unwrap_or("").to_string()),
-            "state" => state = Some(parts.next().unwrap_or("").to_string()),
+            "code" => {
+                code = Some(
+                    urlencoding::decode(parts.next().unwrap_or(""))
+                        .unwrap_or_default()
+                        .into_owned(),
+                );
+            }
+            "state" => {
+                state = Some(
+                    urlencoding::decode(parts.next().unwrap_or(""))
+                        .unwrap_or_default()
+                        .into_owned(),
+                );
+            }
             _ => {}
         }
     }
@@ -53,37 +70,37 @@ async fn run_auth_flow(
     let auth_url = oauth.authorization_url(&state);
 
     let Ok(listener) = TcpListener::bind("127.0.0.1:8080").await else {
-        app.emit(
-            "auth_error",
-            AuthError {
-                message: "Port 8080 is already in use. Close other applications and try again."
-                    .to_string(),
-            },
-        )?;
+        AuthErrorEvent {
+            message: "Port 8080 is already in use. Close other applications and try again."
+                .to_string(),
+        }
+        .emit(app)?;
         return Ok(());
     };
 
     if let Err(e) = opener::open(&auth_url) {
-        app.emit(
-            "auth_error",
-            AuthError {
-                message: format!("Failed to open browser: {e}"),
-            },
-        )?;
+        AuthErrorEvent {
+            message: format!("Failed to open browser: {e}"),
+        }
+        .emit(app)?;
         return Ok(());
     }
 
     let (mut stream, _) =
         match tokio::time::timeout(Duration::from_secs(300), listener.accept()).await {
             Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => return Err(e.into()),
+            Ok(Err(e)) => {
+                AuthErrorEvent {
+                    message: format!("Failed to accept connection: {e}"),
+                }
+                .emit(app)?;
+                return Ok(());
+            }
             Err(_) => {
-                app.emit(
-                    "auth_error",
-                    AuthError {
-                        message: "OAuth callback timed out after 5 minutes.".to_string(),
-                    },
-                )?;
+                AuthErrorEvent {
+                    message: "OAuth callback timed out after 5 minutes.".to_string(),
+                }
+                .emit(app)?;
                 return Ok(());
             }
         };
@@ -92,22 +109,18 @@ async fn run_auth_flow(
     reader.read_line(&mut request_line).await?;
 
     let Some((code, received_state)) = parse_callback(request_line.trim()) else {
-        app.emit(
-            "auth_error",
-            AuthError {
-                message: "Could not parse OAuth callback.".to_string(),
-            },
-        )?;
+        AuthErrorEvent {
+            message: "Could not parse OAuth callback.".to_string(),
+        }
+        .emit(app)?;
         return Ok(());
     };
 
     if received_state != state {
-        app.emit(
-            "auth_error",
-            AuthError {
-                message: "OAuth state mismatch — possible CSRF attempt.".to_string(),
-            },
-        )?;
+        AuthErrorEvent {
+            message: "OAuth state mismatch — possible CSRF attempt.".to_string(),
+        }
+        .emit(app)?;
         return Ok(());
     }
 
@@ -126,7 +139,7 @@ async fn run_auth_flow(
     updated.oauth_client = Some(oauth);
     updated.save(&config_path())?;
 
-    app.emit("auth_complete", ())?;
+    AuthCompleteEvent.emit(app)?;
     Ok(())
 }
 
@@ -134,12 +147,10 @@ async fn run_auth_flow(
 pub fn start_auth(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_auth_flow(&app).await {
-            let _ = app.emit(
-                "auth_error",
-                AuthError {
-                    message: e.to_string(),
-                },
-            );
+            let _ = AuthErrorEvent {
+                message: e.to_string(),
+            }
+            .emit(&app);
         }
     });
 }
@@ -148,7 +159,7 @@ pub fn start_auth(app: tauri::AppHandle) {
 ///
 /// **Frontend contract:** serializes as `"Unconfigured"` / `"Unauthenticated"` / `"Ready"` —
 /// these string values are matched verbatim in `App.svelte`.
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, serde::Serialize, PartialEq, Eq, specta::Type)]
 #[serde(rename_all = "PascalCase")]
 pub enum AppState {
     Unconfigured,
@@ -219,16 +230,16 @@ pub struct SyncGuard(pub Mutex<bool>);
 ///
 /// **Frontend contract:** serializes as `"Syncing"` / `"Idle"` — matches
 /// `Syncing.svelte` which checks `event.payload.status`.
-#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, specta::Type)]
 #[serde(rename_all = "PascalCase")]
 pub enum SyncState {
     Syncing,
     Idle,
 }
 
-/// Event payload emitted during the sync loop.
-#[derive(serde::Serialize, Clone)]
-pub struct SyncStatus {
+/// Emitted each sync loop iteration.
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct SyncStatusEvent {
     pub status: SyncState,
     pub last_sync: Option<String>,
 }
@@ -261,11 +272,11 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
         .fetch_and_apply_remote_changes(&client, since)
         .await?;
 
-    engine.run_cycle_async(&client).await?;
-
-    // Persist the new sequence number (mutate original config to avoid TOCTOU)
+    // Persist sequence number immediately to avoid re-fetching on failure
     config.last_seq = Some(new_seq);
     config.save(&path)?;
+
+    engine.run_cycle_async(&client).await?;
 
     Ok(chrono::Utc::now().to_rfc3339())
 }
@@ -288,13 +299,11 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
     rt.block_on(async {
         let mut last_sync: Option<String> = None;
         loop {
-            let _ = app.emit(
-                "sync_status",
-                SyncStatus {
-                    status: SyncState::Syncing,
-                    last_sync: last_sync.clone(),
-                },
-            );
+            let _ = SyncStatusEvent {
+                status: SyncState::Syncing,
+                last_sync: last_sync.clone(),
+            }
+            .emit(app);
 
             last_sync = match do_sync_cycle().await {
                 Ok(ts) => Some(ts),
@@ -304,13 +313,11 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
                 }
             };
 
-            let _ = app.emit(
-                "sync_status",
-                SyncStatus {
-                    status: SyncState::Idle,
-                    last_sync: last_sync.clone(),
-                },
-            );
+            let _ = SyncStatusEvent {
+                status: SyncState::Idle,
+                last_sync: last_sync.clone(),
+            }
+            .emit(app);
 
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
