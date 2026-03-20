@@ -219,6 +219,16 @@ impl SyncEngine {
                     "🗑️ Node is in trash, treating as deletion"
                 );
                 self.store.delete_remote_node(&result.node.id)?;
+            } else if result.node.node_type == NodeType::File && result.node.md5sum.is_none() {
+                // Skip files without a checksum — they represent incomplete
+                // uploads by another client and would produce garbage if
+                // downloaded.  They will reappear in a future changes feed
+                // once the upload completes and the server computes the hash.
+                tracing::debug!(
+                    id = result.node.id.as_str(),
+                    name = &result.node.name,
+                    "⏭️ Skipping remote file without checksum (incomplete upload)"
+                );
             } else {
                 self.ensure_remote_parent_exists(&result.node)?;
                 self.store.insert_remote_node(&result.node)?;
