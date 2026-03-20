@@ -74,6 +74,27 @@ impl SyncEngine {
         let local_nodes = scanner.scan_with_ignore(&self.rules)?;
         let count = local_nodes.len();
 
+        // Safety check: if the scanner found zero files but we have previously
+        // synced records, the sync directory is likely on an unmounted drive or
+        // otherwise inaccessible.  Abort to prevent the planner from generating
+        // DeleteRemote ops for every known file, which would wipe the user's
+        // remote data.
+        let non_root_synced = self
+            .store
+            .list_all_synced()?
+            .into_iter()
+            .filter(|r| !r.rel_path.is_empty())
+            .count();
+        if local_nodes.is_empty() && non_root_synced > 0 {
+            tracing::error!(
+                synced_count = non_root_synced,
+                "🚨 Sync directory appears empty but {non_root_synced} files are known — aborting"
+            );
+            return Err(Error::EmptySyncDir {
+                synced_count: non_root_synced,
+            });
+        }
+
         for node in &local_nodes {
             self.store.insert_local_node(node)?;
         }

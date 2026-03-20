@@ -43,6 +43,11 @@ pub enum Error {
 
     #[error("Permanent error: {0}")]
     Permanent(String),
+
+    #[error(
+        "Sync directory appears empty but {synced_count} files are known — aborting to prevent data loss (possible unmounted drive)"
+    )]
+    EmptySyncDir { synced_count: usize },
 }
 
 impl Error {
