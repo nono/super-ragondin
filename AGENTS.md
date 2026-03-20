@@ -55,7 +55,7 @@ Cargo workspace with crates and a Svelte frontend:
   - `src/commands.rs` - All Tauri commands (`get_app_state`, `init_config`, `start_auth`, `start_sync`) + sync loop
   - `tauri.conf.json` - Window size, frontend paths, app identifier
   - `capabilities/default.json` - Tauri capability declarations
-- `gui-frontend/` - Svelte 4 + Vite frontend for the GUI
+- `gui-frontend/` - Svelte 5 + Vite frontend for the GUI
   - `src/App.svelte` - State machine (Unconfigured → Unauthenticated → Ready)
   - `src/lib/Setup.svelte` - Setup form (instance URL + sync directory)
   - `src/lib/Auth.svelte` - OAuth wait screen with retry
