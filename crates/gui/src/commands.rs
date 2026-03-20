@@ -144,6 +144,7 @@ async fn run_auth_flow(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn start_auth(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_auth_flow(&app).await {
@@ -212,11 +213,13 @@ pub fn init_config_to(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn init_config(instance_url: String, sync_dir: String) -> Result<(), String> {
     init_config_to(instance_url, sync_dir, &config_path())
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn get_app_state() -> AppState {
     let config = Config::load(&config_path()).ok().flatten();
     app_state_from_config(config.as_ref())
@@ -225,6 +228,22 @@ pub fn get_app_state() -> AppState {
 /// Idempotency guard to prevent starting the sync loop twice.
 #[derive(Default)]
 pub struct SyncGuard(pub Mutex<bool>);
+
+/// Build the tauri-specta builder — shared by `main()` and the export test.
+pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new()
+        .commands(tauri_specta::collect_commands![
+            get_app_state,
+            init_config,
+            start_auth,
+            start_sync,
+        ])
+        .events(tauri_specta::collect_events![
+            AuthCompleteEvent,
+            AuthErrorEvent,
+            SyncStatusEvent,
+        ])
+}
 
 /// Sync state reported via `sync_status` events.
 ///
@@ -327,6 +346,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
 
 /// Start the background sync loop (idempotent: does nothing if already running).
 #[tauri::command]
+#[specta::specta]
 pub async fn start_sync(
     app: tauri::AppHandle,
     guard: tauri::State<'_, SyncGuard>,
@@ -475,5 +495,16 @@ mod tests {
         let guard = SyncGuard::default();
         *guard.0.lock().unwrap() = true;
         assert!(*guard.0.lock().unwrap());
+    }
+
+    #[test]
+    #[ignore]
+    fn export_bindings() {
+        make_builder()
+            .export(
+                specta_typescript::Typescript::default(),
+                "../../gui-frontend/src/bindings.ts",
+            )
+            .expect("Failed to export bindings");
     }
 }

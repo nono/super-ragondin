@@ -5,14 +5,15 @@ mod commands;
 use commands::SyncGuard;
 
 fn main() {
+    let builder = commands::make_builder();
+
     tauri::Builder::default()
         .manage(SyncGuard::default())
-        .invoke_handler(tauri::generate_handler![
-            commands::get_app_state,
-            commands::init_config,
-            commands::start_auth,
-            commands::start_sync,
-        ])
+        .invoke_handler(builder.invoke_handler())
+        .setup(move |app| {
+            builder.mount_events(app);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
