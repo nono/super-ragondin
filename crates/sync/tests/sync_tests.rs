@@ -1822,3 +1822,111 @@ fn test_initial_scan_succeeds_when_sync_dir_has_files() {
         "Sync dir with files should succeed even with synced records"
     );
 }
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_skips_files_without_checksum() {
+    use super_ragondin_sync::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "3-abc",
+            "results": [
+                {
+                    "id": "file-incomplete",
+                    "seq": "1-aaa",
+                    "doc": {
+                        "_id": "file-incomplete",
+                        "_rev": "1-inc",
+                        "type": "file",
+                        "name": "uploading.pdf",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "file-complete",
+                    "seq": "2-bbb",
+                    "doc": {
+                        "_id": "file-complete",
+                        "_rev": "1-ok",
+                        "type": "file",
+                        "name": "ready.txt",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "md5sum": "d41d8cd98f00b204e9800998ecf8427e",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "dir-no-md5",
+                    "seq": "3-ccc",
+                    "doc": {
+                        "_id": "dir-no-md5",
+                        "_rev": "1-dir",
+                        "type": "directory",
+                        "name": "docs",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    engine
+        .fetch_and_apply_remote_changes(&client, None)
+        .await
+        .unwrap();
+
+    // File without md5sum should NOT be in the remote tree (incomplete upload)
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-incomplete"))
+            .unwrap()
+            .is_none(),
+        "File without checksum should be skipped (incomplete upload)"
+    );
+
+    // File with md5sum should be present
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-complete"))
+            .unwrap()
+            .is_some(),
+        "File with checksum should be synced"
+    );
+
+    // Directory without md5sum should still be present (dirs never have checksums)
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("dir-no-md5"))
+            .unwrap()
+            .is_some(),
+        "Directory without checksum should still be synced"
+    );
+}
