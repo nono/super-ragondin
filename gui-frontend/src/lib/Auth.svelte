@@ -1,16 +1,20 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte'
-  import { invoke } from '@tauri-apps/api/core'
+  import { commands } from '../bindings'
 
-  export let error = null
+  interface Props {
+    error: string | null
+  }
+
+  let { error }: Props = $props()
 
   onMount(() => {
-    invoke('start_auth')
+    commands.startAuth()
   })
 
   function retry() {
     error = null
-    invoke('start_auth')
+    commands.startAuth()
   }
 </script>
 
