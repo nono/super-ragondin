@@ -6,7 +6,7 @@
     error: string | null
   }
 
-  let { error }: Props = $props()
+  let { error = $bindable(null) }: Props = $props()
 
   onMount(() => {
     commands.startAuth()
@@ -23,7 +23,7 @@
   <h1>Connecting to Cozy</h1>
   {#if error}
     <p class="error">{error}</p>
-    <button on:click={retry}>Retry</button>
+    <button onclick={retry}>Retry</button>
   {:else}
     <p>A browser window has been opened.</p>
     <p>Sign in to your Cozy and grant access.</p>

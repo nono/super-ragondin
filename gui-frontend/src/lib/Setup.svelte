@@ -32,7 +32,7 @@
 
 <div class="container">
   <h1>Super Ragondin</h1>
-  <form on:submit|preventDefault={handleSubmit}>
+  <form onsubmit={(e) => { e.preventDefault(); handleSubmit() }}>
     <label>
       Cozy instance URL
       <input
