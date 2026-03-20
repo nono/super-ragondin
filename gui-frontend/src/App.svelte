@@ -40,7 +40,7 @@
   {:else if appState === 'Unconfigured'}
     <Setup oncomplete={handleSetupComplete} />
   {:else if appState === 'Unauthenticated'}
-    <Auth error={authError} />
+    <Auth bind:error={authError} />
   {:else if appState === 'Ready'}
     <Syncing />
   {/if}
