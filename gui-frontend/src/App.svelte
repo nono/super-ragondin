@@ -38,7 +38,7 @@
   {#if appState === null}
     <div class="loading">Loading…</div>
   {:else if appState === 'Unconfigured'}
-    <Setup on:complete={handleSetupComplete} />
+    <Setup oncomplete={handleSetupComplete} />
   {:else if appState === 'Unauthenticated'}
     <Auth error={authError} />
   {:else if appState === 'Ready'}
