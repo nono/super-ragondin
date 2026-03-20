@@ -9,6 +9,8 @@ use std::sync::mpsc::Sender;
 pub enum WatchEventKind {
     Create,
     Modify,
+    /// File descriptor closed after writing — file is complete
+    CloseWrite,
     Delete,
     MovedFrom,
     MovedTo,
@@ -164,9 +166,9 @@ impl Watcher {
                         let _ = self.add_watch_recursive(&path);
                     }
                     WatchEventKind::Create
-                } else if event.mask.contains(EventMask::MODIFY)
-                    || event.mask.contains(EventMask::CLOSE_WRITE)
-                {
+                } else if event.mask.contains(EventMask::CLOSE_WRITE) {
+                    WatchEventKind::CloseWrite
+                } else if event.mask.contains(EventMask::MODIFY) {
                     WatchEventKind::Modify
                 } else if event.mask.contains(EventMask::DELETE)
                     || event.mask.contains(EventMask::DELETE_SELF)
