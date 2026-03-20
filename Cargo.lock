@@ -8200,6 +8200,7 @@ dependencies = [
  "opener",
  "serde",
  "serde_json",
+ "specta",
  "specta-typescript",
  "super-ragondin-sync",
  "tauri",

@@ -73,7 +73,7 @@ All existing crates are unchanged.
 
 The command is guarded by a `Mutex<bool>` in Tauri state: if `true` (already running), return immediately. Otherwise set to `true` and spawn the watch loop.
 
-The background loop runs via `tokio::task::spawn` on Tauri's existing async runtime (Tauri v2 is async-first). Do **not** create a new `tokio::runtime::Runtime` — that would be redundant and wasteful inside a Tauri process.
+The background loop runs on a dedicated OS thread with its own `tokio::runtime::Builder::new_current_thread()` runtime. This is necessary because `SyncEngine::run_cycle_async` takes `&mut self` and `&CozyClient`, making its future non-`'static` and incompatible with `tokio::task::spawn` / `tauri::async_runtime::spawn`, which require `'static` bounds. The dedicated thread owns the runtime and all borrowed values, avoiding cross-thread lifetime issues.
 
 `start_sync` reads the config fresh from disk (`Config::load(&config_path())`) at invocation time, ensuring it uses the OAuth tokens written by `start_auth` rather than any stale in-memory copy.
 
