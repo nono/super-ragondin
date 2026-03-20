@@ -1,20 +1,27 @@
-<script>
-  import { createEventDispatcher } from 'svelte'
-  import { invoke } from '@tauri-apps/api/core'
+<script lang="ts">
+  import { commands } from '../bindings'
 
-  const dispatch = createEventDispatcher()
+  interface Props {
+    oncomplete: () => void
+  }
 
-  let instanceUrl = ''
-  let syncDir = ''
-  let error = null
-  let submitting = false
+  const { oncomplete }: Props = $props()
+
+  let instanceUrl: string = $state('')
+  let syncDir: string = $state('')
+  let error: string | null = $state(null)
+  let submitting: boolean = $state(false)
 
   async function handleSubmit() {
     submitting = true
     error = null
     try {
-      await invoke('init_config', { instanceUrl, syncDir })
-      dispatch('complete')
+      const result = await commands.initConfig(instanceUrl, syncDir)
+      if (result.status === 'error') {
+        error = result.error
+      } else {
+        oncomplete()
+      }
     } catch (e) {
       error = String(e)
     } finally {
