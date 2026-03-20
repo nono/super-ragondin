@@ -18,6 +18,9 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 super-ragondin-sync = { path = "../sync" }
 tracing = "0.1.44"
+urlencoding = "2.1.3"
+specta-typescript = "0.0.9"
+tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
 
 [dev-dependencies]
 tempfile = "3"
