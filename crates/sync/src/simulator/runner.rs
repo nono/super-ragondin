@@ -1072,6 +1072,26 @@ impl SimulationRunner {
         Ok(ops)
     }
 
+    /// Rename a local node to a conflict name in-place (same node ID, new
+    /// name). Used to free a path for a remote-dictated move when the occupant
+    /// is an unsynced local-only node. The renamed node will be picked up as a
+    /// local-only file in the next planning round and uploaded under its new
+    /// name.
+    fn rename_local_to_conflict_copy(&mut self, local_id: &LocalFileId) -> Result<(), String> {
+        let Some(node) = self.local_fs.get_node(local_id).cloned() else {
+            return Ok(());
+        };
+        let conflict_name = generate_conflict_name(&PathBuf::from(&node.name));
+        self.local_fs
+            .move_node(local_id, node.parent_id, conflict_name);
+        if let Some(updated) = self.local_fs.get_node(local_id) {
+            self.store
+                .insert_local_node(updated)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Resolve a `NameCollision` conflict by renaming the local file to a
     /// conflict copy (simulated by deleting and re-creating with a different
     /// name). This frees the path for the remote version to be downloaded.
@@ -1546,14 +1566,30 @@ impl SimulationRunner {
         {
             return Ok(());
         }
-        // Skip if a different local node already occupies (parent, name).
-        // A real filesystem rename to an occupied name would replace (for files)
-        // or fail (for dirs); skipping keeps MockFs free of duplicate-path pairs.
-        let collision = self.local_fs.nodes.values().any(|n| {
-            &n.id != local_id && n.parent_id == new_parent_local && n.name == remote_node.name
-        });
-        if collision {
-            return Ok(());
+        // If a different local node already occupies (parent, name), check if it
+        // is unsynced. An unsynced occupant is conflict-renamed to free the path
+        // for this remote-dictated move (remote wins). A synced occupant means a
+        // concurrent conflict — defer until the next planning round.
+        let colliding_id = self
+            .local_fs
+            .nodes
+            .values()
+            .find(|n| {
+                &n.id != local_id && n.parent_id == new_parent_local && n.name == remote_node.name
+            })
+            .map(|n| n.id.clone());
+        if let Some(ref colliding_id) = colliding_id {
+            let is_unsynced = self
+                .store
+                .get_synced_by_local(colliding_id)
+                .ok()
+                .flatten()
+                .is_none();
+            if is_unsynced {
+                self.rename_local_to_conflict_copy(colliding_id)?;
+            } else {
+                return Ok(());
+            }
         }
         self.local_fs
             .move_node(local_id, new_parent_local.clone(), remote_node.name.clone());
