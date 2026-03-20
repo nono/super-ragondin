@@ -1,28 +1,26 @@
-<script>
+<script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { invoke } from '@tauri-apps/api/core'
-  import { listen } from '@tauri-apps/api/event'
+  import { commands, events } from '../bindings'
+  import type { SyncState } from '../bindings'
 
-  // status values match the Rust SyncState enum serialized with #[serde(rename_all = "PascalCase")].
-  // See crates/gui/src/commands.rs — SyncState enum.
-  let status = 'Idle'
-  let lastSync = null
+  let status: SyncState = $state('Idle')
+  let lastSync: string | null = $state(null)
 
-  let unlistenSyncStatus
+  let unlistenSyncStatus: (() => void) | undefined
 
   onMount(async () => {
-    unlistenSyncStatus = await listen('sync_status', (event) => {
+    unlistenSyncStatus = await events.syncStatusEvent.listen((event) => {
       status = event.payload.status
       lastSync = event.payload.last_sync
     })
-    invoke('start_sync')
+    commands.startSync()
   })
 
   onDestroy(() => {
     unlistenSyncStatus?.()
   })
 
-  function formatLastSync(iso) {
+  function formatLastSync(iso: string | null): string {
     if (!iso) return 'Never'
     try {
       return new Date(iso).toLocaleString()
