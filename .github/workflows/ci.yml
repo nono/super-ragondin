@@ -13,8 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev
+      - uses: ./.github/actions/install-system-deps
       - name: Run tests
         env:
           PROPTEST_CASES: 500
@@ -28,8 +27,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev
+      - uses: ./.github/actions/install-system-deps
       - name: Run clippy
         run: cargo clippy --all-features --no-deps -- -D warnings
 
@@ -52,8 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev
+      - uses: ./.github/actions/install-system-deps
       - uses: actions/setup-go@v5
         with:
           go-version: stable

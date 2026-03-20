@@ -1,0 +1,9 @@
+name: Install system dependencies
+description: Install system packages required for building the project
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev
