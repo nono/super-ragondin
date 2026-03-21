@@ -8,7 +8,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Manager, WindowEvent,
 };
 
 fn main() {
@@ -35,7 +35,7 @@ fn main() {
                 .icon(idle_icon)
                 .menu(&menu)
                 .on_tray_icon_event({
-                    let w = window.clone();
+                    let tray_window = window.clone();
                     move |_tray, event| {
                         if let TrayIconEvent::Click {
                             button: MouseButton::Left,
@@ -43,8 +43,8 @@ fn main() {
                             ..
                         } = event
                         {
-                            w.show().ok();
-                            w.set_focus().ok();
+                            tray_window.show().ok();
+                            tray_window.set_focus().ok();
                         }
                     }
                 })
@@ -61,11 +61,11 @@ fn main() {
                 .build(app)?;
 
             // Hide to tray instead of quitting when the window is closed
-            let w2 = window.clone();
+            let close_window = window.clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    w2.hide().ok();
+                    close_window.hide().ok();
                 }
             });
 
