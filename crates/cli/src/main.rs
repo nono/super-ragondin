@@ -169,14 +169,7 @@ enum SyncTrigger {
     Remote,
 }
 
-fn cmd_watch() -> Result<()> {
-    let mut config = Config::load(&config_path())?
-        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
-
-    let client = open_client(&config)?;
-    let mut engine = open_engine(&config)?;
-    let rt = tokio::runtime::Runtime::new()?;
-
+fn start_watchers(config: &Config) -> (mpsc::Receiver<SyncTrigger>, CancellationToken) {
     let (tx, rx) = mpsc::channel::<SyncTrigger>();
 
     // Local filesystem watcher
@@ -219,6 +212,18 @@ fn cmd_watch() -> Result<()> {
     } else {
         tracing::warn!("🔌 No access token, realtime notifications disabled");
     }
+
+    (rx, cancel)
+}
+
+fn cmd_watch() -> Result<()> {
+    let mut config = Config::load(&config_path())?
+        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+
+    let client = open_client(&config)?;
+    let mut engine = open_engine(&config)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let (rx, cancel) = start_watchers(&config);
 
     tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 

@@ -755,7 +755,7 @@ impl SyncEngine {
     ) -> Result<()> {
         tracing::info!(path = %local_path.display(), remote_id = remote_id.as_str(), "📥 Downloading new file");
 
-        // Try to reuse an existing local file with the same checksum
+        // Try to reuse an existing local file with the same checksum, falling back to download.
         let (actual_md5, file_size) =
             if !expected_md5.is_empty() && self.try_reuse_local_file(expected_md5, local_path)? {
                 let meta = fs::metadata(local_path)?;
@@ -844,7 +844,7 @@ impl SyncEngine {
             }
         }
 
-        // Try to reuse an existing local file with the same checksum
+        // Try to reuse an existing local file with the same checksum, falling back to download.
         let (actual_md5, file_size) = if !expected_remote_md5.is_empty()
             && self.try_reuse_local_file(expected_remote_md5, local_path)?
         {
@@ -1156,7 +1156,11 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if reading the source file or writing to staging fails.
-    pub fn try_reuse_local_file(&self, expected_md5: &str, target_path: &Path) -> Result<bool> {
+    pub(crate) fn try_reuse_local_file(
+        &self,
+        expected_md5: &str,
+        target_path: &Path,
+    ) -> Result<bool> {
         let Some(donor) = self.store.find_synced_by_md5(expected_md5)? else {
             return Ok(false);
         };
@@ -1188,19 +1192,196 @@ impl SyncEngine {
             "♻️ Reusing local file instead of downloading"
         );
 
-        let content = fs::read(&source_path)?;
-        self.write_via_staging(target_path, &content)?;
+        self.copy_via_staging(&source_path, target_path)?;
         Ok(true)
     }
 
-    fn write_via_staging(&self, target: &Path, content: &[u8]) -> Result<()> {
+    fn via_staging(&self, target: &Path, write_fn: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
         let staging_path = self.staging_dir.join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&self.staging_dir)?;
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&staging_path, content)?;
+        write_fn(&staging_path)?;
         fs::rename(&staging_path, target)?;
         Ok(())
+    }
+
+    fn write_via_staging(&self, target: &Path, content: &[u8]) -> Result<()> {
+        self.via_staging(target, |staging| Ok(fs::write(staging, content)?))
+    }
+
+    fn copy_via_staging(&self, source: &Path, target: &Path) -> Result<()> {
+        self.via_staging(target, |staging| {
+            fs::copy(source, staging)?;
+            Ok(())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn try_reuse_local_file_copies_existing_file() {
+        let store_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        let store = TreeStore::open(store_dir.path()).unwrap();
+
+        let existing_content = b"hello world, I am a synced file";
+        let existing_path = sync_dir.path().join("existing.txt");
+        fs::write(&existing_path, existing_content).unwrap();
+
+        let existing_md5 = compute_md5_from_bytes(existing_content);
+
+        let metadata = fs::metadata(&existing_path).unwrap();
+        let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+        let synced = SyncedRecord {
+            local_id,
+            remote_id: RemoteId::new("remote-existing"),
+            rel_path: "existing.txt".to_string(),
+            md5sum: Some(existing_md5.clone()),
+            size: Some(existing_content.len() as u64),
+            rev: "1-abc".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("existing.txt".to_string()),
+            local_parent_id: None,
+            remote_name: Some("existing.txt".to_string()),
+            remote_parent_id: None,
+        };
+        store.insert_synced(&synced).unwrap();
+        store.flush().unwrap();
+
+        let engine = SyncEngine::new(
+            store,
+            sync_dir.path().to_path_buf(),
+            sync_dir.path().join(".staging"),
+            IgnoreRules::none(),
+        );
+
+        let target_path = sync_dir.path().join("copy.txt");
+        let reused = engine
+            .try_reuse_local_file(&existing_md5, &target_path)
+            .unwrap();
+        assert!(reused, "Should reuse the existing local file");
+        assert!(target_path.exists(), "Target file should exist after reuse");
+        assert_eq!(
+            fs::read(&target_path).unwrap(),
+            existing_content,
+            "Content should match"
+        );
+    }
+
+    #[test]
+    fn try_reuse_local_file_returns_false_when_no_match() {
+        let store_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        let store = TreeStore::open(store_dir.path()).unwrap();
+
+        let engine = SyncEngine::new(
+            store,
+            sync_dir.path().to_path_buf(),
+            sync_dir.path().join(".staging"),
+            IgnoreRules::none(),
+        );
+
+        let target_path = sync_dir.path().join("new.txt");
+        let reused = engine
+            .try_reuse_local_file("nonexistent_md5", &target_path)
+            .unwrap();
+        assert!(!reused, "Should not reuse when no match found");
+        assert!(!target_path.exists(), "Target should not exist");
+    }
+
+    #[test]
+    fn try_reuse_local_file_returns_false_when_source_deleted() {
+        let store_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        let store = TreeStore::open(store_dir.path()).unwrap();
+
+        let synced = SyncedRecord {
+            local_id: LocalFileId::new(1, 999),
+            remote_id: RemoteId::new("remote-gone"),
+            rel_path: "gone.txt".to_string(),
+            md5sum: Some("deadbeef".to_string()),
+            size: Some(100),
+            rev: "1-x".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("gone.txt".to_string()),
+            local_parent_id: None,
+            remote_name: Some("gone.txt".to_string()),
+            remote_parent_id: None,
+        };
+        store.insert_synced(&synced).unwrap();
+        store.flush().unwrap();
+
+        let engine = SyncEngine::new(
+            store,
+            sync_dir.path().to_path_buf(),
+            sync_dir.path().join(".staging"),
+            IgnoreRules::none(),
+        );
+
+        let target_path = sync_dir.path().join("target.txt");
+        let reused = engine
+            .try_reuse_local_file("deadbeef", &target_path)
+            .unwrap();
+        assert!(
+            !reused,
+            "Should not reuse when source file is missing from disk"
+        );
+    }
+
+    #[test]
+    fn try_reuse_local_file_returns_false_when_content_changed() {
+        let store_dir = tempdir().unwrap();
+        let sync_dir = tempdir().unwrap();
+
+        let store = TreeStore::open(store_dir.path()).unwrap();
+
+        let original_content = b"original content";
+        let original_md5 = compute_md5_from_bytes(original_content);
+
+        let file_path = sync_dir.path().join("changed.txt");
+        fs::write(&file_path, original_content).unwrap();
+        let metadata = fs::metadata(&file_path).unwrap();
+        let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+        let synced = SyncedRecord {
+            local_id,
+            remote_id: RemoteId::new("remote-changed"),
+            rel_path: "changed.txt".to_string(),
+            md5sum: Some(original_md5.clone()),
+            size: Some(original_content.len() as u64),
+            rev: "1-x".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("changed.txt".to_string()),
+            local_parent_id: None,
+            remote_name: Some("changed.txt".to_string()),
+            remote_parent_id: None,
+        };
+        store.insert_synced(&synced).unwrap();
+        store.flush().unwrap();
+
+        fs::write(&file_path, b"modified content").unwrap();
+
+        let engine = SyncEngine::new(
+            store,
+            sync_dir.path().to_path_buf(),
+            sync_dir.path().join(".staging"),
+            IgnoreRules::none(),
+        );
+
+        let target_path = sync_dir.path().join("target.txt");
+        let reused = engine
+            .try_reuse_local_file(&original_md5, &target_path)
+            .unwrap();
+        assert!(!reused, "Should not reuse when file content has changed");
     }
 }
