@@ -12,7 +12,6 @@ use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-#[allow(dead_code)]
 pub static TRAY_IDLE_BYTES: &[u8] = include_bytes!("../icons/tray-idle.png");
 #[allow(dead_code)]
 pub static TRAY_SYNCING_BYTES: &[u8] = include_bytes!("../icons/tray-syncing.png");
