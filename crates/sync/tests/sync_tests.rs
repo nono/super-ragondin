@@ -1930,3 +1930,176 @@ async fn test_fetch_and_apply_remote_changes_skips_files_without_checksum() {
         "Directory without checksum should still be synced"
     );
 }
+
+#[test]
+fn test_try_reuse_local_file_copies_existing_file() {
+    use std::fs;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Create a local file that's already synced
+    let existing_content = b"hello world, I am a synced file";
+    let existing_path = sync_dir.path().join("existing.txt");
+    fs::write(&existing_path, existing_content).unwrap();
+
+    let existing_md5 = super_ragondin_sync::util::compute_md5_from_bytes(existing_content);
+
+    // Create a synced record for this file
+    let metadata = fs::metadata(&existing_path).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+    let synced = SyncedRecord {
+        local_id: local_id.clone(),
+        remote_id: RemoteId::new("remote-existing"),
+        rel_path: "existing.txt".to_string(),
+        md5sum: Some(existing_md5.clone()),
+        size: Some(existing_content.len() as u64),
+        rev: "1-abc".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("existing.txt".to_string()),
+        local_parent_id: None,
+        remote_name: Some("existing.txt".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&synced).unwrap();
+    store.flush().unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+
+    // Try to reuse for a new file at a different path with the same content
+    let target_path = sync_dir.path().join("copy.txt");
+    let reused = engine
+        .try_reuse_local_file(&existing_md5, &target_path)
+        .unwrap();
+    assert!(reused, "Should reuse the existing local file");
+    assert!(target_path.exists(), "Target file should exist after reuse");
+    assert_eq!(
+        fs::read(&target_path).unwrap(),
+        existing_content,
+        "Content should match"
+    );
+}
+
+#[test]
+fn test_try_reuse_local_file_returns_false_when_no_match() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+
+    let target_path = sync_dir.path().join("new.txt");
+    let reused = engine
+        .try_reuse_local_file("nonexistent_md5", &target_path)
+        .unwrap();
+    assert!(!reused, "Should not reuse when no match found");
+    assert!(!target_path.exists(), "Target should not exist");
+}
+
+#[test]
+fn test_try_reuse_local_file_returns_false_when_source_deleted() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Create a synced record but the file no longer exists on disk
+    let synced = SyncedRecord {
+        local_id: LocalFileId::new(1, 999),
+        remote_id: RemoteId::new("remote-gone"),
+        rel_path: "gone.txt".to_string(),
+        md5sum: Some("deadbeef".to_string()),
+        size: Some(100),
+        rev: "1-x".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("gone.txt".to_string()),
+        local_parent_id: None,
+        remote_name: Some("gone.txt".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&synced).unwrap();
+    store.flush().unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+
+    let target_path = sync_dir.path().join("target.txt");
+    let reused = engine
+        .try_reuse_local_file("deadbeef", &target_path)
+        .unwrap();
+    assert!(
+        !reused,
+        "Should not reuse when source file is missing from disk"
+    );
+}
+
+#[test]
+fn test_try_reuse_local_file_returns_false_when_content_changed() {
+    use std::fs;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Create a file and synced record
+    let original_content = b"original content";
+    let original_md5 = super_ragondin_sync::util::compute_md5_from_bytes(original_content);
+
+    let file_path = sync_dir.path().join("changed.txt");
+    fs::write(&file_path, original_content).unwrap();
+    let metadata = fs::metadata(&file_path).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
+
+    let synced = SyncedRecord {
+        local_id,
+        remote_id: RemoteId::new("remote-changed"),
+        rel_path: "changed.txt".to_string(),
+        md5sum: Some(original_md5.clone()),
+        size: Some(original_content.len() as u64),
+        rev: "1-x".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("changed.txt".to_string()),
+        local_parent_id: None,
+        remote_name: Some("changed.txt".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&synced).unwrap();
+    store.flush().unwrap();
+
+    // Now overwrite the file with different content
+    fs::write(&file_path, b"modified content").unwrap();
+
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+
+    let target_path = sync_dir.path().join("target.txt");
+    let reused = engine
+        .try_reuse_local_file(&original_md5, &target_path)
+        .unwrap();
+    assert!(!reused, "Should not reuse when file content has changed");
+}

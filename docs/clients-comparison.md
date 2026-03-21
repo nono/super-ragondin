@@ -502,8 +502,9 @@ Before downloading a file from the remote, checks if any local file with the
 same MD5 checksum already exists. If so, copies locally instead of
 downloading, saving bandwidth.
 
-**New client**: Always downloads from the remote. No checksum-based
-deduplication.
+**New client**: Before downloading, checks the synced tree for a file with a
+matching MD5 checksum. If found and the local file is still intact, copies it
+locally instead of downloading (`try_reuse_local_file` in `SyncEngine`).
 
 **Recommendation**: This is a significant bandwidth optimization, especially
 for files that were moved on the remote (different path, same content). The

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::model::{LocalFileId, LocalNode, RemoteId, RemoteNode, SyncedRecord};
+use crate::model::{LocalFileId, LocalNode, NodeType, RemoteId, RemoteNode, SyncedRecord};
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle};
 use std::path::Path;
 
@@ -306,6 +306,24 @@ impl TreeStore {
         self.synced_by_local.remove(local_id.to_bytes())?;
         tracing::trace!("💾 Deleted synced record");
         Ok(())
+    }
+
+    /// Find a synced file record whose checksum matches the given MD5.
+    ///
+    /// Only file records are considered (directories are skipped).
+    /// Returns the first match found.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization or storage access fails.
+    pub fn find_synced_by_md5(&self, md5: &str) -> Result<Option<SyncedRecord>> {
+        for item in self.synced_by_local.iter() {
+            let (_, value) = item?;
+            let record: SyncedRecord = serde_json::from_slice(&value)?;
+            if record.node_type == NodeType::File && record.md5sum.as_deref() == Some(md5) {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
     }
 
     /// List all synced records
