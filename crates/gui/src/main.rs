@@ -3,6 +3,7 @@
 mod commands;
 
 use commands::SyncGuard;
+use commands::TRAY_ID;
 use commands::TRAY_IDLE_BYTES;
 use tauri::{
     image::Image,
@@ -31,7 +32,7 @@ fn main() {
                 .get_webview_window("main")
                 .expect("main window not found");
 
-            TrayIconBuilder::with_id("main-tray")
+            TrayIconBuilder::with_id(TRAY_ID)
                 .icon(idle_icon)
                 .menu(&menu)
                 .on_tray_icon_event({

@@ -12,6 +12,7 @@ use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+pub static TRAY_ID: &str = "main-tray";
 pub static TRAY_IDLE_BYTES: &[u8] = include_bytes!("../icons/tray-idle.png");
 pub static TRAY_SYNCING_BYTES: &[u8] = include_bytes!("../icons/tray-syncing.png");
 
@@ -325,7 +326,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
                 SyncState::Syncing => TRAY_SYNCING_BYTES,
                 SyncState::Idle => TRAY_IDLE_BYTES,
             };
-            if let Some(tray) = app.tray_by_id("main-tray") {
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 if let Ok(icon) = tauri::image::Image::from_bytes(bytes) {
                     tray.set_icon(Some(icon)).ok();
                 }
