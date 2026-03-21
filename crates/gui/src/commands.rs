@@ -12,6 +12,11 @@ use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+#[allow(dead_code)]
+pub static TRAY_IDLE_BYTES: &[u8] = include_bytes!("../icons/tray-idle.png");
+#[allow(dead_code)]
+pub static TRAY_SYNCING_BYTES: &[u8] = include_bytes!("../icons/tray-syncing.png");
+
 /// Emitted when OAuth completes successfully.
 #[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
 pub struct AuthCompleteEvent;
@@ -496,6 +501,19 @@ mod tests {
         let guard = SyncGuard::default();
         *guard.0.lock().unwrap() = true;
         assert!(*guard.0.lock().unwrap());
+    }
+
+    #[test]
+    fn tray_icon_bytes_are_valid_images() {
+        use tauri::image::Image;
+        assert!(
+            Image::from_bytes(TRAY_IDLE_BYTES).is_ok(),
+            "tray-idle.png must be a valid image"
+        );
+        assert!(
+            Image::from_bytes(TRAY_SYNCING_BYTES).is_ok(),
+            "tray-syncing.png must be a valid image"
+        );
     }
 
     #[test]
