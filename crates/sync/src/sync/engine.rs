@@ -755,15 +755,23 @@ impl SyncEngine {
     ) -> Result<()> {
         tracing::info!(path = %local_path.display(), remote_id = remote_id.as_str(), "📥 Downloading new file");
 
-        let bytes = client.download_file(remote_id).await?;
-        let actual_md5 = compute_md5_from_bytes(&bytes);
-        if !expected_md5.is_empty() && actual_md5 != expected_md5 {
-            return Err(Error::Conflict(format!(
-                "Downloaded file md5 mismatch: expected {expected_md5}, got {actual_md5}"
-            )));
-        }
-
-        self.write_via_staging(local_path, &bytes)?;
+        // Try to reuse an existing local file with the same checksum
+        let (actual_md5, file_size) =
+            if !expected_md5.is_empty() && self.try_reuse_local_file(expected_md5, local_path)? {
+                let meta = fs::metadata(local_path)?;
+                (expected_md5.to_string(), meta.len())
+            } else {
+                let bytes = client.download_file(remote_id).await?;
+                let actual_md5 = compute_md5_from_bytes(&bytes);
+                if !expected_md5.is_empty() && actual_md5 != expected_md5 {
+                    return Err(Error::Conflict(format!(
+                        "Downloaded file md5 mismatch: expected {expected_md5}, got {actual_md5}"
+                    )));
+                }
+                let size = bytes.len() as u64;
+                self.write_via_staging(local_path, &bytes)?;
+                (actual_md5, size)
+            };
 
         let metadata = fs::metadata(local_path)?;
         let local_id = LocalFileId::new(metadata.dev(), metadata.ino());
@@ -787,7 +795,7 @@ impl SyncEngine {
             name: remote_node.name.clone(),
             node_type: NodeType::File,
             md5sum: Some(actual_md5.clone()),
-            size: Some(bytes.len() as u64),
+            size: Some(file_size),
             mtime: metadata.mtime(),
         };
         self.store.insert_local_node(&local_node)?;
@@ -801,7 +809,7 @@ impl SyncEngine {
                 .to_string_lossy()
                 .to_string(),
             md5sum: Some(actual_md5),
-            size: Some(bytes.len() as u64),
+            size: Some(file_size),
             rev: remote_node.rev.clone(),
             node_type: NodeType::File,
             local_name: Some(remote_node.name.clone()),
@@ -836,26 +844,35 @@ impl SyncEngine {
             }
         }
 
-        let bytes = client.download_file(remote_id).await?;
-        let actual_md5 = compute_md5_from_bytes(&bytes);
-        if !expected_remote_md5.is_empty() && actual_md5 != expected_remote_md5 {
-            return Err(Error::Conflict(format!(
-                "Downloaded file md5 mismatch: expected {expected_remote_md5}, got {actual_md5}"
-            )));
-        }
-
-        self.write_via_staging(local_path, &bytes)?;
+        // Try to reuse an existing local file with the same checksum
+        let (actual_md5, file_size) = if !expected_remote_md5.is_empty()
+            && self.try_reuse_local_file(expected_remote_md5, local_path)?
+        {
+            let meta = fs::metadata(local_path)?;
+            (expected_remote_md5.to_string(), meta.len())
+        } else {
+            let bytes = client.download_file(remote_id).await?;
+            let actual_md5 = compute_md5_from_bytes(&bytes);
+            if !expected_remote_md5.is_empty() && actual_md5 != expected_remote_md5 {
+                return Err(Error::Conflict(format!(
+                    "Downloaded file md5 mismatch: expected {expected_remote_md5}, got {actual_md5}"
+                )));
+            }
+            let size = bytes.len() as u64;
+            self.write_via_staging(local_path, &bytes)?;
+            (actual_md5, size)
+        };
 
         if let Some(mut node) = self.store.get_local_node(local_id)? {
             node.md5sum = Some(actual_md5.clone());
-            node.size = Some(bytes.len() as u64);
+            node.size = Some(file_size);
             node.mtime = fs::metadata(local_path)?.mtime();
             self.store.insert_local_node(&node)?;
         }
 
         if let Some(mut synced) = self.store.get_synced_by_local(local_id)? {
             synced.md5sum = Some(actual_md5);
-            synced.size = Some(bytes.len() as u64);
+            synced.size = Some(file_size);
             if let Some(remote) = self.store.get_remote_node(remote_id)? {
                 synced.rev = remote.rev;
             }
@@ -1125,6 +1142,56 @@ impl SyncEngine {
     }
 
     // ==================== Helpers ====================
+
+    /// Try to reuse an existing local file with the same MD5 checksum instead
+    /// of downloading.
+    ///
+    /// Looks up the synced tree for a file record whose checksum matches
+    /// `expected_md5`, verifies the source file still exists on disk and has
+    /// not been modified, then copies it to `target_path` via the staging
+    /// directory.
+    ///
+    /// Returns `true` if the file was successfully reused, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the source file or writing to staging fails.
+    pub fn try_reuse_local_file(&self, expected_md5: &str, target_path: &Path) -> Result<bool> {
+        let Some(donor) = self.store.find_synced_by_md5(expected_md5)? else {
+            return Ok(false);
+        };
+
+        let source_path = self.sync_dir.join(&donor.rel_path);
+        if !source_path.is_file() {
+            tracing::debug!(
+                path = %source_path.display(),
+                "📋 Donor file no longer exists on disk"
+            );
+            return Ok(false);
+        }
+
+        let actual_md5 = compute_md5_from_path(&source_path)?;
+        if actual_md5 != expected_md5 {
+            tracing::debug!(
+                path = %source_path.display(),
+                expected = expected_md5,
+                actual = actual_md5,
+                "📋 Donor file content has changed"
+            );
+            return Ok(false);
+        }
+
+        tracing::info!(
+            source = %source_path.display(),
+            target = %target_path.display(),
+            md5 = expected_md5,
+            "♻️ Reusing local file instead of downloading"
+        );
+
+        let content = fs::read(&source_path)?;
+        self.write_via_staging(target_path, &content)?;
+        Ok(true)
+    }
 
     fn write_via_staging(&self, target: &Path, content: &[u8]) -> Result<()> {
         let staging_path = self.staging_dir.join(uuid::Uuid::new_v4().to_string());
