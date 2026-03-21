@@ -115,9 +115,9 @@ Cargo workspace with crates and a Svelte frontend:
 | Variable | Default | Description |
 |---|---|---|
 | `OPENROUTER_API_KEY` | required | API key for OpenRouter |
-| `OPENROUTER_EMBED_MODEL` | `openai/text-embedding-3-large` | Embedding model |
+| `OPENROUTER_EMBED_MODEL` | `baai/bge-m3` | Embedding model |
 | `OPENROUTER_VISION_MODEL` | `google/gemini-2.5-flash` | Vision/image model |
-| `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-3.2-24b-instruct` | Chat completion model (main reasoning loop) |
+| `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-2603` | Chat completion model (main reasoning loop) |
 | `OPENROUTER_SUBAGENT_MODEL` | `google/gemini-2.5-flash` | Model for sub-agent summarization calls (cheaper/faster) |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image-preview` | Image generation model |
 

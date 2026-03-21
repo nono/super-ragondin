@@ -35,11 +35,11 @@ impl RagConfig {
         Self {
             api_key: std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
             embed_model: std::env::var("OPENROUTER_EMBED_MODEL")
-                .unwrap_or_else(|_| "openai/text-embedding-3-large".to_string()),
+                .unwrap_or_else(|_| "baai/bge-m3".to_string()),
             vision_model: std::env::var("OPENROUTER_VISION_MODEL")
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             chat_model: std::env::var("OPENROUTER_CHAT_MODEL")
-                .unwrap_or_else(|_| "mistralai/mistral-small-3.2-24b-instruct".to_string()),
+                .unwrap_or_else(|_| "mistralai/mistral-small-2603".to_string()),
             subagent_model: std::env::var("OPENROUTER_SUBAGENT_MODEL")
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             image_model: std::env::var("OPENROUTER_IMAGE_MODEL")
@@ -66,12 +66,9 @@ mod tests {
             ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
-                assert_eq!(config.embed_model, "openai/text-embedding-3-large");
+                assert_eq!(config.embed_model, "baai/bge-m3");
                 assert_eq!(config.vision_model, "google/gemini-2.5-flash");
-                assert_eq!(
-                    config.chat_model,
-                    "mistralai/mistral-small-3.2-24b-instruct"
-                );
+                assert_eq!(config.chat_model, "mistralai/mistral-small-2603");
                 assert_eq!(config.subagent_model, "google/gemini-2.5-flash");
                 assert_eq!(config.image_model, "google/gemini-3.1-flash-image-preview");
                 assert!(config.api_key.is_empty());
