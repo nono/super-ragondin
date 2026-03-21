@@ -1092,47 +1092,15 @@ impl SimulationRunner {
         Ok(())
     }
 
-    /// Resolve a `NameCollision` conflict by renaming the local file to a
-    /// conflict copy (simulated by deleting and re-creating with a different
-    /// name). This frees the path for the remote version to be downloaded.
+    /// Resolve a `NameCollision` conflict by renaming the local node to a
+    /// conflict name in-place. This frees the path for the remote version to
+    /// be downloaded while preserving the node type and any children (for
+    /// directories).
     fn resolve_name_collision(&mut self, conflict: &crate::model::Conflict) -> Result<(), String> {
         let Some(local_id) = &conflict.local_id else {
             return Ok(());
         };
-        let Some(node) = self.local_fs.get_node(local_id).cloned() else {
-            return Ok(());
-        };
-        let content = self
-            .local_fs
-            .read_file(local_id)
-            .cloned()
-            .unwrap_or_default();
-
-        // Create a conflict copy using the same naming logic as the real engine
-        let conflict_local_id = self.next_local_id();
-        let conflict_name = generate_conflict_name(&PathBuf::from(&node.name));
-        let conflict_node = LocalNode {
-            id: conflict_local_id.clone(),
-            parent_id: node.parent_id.clone(),
-            name: conflict_name,
-            node_type: node.node_type,
-            md5sum: node.md5sum.clone(),
-            size: node.size,
-            mtime: node.mtime,
-        };
-        self.local_fs
-            .create_file(conflict_local_id, conflict_node.clone(), content);
-        self.store
-            .insert_local_node(&conflict_node)
-            .map_err(|e| e.to_string())?;
-
-        // Delete the original local file
-        self.local_fs.delete(local_id);
-        self.store
-            .delete_local_node(local_id)
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
+        self.rename_local_to_conflict_copy(local_id)
     }
 
     fn partition_ops(
@@ -1763,7 +1731,7 @@ impl SimulationRunner {
     }
 
     fn execute_bind_existing(
-        &self,
+        &mut self,
         local_id: &LocalFileId,
         remote_id: &RemoteId,
     ) -> Result<(), String> {
@@ -1796,6 +1764,8 @@ impl SimulationRunner {
         self.store
             .insert_synced(&synced)
             .map_err(|e| e.to_string())?;
+        self.remote_to_local
+            .insert(remote_id.clone(), local_id.clone());
         Ok(())
     }
 
