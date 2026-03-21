@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -7,7 +8,7 @@ use std::time::{Duration, Instant};
 use super_ragondin_sync::config::Config;
 use super_ragondin_sync::error::{Error, Result};
 use super_ragondin_sync::ignore::IgnoreRules;
-use super_ragondin_sync::local::watcher::{WatchEvent, Watcher};
+use super_ragondin_sync::local::watcher::{WatchEvent, WatchEventKind, Watcher};
 use super_ragondin_sync::model::PlanResult;
 use super_ragondin_sync::planner::Planner;
 use super_ragondin_sync::remote::auth::OAuthClient;
@@ -168,14 +169,7 @@ enum SyncTrigger {
     Remote,
 }
 
-fn cmd_watch() -> Result<()> {
-    let mut config = Config::load(&config_path())?
-        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
-
-    let client = open_client(&config)?;
-    let mut engine = open_engine(&config)?;
-    let rt = tokio::runtime::Runtime::new()?;
-
+fn start_watchers(config: &Config) -> (mpsc::Receiver<SyncTrigger>, CancellationToken) {
     let (tx, rx) = mpsc::channel::<SyncTrigger>();
 
     // Local filesystem watcher
@@ -219,16 +213,47 @@ fn cmd_watch() -> Result<()> {
         tracing::warn!("🔌 No access token, realtime notifications disabled");
     }
 
+    (rx, cancel)
+}
+
+fn cmd_watch() -> Result<()> {
+    let mut config = Config::load(&config_path())?
+        .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
+
+    let client = open_client(&config)?;
+    let mut engine = open_engine(&config)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let (rx, cancel) = start_watchers(&config);
+
     tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 
+    // Files with pending writes: path -> timestamp of first write event.
+    // A file is "pending" after Create/Modify until we receive CloseWrite.
+    let mut pending_writes: HashMap<PathBuf, Instant> = HashMap::new();
     let mut pending = true;
     let mut last_sync: Option<Instant> = None;
-    let debounce = Duration::from_secs(2);
+    let debounce = Duration::from_millis(200);
+    let write_timeout = Duration::from_secs(30);
 
     loop {
         let debounce_ok = last_sync.is_none_or(|t| t.elapsed() > debounce);
 
-        if pending && debounce_ok {
+        // Expire stale pending writes (safety net for mmap / non-close writers)
+        let now = Instant::now();
+        let expired: Vec<_> = pending_writes
+            .iter()
+            .filter(|&(_, &t)| now.duration_since(t) > write_timeout)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for path in &expired {
+            tracing::debug!(path = %path.display(), "⏰ Pending write timed out, releasing");
+            pending_writes.remove(path);
+        }
+        if !expired.is_empty() {
+            pending = true;
+        }
+
+        if pending && debounce_ok && pending_writes.is_empty() {
             tracing::info!("🔄 Syncing");
             pending = false;
             if let Err(e) = run_sync_cycle(&rt, &mut engine, &client, &mut config) {
@@ -237,11 +262,30 @@ fn cmd_watch() -> Result<()> {
             last_sync = Some(Instant::now());
         }
 
-        match rx.recv_timeout(Duration::from_secs(1)) {
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(trigger) => {
                 match &trigger {
                     SyncTrigger::Local(event) => {
                         tracing::debug!(event = ?event, "👁️ Local watch event received");
+                        match event.kind {
+                            WatchEventKind::Create | WatchEventKind::Modify if !event.is_dir => {
+                                pending_writes
+                                    .entry(event.path.clone())
+                                    .or_insert_with(Instant::now);
+                            }
+                            WatchEventKind::CloseWrite => {
+                                if pending_writes.remove(&event.path).is_some() {
+                                    tracing::debug!(
+                                        path = %event.path.display(),
+                                        "✅ Write complete (CLOSE_WRITE)"
+                                    );
+                                }
+                            }
+                            WatchEventKind::Delete => {
+                                pending_writes.remove(&event.path);
+                            }
+                            _ => {}
+                        }
                     }
                     SyncTrigger::Remote => {
                         tracing::info!("🔌 Remote change notification received");

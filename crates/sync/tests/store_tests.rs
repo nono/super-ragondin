@@ -459,3 +459,65 @@ fn test_trees_are_independent() {
     assert!(store.list_all_local().unwrap().is_empty());
     assert!(store.list_all_synced().unwrap().is_empty());
 }
+
+#[test]
+fn test_find_synced_by_md5_returns_matching_record() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let record = SyncedRecord {
+        local_id: LocalFileId::new(1, 100),
+        remote_id: RemoteId::new("remote-1"),
+        rel_path: "photos/cat.jpg".to_string(),
+        md5sum: Some("abc123def456".to_string()),
+        size: Some(4096),
+        rev: "1-x".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("cat.jpg".to_string()),
+        local_parent_id: None,
+        remote_name: Some("cat.jpg".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&record).unwrap();
+
+    // Should find by matching md5
+    let found = store.find_synced_by_md5("abc123def456").unwrap();
+    assert!(found.is_some());
+    let found = found.unwrap();
+    assert_eq!(found.local_id, LocalFileId::new(1, 100));
+    assert_eq!(found.rel_path, "photos/cat.jpg");
+
+    // Should not find with different md5
+    let not_found = store.find_synced_by_md5("different_hash").unwrap();
+    assert!(not_found.is_none());
+
+    // Should not find directories (even if md5 matches somehow)
+    let dir_record = SyncedRecord {
+        local_id: LocalFileId::new(1, 200),
+        remote_id: RemoteId::new("remote-2"),
+        rel_path: "photos".to_string(),
+        md5sum: Some("abc123def456".to_string()),
+        size: None,
+        rev: "1-y".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some("photos".to_string()),
+        local_parent_id: None,
+        remote_name: Some("photos".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&dir_record).unwrap();
+
+    // Should still find the file record, not the directory
+    let found = store.find_synced_by_md5("abc123def456").unwrap();
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().node_type, NodeType::File);
+}
+
+#[test]
+fn test_find_synced_by_md5_returns_none_for_empty_store() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    let found = store.find_synced_by_md5("abc123").unwrap();
+    assert!(found.is_none());
+}

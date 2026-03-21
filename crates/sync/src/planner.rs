@@ -62,6 +62,13 @@ impl<'a> Planner<'a> {
 
         let cyclic_remote_ids = Self::find_remote_cycles(&remote_by_id);
 
+        // Build a lookup from (parent_remote_id, name) → remote node, used to
+        // detect local-only nodes that collide with already-synced remote nodes.
+        let remote_by_parent_name: HashMap<(Option<RemoteId>, String), &RemoteNode> = remote_nodes
+            .iter()
+            .map(|r| ((r.parent_id.clone(), r.name.clone()), r))
+            .collect();
+
         for remote in &remote_nodes {
             let rel_path = self.compute_remote_rel_path(remote);
             let rel_str = rel_path.to_string_lossy();
@@ -130,6 +137,48 @@ impl<'a> Planner<'a> {
                 tracing::debug!(path = %rel_str, "⏭️ Skipping ignored local node");
                 continue;
             }
+            // Check if a synced remote node already occupies (parent, name).
+            // This happens when the local node was created at a location already
+            // taken by a different synced remote node (e.g., a local dir renamed
+            // to the same name as an existing synced remote file). The upload
+            // would silently fail at execution time, so detect it here and emit
+            // a NameCollision conflict so the local node gets a conflict rename.
+            let parent_remote_id = self.find_parent_remote_id(local.parent_id.as_ref());
+            if let Some(ref pid) = parent_remote_id
+                && let Some(conflicting_remote) =
+                    remote_by_parent_name.get(&(Some(pid.clone()), local.name.clone()))
+                && let Some(conflicting_synced) = synced_by_remote.get(&conflicting_remote.id)
+                && conflicting_synced.local_id != local.id
+                && let Some(conflicting_local) = local_by_id.get(&conflicting_synced.local_id)
+                // Only flag a collision when the synced local counterpart is still at
+                // its recorded location. If it was moved away, the planner will emit a
+                // MoveRemote for the remote node, and this local node can be uploaded
+                // once that move lands — no rename needed.
+                && conflicting_local.parent_id == conflicting_synced.local_parent_id
+                && conflicting_synced
+                    .local_name
+                    .as_deref()
+                    .is_some_and(|n| n == conflicting_local.name)
+            {
+                let local_path = self.compute_local_path_from_local(local);
+                tracing::debug!(
+                    name = &local.name,
+                    remote_id = conflicting_remote.id.as_str(),
+                    "⚠️ Local-only node conflicts with already-synced remote node at same path"
+                );
+                results.push(PlanResult::Conflict(Conflict {
+                    local_id: Some(local.id.clone()),
+                    remote_id: Some(conflicting_remote.id.clone()),
+                    local_path: Some(local_path),
+                    reason: format!(
+                        "Local-only {:?} \"{}\" conflicts with already-synced remote node",
+                        local.node_type, local.name
+                    ),
+                    kind: ConflictKind::NameCollision,
+                }));
+                continue;
+            }
+
             results.extend(self.plan_local_only(local));
         }
 

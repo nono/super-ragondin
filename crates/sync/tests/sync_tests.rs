@@ -1706,3 +1706,227 @@ fn planner_skips_ignored_remote_nodes() {
         panic!("Expected DownloadNew operation");
     }
 }
+
+// ==================== Empty sync directory protection ====================
+
+#[test]
+fn test_initial_scan_aborts_when_sync_dir_empty_but_synced_records_exist() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Pre-populate synced records (simulating a previously successful sync)
+    for i in 1..=5u64 {
+        let synced = SyncedRecord {
+            local_id: LocalFileId::new(1, 100 + i),
+            remote_id: RemoteId::new(&format!("f{i}")),
+            rel_path: format!("file{i}.txt"),
+            md5sum: Some("abc".to_string()),
+            size: Some(100),
+            rev: "1-abc".to_string(),
+            node_type: NodeType::File,
+            local_name: Some(format!("file{i}.txt")),
+            local_parent_id: None,
+            remote_name: Some(format!("file{i}.txt")),
+            remote_parent_id: None,
+        };
+        store.insert_synced(&synced).unwrap();
+    }
+
+    // The sync directory is empty (simulating unmounted drive)
+    let staging_dir = sync_dir.path().join(".staging");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir,
+        IgnoreRules::none(),
+    );
+
+    let result = engine.initial_scan();
+
+    assert!(
+        result.is_err(),
+        "Should abort when sync dir is empty but synced records exist"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            super_ragondin_sync::error::Error::EmptySyncDir { synced_count: 5 }
+        ),
+        "Expected EmptySyncDir with synced_count=5, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_initial_scan_succeeds_when_sync_dir_empty_and_no_synced_records() {
+    // First sync: no synced records, empty sync dir is fine
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    let staging_dir = sync_dir.path().join(".staging");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir,
+        IgnoreRules::none(),
+    );
+
+    let result = engine.initial_scan();
+    assert!(
+        result.is_ok(),
+        "First sync with empty sync dir should succeed"
+    );
+}
+
+#[test]
+fn test_initial_scan_succeeds_when_sync_dir_has_files() {
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    // Create a file in the sync directory
+    std::fs::write(sync_dir.path().join("test.txt"), "hello").unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Pre-populate synced records
+    let synced = SyncedRecord {
+        local_id: LocalFileId::new(1, 999),
+        remote_id: RemoteId::new("f1"),
+        rel_path: "old-file.txt".to_string(),
+        md5sum: Some("abc".to_string()),
+        size: Some(100),
+        rev: "1-abc".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("old-file.txt".to_string()),
+        local_parent_id: None,
+        remote_name: Some("old-file.txt".to_string()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&synced).unwrap();
+
+    let staging_dir = sync_dir.path().join(".staging");
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir,
+        IgnoreRules::none(),
+    );
+
+    let result = engine.initial_scan();
+    assert!(
+        result.is_ok(),
+        "Sync dir with files should succeed even with synced records"
+    );
+}
+
+#[tokio::test]
+async fn test_fetch_and_apply_remote_changes_skips_files_without_checksum() {
+    use super_ragondin_sync::remote::client::CozyClient;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/files/_changes"))
+        .and(query_param("include_docs", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "last_seq": "3-abc",
+            "results": [
+                {
+                    "id": "file-incomplete",
+                    "seq": "1-aaa",
+                    "doc": {
+                        "_id": "file-incomplete",
+                        "_rev": "1-inc",
+                        "type": "file",
+                        "name": "uploading.pdf",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "file-complete",
+                    "seq": "2-bbb",
+                    "doc": {
+                        "_id": "file-complete",
+                        "_rev": "1-ok",
+                        "type": "file",
+                        "name": "ready.txt",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "md5sum": "d41d8cd98f00b204e9800998ecf8427e",
+                        "size": 0,
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                },
+                {
+                    "id": "dir-no-md5",
+                    "seq": "3-ccc",
+                    "doc": {
+                        "_id": "dir-no-md5",
+                        "_rev": "1-dir",
+                        "type": "directory",
+                        "name": "docs",
+                        "dir_id": "io.cozy.files.root-dir",
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+    let staging_dir = tempdir().unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+    let engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        staging_dir.path().to_path_buf(),
+        IgnoreRules::none(),
+    );
+
+    let client = CozyClient::new(&mock_server.uri(), "fake-token");
+
+    engine
+        .fetch_and_apply_remote_changes(&client, None)
+        .await
+        .unwrap();
+
+    // File without md5sum should NOT be in the remote tree (incomplete upload)
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-incomplete"))
+            .unwrap()
+            .is_none(),
+        "File without checksum should be skipped (incomplete upload)"
+    );
+
+    // File with md5sum should be present
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("file-complete"))
+            .unwrap()
+            .is_some(),
+        "File with checksum should be synced"
+    );
+
+    // Directory without md5sum should still be present (dirs never have checksums)
+    assert!(
+        engine
+            .store()
+            .get_remote_node(&RemoteId::new("dir-no-md5"))
+            .unwrap()
+            .is_some(),
+        "Directory without checksum should still be synced"
+    );
+}
