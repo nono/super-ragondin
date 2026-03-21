@@ -13,7 +13,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 pub static TRAY_IDLE_BYTES: &[u8] = include_bytes!("../icons/tray-idle.png");
-#[allow(dead_code)]
 pub static TRAY_SYNCING_BYTES: &[u8] = include_bytes!("../icons/tray-syncing.png");
 
 /// Emitted when OAuth completes successfully.
@@ -321,8 +320,21 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
         }
     };
     rt.block_on(async {
+        let update_tray_icon = |state: &SyncState| {
+            let bytes = match state {
+                SyncState::Syncing => TRAY_SYNCING_BYTES,
+                SyncState::Idle => TRAY_IDLE_BYTES,
+            };
+            if let Some(tray) = app.tray_by_id("main-tray") {
+                if let Ok(icon) = tauri::image::Image::from_bytes(bytes) {
+                    tray.set_icon(Some(icon)).ok();
+                }
+            }
+        };
+
         let mut last_sync: Option<String> = None;
         loop {
+            update_tray_icon(&SyncState::Syncing);
             let _ = SyncStatusEvent {
                 status: SyncState::Syncing,
                 last_sync: last_sync.clone(),
@@ -337,6 +349,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
                 }
             };
 
+            update_tray_icon(&SyncState::Idle);
             let _ = SyncStatusEvent {
                 status: SyncState::Idle,
                 last_sync: last_sync.clone(),
