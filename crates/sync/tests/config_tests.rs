@@ -25,6 +25,7 @@ fn save_and_load_roundtrip() {
         data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
 
     config.save(&config_path).unwrap();
@@ -53,6 +54,7 @@ fn save_creates_parent_directories() {
         data_dir: PathBuf::from("/tmp/data"),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
 
     config.save(&config_path).unwrap();
@@ -68,6 +70,7 @@ fn staging_dir_returns_correct_path() {
         data_dir: PathBuf::from("/home/user/.local/share/super-ragondin"),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
 
     let staging = config.staging_dir();
@@ -86,6 +89,7 @@ fn store_dir_returns_correct_path() {
         data_dir: PathBuf::from("/home/user/.local/share/super-ragondin"),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
 
     let store = config.store_dir();
@@ -107,6 +111,7 @@ fn save_and_load_with_last_seq() {
         data_dir: temp_dir.path().join("data"),
         oauth_client: None,
         last_seq: Some("42-abc123".to_string()),
+        api_key: None,
     };
 
     config.save(&config_path).unwrap();
