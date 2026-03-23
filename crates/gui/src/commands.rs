@@ -196,6 +196,7 @@ pub fn app_state_from_config(config: Option<&Config>) -> AppState {
 pub fn init_config_to(
     instance_url: String,
     sync_dir: String,
+    api_key: Option<String>,
     config_path: &std::path::Path,
 ) -> Result<(), String> {
     let sync_dir = PathBuf::from(sync_dir);
@@ -209,7 +210,7 @@ pub fn init_config_to(
         data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
-        api_key: None,
+        api_key,
     };
     fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
     fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
@@ -219,8 +220,12 @@ pub fn init_config_to(
 
 #[tauri::command]
 #[specta::specta]
-pub fn init_config(instance_url: String, sync_dir: String) -> Result<(), String> {
-    init_config_to(instance_url, sync_dir, &config_path())
+pub fn init_config(
+    instance_url: String,
+    sync_dir: String,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    init_config_to(instance_url, sync_dir, api_key, &config_path())
 }
 
 #[tauri::command]
@@ -468,6 +473,7 @@ mod tests {
         let result = init_config_to(
             instance_url.clone(),
             sync_dir.to_str().unwrap().to_string(),
+            None,
             &dir.path().join("config.json"),
         );
 
@@ -478,6 +484,24 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.instance_url, instance_url);
         assert!(loaded.oauth_client.is_none());
+    }
+
+    #[test]
+    fn init_config_to_saves_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let sync_dir = dir.path().join("sync");
+        let config_path = dir.path().join("config.json");
+        let result = init_config_to(
+            "https://alice.mycozy.cloud".to_string(),
+            sync_dir.to_str().unwrap().to_string(),
+            Some("sk-openrouter-test".to_string()),
+            &config_path,
+        );
+        assert!(result.is_ok());
+        let loaded = super_ragondin_sync::config::Config::load(&config_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.api_key, Some("sk-openrouter-test".to_string()));
     }
 
     #[test]
