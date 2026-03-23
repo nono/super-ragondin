@@ -144,9 +144,8 @@ impl<'a> Planner<'a> {
             // would silently fail at execution time, so detect it here and emit
             // a NameCollision conflict so the local node gets a conflict rename.
             let parent_remote_id = self.find_parent_remote_id(local.parent_id.as_ref());
-            if let Some(ref pid) = parent_remote_id
-                && let Some(conflicting_remote) =
-                    remote_by_parent_name.get(&(Some(pid.clone()), local.name.clone()))
+            if let Some(conflicting_remote) =
+                remote_by_parent_name.get(&(parent_remote_id, local.name.clone()))
                 && let Some(conflicting_synced) = synced_by_remote.get(&conflicting_remote.id)
                 && conflicting_synced.local_id != local.id
                 && let Some(conflicting_local) = local_by_id.get(&conflicting_synced.local_id)

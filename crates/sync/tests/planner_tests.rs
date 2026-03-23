@@ -2167,3 +2167,67 @@ fn test_remote_move_and_update_generates_move_and_download() {
         "MoveLocal should be sorted before DownloadUpdate"
     );
 }
+
+#[test]
+fn test_local_only_node_collides_with_synced_remote_at_root() {
+    // When a remote node at the true root (parent_id = None) is already synced,
+    // and a new local-only node also has parent_id = None with the same name,
+    // the planner should detect the NameCollision.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // A remote file at the true root (parent_id = None), already synced.
+    let synced_lid = local_id(1, 50);
+    let synced_rid = remote_id("f_synced");
+    let synced_file = make_synced_with_location(
+        synced_lid.clone(),
+        synced_rid.clone(),
+        "notes.txt",
+        Some("synced_hash"),
+        NodeType::File,
+        "notes.txt",
+        None,
+        "notes.txt",
+        None,
+    );
+    store.insert_synced(&synced_file).unwrap();
+    store
+        .insert_remote_node(&make_remote_file(
+            synced_rid.clone(),
+            None,
+            "notes.txt",
+            "synced_hash",
+        ))
+        .unwrap();
+    store
+        .insert_local_node(&make_local_file(
+            synced_lid.clone(),
+            None,
+            "notes.txt",
+            "synced_hash",
+        ))
+        .unwrap();
+
+    // New local-only file with the same name at the root (parent_id = None).
+    let new_local = make_local_file(local_id(1, 200), None, "notes.txt", "different_hash");
+    store.insert_local_node(&new_local).unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let collision = ops.iter().find(|r| {
+        matches!(
+            r,
+            PlanResult::Conflict(Conflict {
+                kind: ConflictKind::NameCollision,
+                ..
+            })
+        )
+    });
+    assert!(
+        collision.is_some(),
+        "Should produce NameCollision for local-only node colliding with synced remote at root, got: {:?}",
+        ops
+    );
+}
