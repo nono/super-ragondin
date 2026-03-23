@@ -401,10 +401,12 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
-        engine
+        let answer = engine
             .ask(&question, cwd)
             .await
-            .map_err(|e| Error::Permanent(format!("{e:#}")))
+            .map_err(|e| Error::Permanent(format!("{e:#}")))?;
+        println!("{answer}");
+        Ok::<_, Error>(())
     })?;
 
     Ok(())

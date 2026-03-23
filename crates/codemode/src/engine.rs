@@ -98,11 +98,15 @@ impl CodeModeEngine {
 
     /// Ask a question using the code-mode LLM loop.
     ///
-    /// Runs the tool-use loop (max `MAX_ITERATIONS` iterations), then prints the final answer.
+    /// Runs the tool-use loop (max `MAX_ITERATIONS` iterations), then returns the final answer.
     ///
     /// # Errors
     /// Returns error if the `OpenRouter` API call fails or the iteration limit is reached.
-    pub async fn ask(&self, question: &str, context_dir: Option<std::path::PathBuf>) -> Result<()> {
+    pub async fn ask(
+        &self,
+        question: &str,
+        context_dir: Option<std::path::PathBuf>,
+    ) -> Result<String> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -182,8 +186,7 @@ impl CodeModeEngine {
                     }));
                 }
             } else if let Some(text) = extract_text(&response) {
-                println!("{text}");
-                return Ok(());
+                return Ok(text);
             } else {
                 anyhow::bail!("Unexpected response format from OpenRouter");
             }
@@ -195,7 +198,7 @@ impl CodeModeEngine {
             }
         }
 
-        Ok(())
+        unreachable!()
     }
 
     /// Build the optional context message to prepend before the user question.
