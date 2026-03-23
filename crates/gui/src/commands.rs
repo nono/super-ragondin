@@ -239,6 +239,40 @@ pub fn get_app_state() -> AppState {
 #[derive(Default)]
 pub struct SyncGuard(pub Mutex<bool>);
 
+/// Testable core of `get_recent_files`: opens the store, stats each file, returns top 10.
+pub fn get_recent_files_from(
+    store_dir: &std::path::Path,
+    sync_dir: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    use super_ragondin_sync::model::NodeType;
+
+    let store = TreeStore::open(store_dir).map_err(|e| e.to_string())?;
+    let synced = store.list_all_synced().map_err(|e| e.to_string())?;
+
+    let mut entries: Vec<(std::time::SystemTime, String)> = synced
+        .into_iter()
+        .filter(|r| r.node_type == NodeType::File)
+        .filter_map(|r| {
+            let abs = sync_dir.join(&r.rel_path);
+            // Silently skip files that no longer exist on disk
+            let mtime = std::fs::metadata(&abs).ok()?.modified().ok()?;
+            Some((mtime, r.rel_path))
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(entries.into_iter().take(10).map(|(_, p)| p).collect())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_recent_files() -> Result<Vec<String>, String> {
+    let config = Config::load(&config_path())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No config".to_string())?;
+    get_recent_files_from(&config.store_dir(), &config.sync_dir)
+}
+
 /// Build the tauri-specta builder — shared by `main()` and the export test.
 pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
@@ -247,6 +281,7 @@ pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
             init_config,
             start_auth,
             start_sync,
+            get_recent_files,
         ])
         .events(tauri_specta::collect_events![
             AuthCompleteEvent,
@@ -553,6 +588,62 @@ mod tests {
             Image::from_bytes(TRAY_SYNCING_BYTES).is_ok(),
             "tray-syncing.png must be a valid image"
         );
+    }
+
+    #[test]
+    fn get_recent_files_returns_top_files_by_mtime() {
+        use super_ragondin_sync::model::{LocalFileId, NodeType, RemoteId, SyncedRecord};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("store");
+        let sync_dir = dir.path().join("sync");
+        std::fs::create_dir_all(&sync_dir).unwrap();
+
+        // Write two files to disk with a small mtime gap
+        let file_a = sync_dir.join("a.txt");
+        let file_b = sync_dir.join("b.txt");
+        std::fs::write(&file_a, "a").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&file_b, "b").unwrap();
+
+        // Insert matching SyncedRecords into the store
+        let store = TreeStore::open(&store_dir).unwrap();
+        let record_a = SyncedRecord {
+            local_id: LocalFileId::new(1, 1),
+            remote_id: RemoteId::new("ra"),
+            rel_path: "a.txt".to_string(),
+            md5sum: None,
+            size: None,
+            rev: "1-a".to_string(),
+            node_type: NodeType::File,
+            local_name: None,
+            local_parent_id: None,
+            remote_name: None,
+            remote_parent_id: None,
+        };
+        let record_b = SyncedRecord {
+            local_id: LocalFileId::new(1, 2),
+            remote_id: RemoteId::new("rb"),
+            rel_path: "b.txt".to_string(),
+            md5sum: None,
+            size: None,
+            rev: "1-b".to_string(),
+            node_type: NodeType::File,
+            local_name: None,
+            local_parent_id: None,
+            remote_name: None,
+            remote_parent_id: None,
+        };
+        store.insert_synced(&record_a).unwrap();
+        store.insert_synced(&record_b).unwrap();
+
+        let result = get_recent_files_from(&store_dir, &sync_dir);
+        assert!(result.is_ok());
+        let files = result.unwrap();
+        assert_eq!(files.len(), 2);
+        // b.txt was written later so it must appear first
+        assert_eq!(files[0], "b.txt");
+        assert_eq!(files[1], "a.txt");
     }
 
     #[test]
