@@ -8202,6 +8202,8 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
+ "super-ragondin-codemode",
+ "super-ragondin-rag",
  "super-ragondin-sync",
  "tauri",
  "tauri-build",
