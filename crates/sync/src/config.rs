@@ -12,6 +12,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub oauth_client: Option<OAuthClient>,
     pub last_seq: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Config {
@@ -92,6 +94,7 @@ mod tests {
                 refresh_token: Some("refresh".to_string()),
             }),
             last_seq: None,
+            api_key: None,
         }
     }
 
@@ -105,6 +108,30 @@ mod tests {
 
         let perms = fs::metadata(&path).unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn api_key_round_trips_through_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut config = test_config();
+        config.api_key = Some("sk-test-key".to_string());
+        config.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.api_key, Some("sk-test-key".to_string()));
+    }
+
+    #[test]
+    fn old_config_without_api_key_loads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Write a JSON object that has no api_key field (simulates existing config)
+        std::fs::write(
+            &path,
+            r#"{"instance_url":"https://x.mycozy.cloud","sync_dir":"/tmp/sync","data_dir":"/tmp/data","oauth_client":null,"last_seq":null}"#,
+        ).unwrap();
+        let loaded = Config::load(&path).unwrap().unwrap();
+        assert_eq!(loaded.api_key, None);
     }
 
     #[test]

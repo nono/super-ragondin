@@ -209,6 +209,7 @@ pub fn init_config_to(
         data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
     fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
     fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
@@ -436,6 +437,7 @@ mod tests {
             data_dir: PathBuf::from("/tmp/data"),
             oauth_client: None,
             last_seq: None,
+            api_key: None,
         }
     }
 

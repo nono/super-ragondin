@@ -70,6 +70,7 @@ fn cmd_init(args: &[String]) -> Result<()> {
         data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
+        api_key: None,
     };
 
     fs::create_dir_all(&sync_dir)?;
