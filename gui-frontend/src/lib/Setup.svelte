@@ -9,6 +9,7 @@
 
   let instanceUrl: string = $state('')
   let syncDir: string = $state('')
+  let apiKey: string = $state('')
   let error: string | null = $state(null)
   let submitting: boolean = $state(false)
 
@@ -16,7 +17,7 @@
     submitting = true
     error = null
     try {
-      const result = await commands.initConfig(instanceUrl, syncDir)
+      const result = await commands.initConfig(instanceUrl, syncDir, apiKey || null)
       if (result.status === 'error') {
         error = result.error
       } else {
@@ -51,6 +52,14 @@
         required
       />
     </label>
+    <label>
+      OpenRouter API key
+      <input
+        type="password"
+        bind:value={apiKey}
+        placeholder="sk-or-…"
+      />
+    </label>
     {#if error}
       <p class="error">{error}</p>
     {/if}
@@ -62,13 +71,14 @@
 
 <style>
   .container {
-    width: 360px;
+    width: 380px;
     padding: 24px;
   }
   h1 {
     font-size: 18px;
     margin-bottom: 20px;
     text-align: center;
+    color: #333;
   }
   form {
     display: flex;
@@ -80,25 +90,25 @@
     flex-direction: column;
     gap: 4px;
     font-size: 12px;
-    color: #aaa;
+    color: #666;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   input {
-    background: #2a2a2a;
-    border: 1px solid #444;
+    background: #fff;
+    border: 1px solid #ccc;
     border-radius: 4px;
     padding: 8px 10px;
-    color: #e0e0e0;
+    color: #333;
     font-size: 14px;
   }
   input:focus {
     outline: none;
-    border-color: #4fc;
+    border-color: #2f80ed;
   }
   button {
-    background: #4fc;
-    color: #111;
+    background: #2f80ed;
+    color: #fff;
     border: none;
     border-radius: 4px;
     padding: 10px;
@@ -112,7 +122,7 @@
     cursor: not-allowed;
   }
   .error {
-    color: #f66;
+    color: #d32f2f;
     font-size: 13px;
   }
 </style>
