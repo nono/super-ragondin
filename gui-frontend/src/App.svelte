@@ -4,7 +4,7 @@
   import type { AppState } from './bindings'
   import Setup from './lib/Setup.svelte'
   import Auth from './lib/Auth.svelte'
-  import Syncing from './lib/Syncing.svelte'
+  import MainLayout from './lib/MainLayout.svelte'
 
   let appState: AppState | null = $state(null)
   let authError: string | null = $state(null)
@@ -42,7 +42,7 @@
   {:else if appState === 'Unauthenticated'}
     <Auth bind:error={authError} />
   {:else if appState === 'Ready'}
-    <Syncing />
+    <MainLayout />
   {/if}
 </main>
 
@@ -55,8 +55,8 @@
   :global(body) {
     font-family: system-ui, sans-serif;
     font-size: 14px;
-    background: #1a1a1a;
-    color: #e0e0e0;
+    background: #f5f5f0;
+    color: #333;
   }
   main {
     height: 100vh;
