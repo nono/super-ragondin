@@ -134,12 +134,9 @@ impl<'a> Planner<'a> {
             // silently skipped every cycle and any subsequent remote moves
             // referencing this dir would diverge from the local tree.
             if synced.is_none() && local.is_none() {
-                let local_parent_id = match remote.parent_id.as_ref() {
-                    None => None,
-                    Some(parent_rid) => {
-                        synced_by_remote.get(parent_rid).map(|s| s.local_id.clone())
-                    }
-                };
+                let local_parent_id = remote.parent_id.as_ref().and_then(|parent_rid| {
+                    synced_by_remote.get(parent_rid).map(|s| s.local_id.clone())
+                });
                 // Only check when the parent is already synced (or root). If the
                 // parent hasn't been synced yet, plan_remote_only will defer anyway.
                 let parent_ready = remote.parent_id.is_none() || local_parent_id.is_some();
