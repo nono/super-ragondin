@@ -204,12 +204,18 @@ pub fn init_config_to(
         .unwrap_or_else(|| PathBuf::from("."))
         .join("super-ragondin");
 
+    // Preserve OAuth credentials and sync position if the instance URL hasn't changed.
+    let existing = Config::load(config_path).map_err(|e| e.to_string())?;
+    let (oauth_client, last_seq) = existing
+        .filter(|c| c.instance_url == instance_url)
+        .map_or((None, None), |c| (c.oauth_client, c.last_seq));
+
     let config = Config {
         instance_url,
         sync_dir: sync_dir.clone(),
         data_dir: data_dir.clone(),
-        oauth_client: None,
-        last_seq: None,
+        oauth_client,
+        last_seq,
         api_key,
     };
     fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
@@ -253,7 +259,13 @@ pub fn get_recent_files_from(
         .into_iter()
         .filter(|r| r.node_type == NodeType::File)
         .filter_map(|r| {
+            // Validate path doesn't escape sync_dir (path traversal protection)
             let abs = sync_dir.join(&r.rel_path);
+            let canonical_sync = sync_dir.canonicalize().ok()?;
+            let canonical_abs = abs.canonicalize().ok()?;
+            if !canonical_abs.starts_with(&canonical_sync) {
+                return None;
+            }
             // Silently skip files that no longer exist on disk
             let mtime = std::fs::metadata(&abs).ok()?.modified().ok()?;
             Some((mtime, r.rel_path))
@@ -574,6 +586,22 @@ mod tests {
         }
     }
 
+    fn saved_config_with_oauth(dir: &tempfile::TempDir) -> (PathBuf, PathBuf) {
+        let sync_dir = dir.path().join("sync");
+        let config_path = dir.path().join("config.json");
+        Config {
+            instance_url: "https://alice.mycozy.cloud".to_string(),
+            sync_dir: sync_dir.clone(),
+            data_dir: dir.path().to_path_buf(),
+            oauth_client: Some(oauth_with_token()),
+            last_seq: Some("42-abc".to_string()),
+            api_key: None,
+        }
+        .save(&config_path)
+        .unwrap();
+        (sync_dir, config_path)
+    }
+
     #[test]
     fn init_config_creates_dirs_and_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -594,6 +622,43 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.instance_url, instance_url);
         assert!(loaded.oauth_client.is_none());
+    }
+
+    #[test]
+    fn init_config_to_preserves_oauth_when_instance_url_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sync_dir, config_path) = saved_config_with_oauth(&dir);
+
+        let result = init_config_to(
+            "https://alice.mycozy.cloud".to_string(),
+            sync_dir.to_str().unwrap().to_string(),
+            Some("sk-new-key".to_string()),
+            &config_path,
+        );
+        assert!(result.is_ok());
+
+        let loaded = Config::load(&config_path).unwrap().unwrap();
+        assert_eq!(loaded.api_key, Some("sk-new-key".to_string()));
+        assert!(loaded.oauth_client.is_some());
+        assert_eq!(loaded.last_seq, Some("42-abc".to_string()));
+    }
+
+    #[test]
+    fn init_config_to_clears_oauth_when_instance_url_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sync_dir, config_path) = saved_config_with_oauth(&dir);
+
+        let result = init_config_to(
+            "https://bob.mycozy.cloud".to_string(),
+            sync_dir.to_str().unwrap().to_string(),
+            None,
+            &config_path,
+        );
+        assert!(result.is_ok());
+
+        let loaded = Config::load(&config_path).unwrap().unwrap();
+        assert!(loaded.oauth_client.is_none());
+        assert!(loaded.last_seq.is_none());
     }
 
     #[test]
@@ -733,8 +798,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ask_question_no_api_key_returns_error() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn ask_question_no_api_key_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
         let config_path = dir.path().join("config.json");
         let config = super_ragondin_sync::config::Config {
             instance_url: "https://x.mycozy.cloud".to_string(),
@@ -744,15 +809,16 @@ mod tests {
             last_seq: None,
             api_key: None,
         };
-        config.save(&config_path).unwrap();
+        config.save(&config_path)?;
 
         let result = ask_question_from("What is in my files?", &config_path).await;
         assert_eq!(result, Err("NoApiKey".to_string()));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn get_suggestions_no_api_key_returns_error() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn get_suggestions_no_api_key_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
         let config_path = dir.path().join("config.json");
         // Save a config with no api_key
         let config = super_ragondin_sync::config::Config {
@@ -763,10 +829,11 @@ mod tests {
             last_seq: None,
             api_key: None,
         };
-        config.save(&config_path).unwrap();
+        config.save(&config_path)?;
 
         let result = get_suggestions_from(&config_path).await;
         assert_eq!(result, Err("NoApiKey".to_string()));
+        Ok(())
     }
 
     #[tokio::test]

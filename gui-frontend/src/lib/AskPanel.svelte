@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { marked } from 'marked'
   import { commands } from '../bindings'
 
   type PanelState = 'loading' | 'no-api-key' | 'idle' | 'asking' | 'done' | 'error'
@@ -45,6 +46,12 @@
       errorMessage = result.error
       state = 'error'
     }
+  }
+
+  function friendlyError(err: string): string {
+    if (err === 'NoApiKey') return 'No OpenRouter API key configured. Add it in the setup screen.'
+    if (err === 'NoFilesIndexed') return 'No files indexed yet — waiting for first sync.'
+    return 'Something went wrong. Please try again.'
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -95,11 +102,11 @@
 
     {:else if state === 'done'}
       <div class="message user">{lastQuestion}</div>
-      <div class="message assistant">{answer}</div>
+      <div class="message assistant markdown">{@html marked(answer)}</div>
 
     {:else if state === 'error'}
       <div class="message user">{lastQuestion}</div>
-      <div class="message error-msg">{errorMessage}</div>
+      <div class="message error-msg">{friendlyError(errorMessage)}</div>
     {/if}
   </div>
 
@@ -207,6 +214,33 @@
     align-self: flex-start;
     max-width: 95%;
   }
+  .message.markdown :global(p) { margin: 0 0 8px; }
+  .message.markdown :global(p:last-child) { margin-bottom: 0; }
+  .message.markdown :global(h1),
+  .message.markdown :global(h2),
+  .message.markdown :global(h3) { font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+  .message.markdown :global(ul),
+  .message.markdown :global(ol) { margin: 4px 0 8px; padding-left: 20px; }
+  .message.markdown :global(li) { margin-bottom: 2px; }
+  .message.markdown :global(code) {
+    background: #e8e8e3;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 11px;
+    font-family: monospace;
+  }
+  .message.markdown :global(pre) {
+    background: #e8e8e3;
+    border-radius: 4px;
+    padding: 8px 10px;
+    overflow-x: auto;
+    margin: 6px 0;
+  }
+  .message.markdown :global(pre code) { background: none; padding: 0; }
+  .message.markdown :global(strong) { font-weight: 700; }
+  .message.markdown :global(em) { font-style: italic; }
+  .message.markdown :global(a) { color: #2f80ed; text-decoration: underline; }
+
   .message.error-msg {
     background: #fff0f0;
     color: #c62828;
