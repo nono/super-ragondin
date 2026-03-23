@@ -48,6 +48,9 @@ pub enum Error {
         "Sync directory appears empty but {synced_count} files are known — aborting to prevent data loss (possible unmounted drive)"
     )]
     EmptySyncDir { synced_count: usize },
+
+    #[error("Invalid sync directory: {0}")]
+    InvalidSyncDir(String),
 }
 
 impl Error {

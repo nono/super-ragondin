@@ -60,6 +60,8 @@ fn cmd_init(args: &[String]) -> Result<()> {
     let instance_url = &args[0];
     let sync_dir = PathBuf::from(&args[1]);
 
+    Config::validate_sync_dir(&sync_dir)?;
+
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("super-ragondin");

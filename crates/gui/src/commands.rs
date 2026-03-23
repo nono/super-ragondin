@@ -200,6 +200,9 @@ pub fn init_config_to(
     config_path: &std::path::Path,
 ) -> Result<(), String> {
     let sync_dir = PathBuf::from(sync_dir);
+
+    Config::validate_sync_dir(&sync_dir).map_err(|e| e.to_string())?;
+
     let data_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("super-ragondin");

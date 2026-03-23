@@ -27,6 +27,7 @@ ignore = "0.4.25"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { workspace = true }
 super-ragondin-cozy-client = { version = "0.1.0", path = "../cozy-client" }
+dirs = "6.0.0"
 
 [dev-dependencies]
 proptest = "1"
