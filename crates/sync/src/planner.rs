@@ -69,6 +69,13 @@ impl<'a> Planner<'a> {
             .map(|r| ((r.parent_id.clone(), r.name.clone()), r))
             .collect();
 
+        // Build a lookup from (parent_local_id, name) → local node, used to
+        // detect remote-only nodes that collide with already-synced local nodes.
+        let local_by_parent_name: HashMap<(Option<LocalFileId>, String), &LocalNode> = local_nodes
+            .iter()
+            .map(|l| ((l.parent_id.clone(), l.name.clone()), l))
+            .collect();
+
         for remote in &remote_nodes {
             let rel_path = self.compute_remote_rel_path(remote);
             let rel_str = rel_path.to_string_lossy();
@@ -119,6 +126,61 @@ impl<'a> Planner<'a> {
             let synced = synced_by_remote.get(&remote.id);
             let local = synced.and_then(|s| local_by_id.get(&s.local_id));
 
+            // Check if a remote-only node's destination path is occupied by an
+            // already-synced local node. This happens when a new remote entry is
+            // created at a path already taken by a different synced local entity
+            // (e.g. a new remote dir at root/"foo" while a synced file "foo" is
+            // there). Without this check, CreateLocalDir/DownloadNew would be
+            // silently skipped every cycle and any subsequent remote moves
+            // referencing this dir would diverge from the local tree.
+            if synced.is_none() && local.is_none() {
+                let local_parent_id = match remote.parent_id.as_ref() {
+                    None => None,
+                    Some(parent_rid) => {
+                        synced_by_remote.get(parent_rid).map(|s| s.local_id.clone())
+                    }
+                };
+                // Only check when the parent is already synced (or root). If the
+                // parent hasn't been synced yet, plan_remote_only will defer anyway.
+                let parent_ready = remote.parent_id.is_none() || local_parent_id.is_some();
+                if parent_ready
+                    && let Some(occupying) =
+                        local_by_parent_name.get(&(local_parent_id, remote.name.clone()))
+                    && let Some(occ_synced) = synced_by_local.get(&occupying.id)
+                    // Only flag when the occupying synced remote node still
+                    // exists. If it was deleted, the synced record is orphaned
+                    // and will be cleaned up by LocalModifyRemoteDelete /
+                    // DeleteSynced — no collision to report here.
+                    && remote_by_id.contains_key(&occ_synced.remote_id)
+                    // Only flag when the occupying local node is still at its
+                    // recorded location. If it has been moved, it no longer
+                    // occupies this path and no conflict should be raised.
+                    && occupying.parent_id == occ_synced.local_parent_id
+                    && occ_synced
+                        .local_name
+                        .as_deref()
+                        .is_some_and(|n| n == occupying.name)
+                {
+                    let local_path = self.compute_local_path_from_local(occupying);
+                    tracing::debug!(
+                        name = &remote.name,
+                        remote_id = remote.id.as_str(),
+                        "⚠️ Remote-only node conflicts with already-synced local node at same path"
+                    );
+                    results.push(PlanResult::Conflict(Conflict {
+                        local_id: Some(occupying.id.clone()),
+                        remote_id: Some(remote.id.clone()),
+                        local_path: Some(local_path),
+                        reason: format!(
+                            "Remote-only {:?} {:?} conflicts with already-synced local node at same path",
+                            remote.node_type, remote.name
+                        ),
+                        kind: ConflictKind::NameCollision,
+                    }));
+                    continue;
+                }
+            }
+
             results.extend(self.plan_remote_node(remote, local.copied(), synced.copied()));
         }
 
@@ -144,8 +206,13 @@ impl<'a> Planner<'a> {
             // would silently fail at execution time, so detect it here and emit
             // a NameCollision conflict so the local node gets a conflict rename.
             let parent_remote_id = self.find_parent_remote_id(local.parent_id.as_ref());
-            if let Some(conflicting_remote) =
-                remote_by_parent_name.get(&(parent_remote_id, local.name.clone()))
+            // Skip when the local parent has no synced record: find_parent_remote_id
+            // returns None both for root-level nodes (correct to check) and for
+            // nodes whose parent is not yet synced (wrong to check — they would be
+            // matched against root-level remote nodes, causing false positives).
+            if (local.parent_id.is_none() || parent_remote_id.is_some())
+                && let Some(conflicting_remote) =
+                    remote_by_parent_name.get(&(parent_remote_id, local.name.clone()))
                 && let Some(conflicting_synced) = synced_by_remote.get(&conflicting_remote.id)
                 && conflicting_synced.local_id != local.id
                 && let Some(conflicting_local) = local_by_id.get(&conflicting_synced.local_id)
