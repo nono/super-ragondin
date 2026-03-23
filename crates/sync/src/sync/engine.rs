@@ -183,15 +183,27 @@ impl SyncEngine {
         let mut all_results = Vec::new();
         let (non_delete, delete) = Self::partition_results(results);
 
-        // Phase 1: execute non-delete ops and resolve conflicts
-        for result in &non_delete {
-            match result {
-                PlanResult::Op(sync_op) => self.execute_op(sync_op)?,
-                PlanResult::Conflict(conflict) => self.resolve_conflict(conflict)?,
-                PlanResult::NoOp => {}
+        // Phase 1: resolve conflicts first, then re-plan and execute non-delete ops
+        let conflicts = Self::extract_conflicts(&non_delete);
+
+        let phase1_results = if conflicts.is_empty() {
+            non_delete
+        } else {
+            for conflict in &conflicts {
+                self.resolve_conflict(conflict)?;
+            }
+            self.initial_scan()?;
+            let replanned = self.plan()?;
+            let (replanned_non_delete, _) = Self::partition_results(replanned);
+            replanned_non_delete
+        };
+
+        for result in &phase1_results {
+            if let PlanResult::Op(sync_op) = result {
+                self.execute_op(sync_op)?;
             }
         }
-        all_results.extend(non_delete);
+        all_results.extend(phase1_results);
 
         // Phase 2: re-plan before deletes so that moves/creates executed in
         // phase 1 are taken into account (e.g. a file moved out of a directory
@@ -200,14 +212,24 @@ impl SyncEngine {
             self.initial_scan()?;
             let fresh = self.plan()?;
 
-            for result in &fresh {
-                match result {
-                    PlanResult::Op(sync_op) => self.execute_op(sync_op)?,
-                    PlanResult::Conflict(conflict) => self.resolve_conflict(conflict)?,
-                    PlanResult::NoOp => {}
+            let fresh_conflicts = Self::extract_conflicts(&fresh);
+
+            let phase2_results = if fresh_conflicts.is_empty() {
+                fresh
+            } else {
+                for conflict in &fresh_conflicts {
+                    self.resolve_conflict(conflict)?;
+                }
+                self.initial_scan()?;
+                self.plan()?
+            };
+
+            for result in &phase2_results {
+                if let PlanResult::Op(sync_op) = result {
+                    self.execute_op(sync_op)?;
                 }
             }
-            all_results.extend(fresh);
+            all_results.extend(phase2_results);
         }
 
         tracing::info!("🔄 Sync cycle complete");
@@ -333,16 +355,7 @@ impl SyncEngine {
         let mut all_results = Vec::new();
 
         // Resolve conflicts first, then re-plan
-        let conflicts: Vec<_> = results
-            .iter()
-            .filter_map(|r| {
-                if let PlanResult::Conflict(c) = r {
-                    Some(c.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let conflicts = Self::extract_conflicts(&results);
 
         let plan_results = if conflicts.is_empty() {
             results
@@ -356,13 +369,7 @@ impl SyncEngine {
         let (non_delete, delete) = Self::partition_results(plan_results);
 
         // Phase 1: execute non-delete ops
-        let non_delete_ops: Vec<SyncOp> = non_delete
-            .iter()
-            .filter_map(|r| match r {
-                PlanResult::Op(op) => Some(op.clone()),
-                _ => None,
-            })
-            .collect();
+        let non_delete_ops = Self::extract_ops(&non_delete);
         self.execute_ops_async(client, &non_delete_ops).await?;
         all_results.extend(non_delete);
 
@@ -371,21 +378,30 @@ impl SyncEngine {
             self.initial_scan()?;
             let fresh = self.plan()?;
 
-            let fresh_ops: Vec<SyncOp> = fresh
-                .iter()
-                .filter_map(|r| match r {
-                    PlanResult::Op(op) => Some(op.clone()),
-                    _ => None,
-                })
-                .collect();
-            self.execute_ops_async(client, &fresh_ops).await?;
+            let fresh_conflicts = Self::extract_conflicts(&fresh);
 
-            for result in &fresh {
-                if let PlanResult::Conflict(conflict) = result {
+            let phase2_results = if fresh_conflicts.is_empty() {
+                fresh
+            } else {
+                for conflict in &fresh_conflicts {
                     self.resolve_conflict_async(client, conflict).await?;
                 }
+                self.initial_scan()?;
+                self.plan()?
+            };
+
+            for result in &phase2_results {
+                match result {
+                    PlanResult::Op(op) => {
+                        self.execute_op_async(client, op).await?;
+                    }
+                    PlanResult::Conflict(conflict) => {
+                        self.resolve_conflict_async(client, conflict).await?;
+                    }
+                    PlanResult::NoOp => {}
+                }
             }
-            all_results.extend(fresh);
+            all_results.extend(phase2_results);
         }
 
         tracing::info!("🔄 Async sync cycle complete");
@@ -1214,6 +1230,26 @@ impl SyncEngine {
             PlanResult::Op(op) => !op.is_delete(),
             _ => true,
         })
+    }
+
+    fn extract_conflicts(results: &[PlanResult]) -> Vec<Conflict> {
+        results
+            .iter()
+            .filter_map(|r| match r {
+                PlanResult::Conflict(c) => Some(c.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn extract_ops(results: &[PlanResult]) -> Vec<SyncOp> {
+        results
+            .iter()
+            .filter_map(|r| match r {
+                PlanResult::Op(op) => Some(op.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     // ==================== Helpers ====================
