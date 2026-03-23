@@ -54,6 +54,37 @@ impl Config {
         Ok(())
     }
 
+    /// Validate that the sync directory is not a system root or the home
+    /// directory (or a parent of it). Syncing such paths would be dangerous.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSyncDir` if the path is the filesystem root, the user's
+    /// home directory, or a parent of it.
+    pub fn validate_sync_dir(sync_dir: &Path) -> Result<()> {
+        use crate::error::Error;
+
+        // Reject filesystem root
+        if sync_dir == Path::new("/") {
+            return Err(Error::InvalidSyncDir(
+                "cannot synchronize the system root (/)".to_string(),
+            ));
+        }
+
+        // Reject the home directory or any of its ancestors
+        if let Some(home) = dirs::home_dir() {
+            let sync_with_sep = format!("{}/", sync_dir.display());
+            let home_with_sep = format!("{}/", home.display());
+            if home_with_sep.starts_with(&sync_with_sep) {
+                return Err(Error::InvalidSyncDir(
+                    "cannot synchronize the home directory or one of its parents".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     #[must_use]
     pub fn staging_dir(&self) -> PathBuf {
         self.data_dir.join("staging")
@@ -132,6 +163,48 @@ mod tests {
         ).unwrap();
         let loaded = Config::load(&path).unwrap().unwrap();
         assert_eq!(loaded.api_key, None);
+    }
+
+    #[test]
+    fn validate_sync_dir_rejects_root() {
+        let result = Config::validate_sync_dir(Path::new("/"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("system root"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn validate_sync_dir_rejects_home() {
+        let home = dirs::home_dir().unwrap();
+        let result = Config::validate_sync_dir(&home);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("home directory"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn validate_sync_dir_rejects_parent_of_home() {
+        let home = dirs::home_dir().unwrap();
+        if let Some(parent) = home.parent() {
+            if parent != Path::new("/") {
+                let result = Config::validate_sync_dir(parent);
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn validate_sync_dir_accepts_subdir_of_home() {
+        let home = dirs::home_dir().unwrap();
+        let sync_dir = home.join("Cozy Drive");
+        let result = Config::validate_sync_dir(&sync_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_sync_dir_accepts_path_outside_home() {
+        let result = Config::validate_sync_dir(Path::new("/data/cozy"));
+        assert!(result.is_ok());
     }
 
     #[test]
