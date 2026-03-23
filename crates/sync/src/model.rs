@@ -288,6 +288,15 @@ impl SyncOp {
                 | Self::UploadUpdate { .. }
         )
     }
+
+    /// Returns true for delete operations (local, remote, or synced record).
+    #[must_use]
+    pub const fn is_delete(&self) -> bool {
+        matches!(
+            self,
+            Self::DeleteLocal { .. } | Self::DeleteRemote { .. } | Self::DeleteSynced { .. }
+        )
+    }
 }
 
 /// A conflict detected during planning that requires resolution
@@ -685,5 +694,49 @@ mod tests {
             expected_rev: "1-x".to_string(),
         };
         assert!(!delete.is_transfer());
+    }
+
+    #[test]
+    fn sync_op_is_delete() {
+        let delete_local = SyncOp::DeleteLocal {
+            local_id: LocalFileId::new(1, 1),
+            local_path: PathBuf::from("/tmp/f"),
+            expected_md5: None,
+        };
+        assert!(delete_local.is_delete());
+
+        let delete_remote = SyncOp::DeleteRemote {
+            remote_id: RemoteId::new("r1"),
+            expected_rev: "1-x".to_string(),
+        };
+        assert!(delete_remote.is_delete());
+
+        let delete_synced = SyncOp::DeleteSynced {
+            local_id: LocalFileId::new(1, 1),
+        };
+        assert!(delete_synced.is_delete());
+
+        let create_dir = SyncOp::CreateLocalDir {
+            remote_id: RemoteId::new("d1"),
+            local_path: PathBuf::from("/tmp/d"),
+        };
+        assert!(!create_dir.is_delete());
+
+        let download = SyncOp::DownloadNew {
+            remote_id: RemoteId::new("r1"),
+            local_path: PathBuf::from("/tmp/f"),
+            expected_rev: "1-x".to_string(),
+            expected_md5: "abc".to_string(),
+        };
+        assert!(!download.is_delete());
+
+        let move_local = SyncOp::MoveLocal {
+            local_id: LocalFileId::new(1, 1),
+            from_path: PathBuf::from("/tmp/a"),
+            to_path: PathBuf::from("/tmp/b"),
+            expected_parent_id: None,
+            expected_name: "b".to_string(),
+        };
+        assert!(!move_local.is_delete());
     }
 }

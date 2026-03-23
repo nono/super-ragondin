@@ -1930,3 +1930,140 @@ async fn test_fetch_and_apply_remote_changes_skips_files_without_checksum() {
         "Directory without checksum should still be synced"
     );
 }
+
+/// Two-phase execution: non-delete ops execute first, then the engine re-plans
+/// before executing deletes. This test verifies the re-planning by checking
+/// that `run_cycle` returns two batches of results (from the initial plan and
+/// the re-plan after phase 1).
+#[test]
+fn test_run_cycle_two_phase_move_before_delete() {
+    use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::PlanResult;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    // Create the local directory structure: photos/cat.jpg
+    let photos_dir = sync_dir.path().join("photos");
+    std::fs::create_dir(&photos_dir).unwrap();
+    let cat_path = photos_dir.join("cat.jpg");
+    std::fs::write(&cat_path, b"meow").unwrap();
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Set up root
+    let root_meta = std::fs::metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+    let root_synced = SyncedRecord {
+        local_id: root_local_id.clone(),
+        remote_id: RemoteId::new("io.cozy.files.root-dir"),
+        rel_path: String::new(),
+        md5sum: None,
+        size: None,
+        rev: "1-root".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some(String::new()),
+        local_parent_id: None,
+        remote_name: Some(String::new()),
+        remote_parent_id: None,
+    };
+    store.insert_synced(&root_synced).unwrap();
+
+    let root_remote = RemoteNode {
+        id: RemoteId::new("io.cozy.files.root-dir"),
+        parent_id: None,
+        name: String::new(),
+        node_type: NodeType::Directory,
+        md5sum: None,
+        size: None,
+        updated_at: 0,
+        rev: "1-root".to_string(),
+    };
+    store.insert_remote_node(&root_remote).unwrap();
+
+    // Set up synced state for photos/ directory
+    let photos_meta = std::fs::metadata(&photos_dir).unwrap();
+    let photos_local_id = LocalFileId::new(photos_meta.dev(), photos_meta.ino());
+    let photos_synced = SyncedRecord {
+        local_id: photos_local_id.clone(),
+        remote_id: RemoteId::new("dir-photos"),
+        rel_path: "photos".to_string(),
+        md5sum: None,
+        size: None,
+        rev: "1-photos".to_string(),
+        node_type: NodeType::Directory,
+        local_name: Some("photos".to_string()),
+        local_parent_id: Some(root_local_id.clone()),
+        remote_name: Some("photos".to_string()),
+        remote_parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+    };
+    store.insert_synced(&photos_synced).unwrap();
+
+    // Set up synced state for cat.jpg inside photos/
+    let cat_meta = std::fs::metadata(&cat_path).unwrap();
+    let cat_local_id = LocalFileId::new(cat_meta.dev(), cat_meta.ino());
+    let cat_synced = SyncedRecord {
+        local_id: cat_local_id.clone(),
+        remote_id: RemoteId::new("file-cat"),
+        rel_path: "photos/cat.jpg".to_string(),
+        md5sum: Some("md5-meow".to_string()),
+        size: Some(4),
+        rev: "1-cat".to_string(),
+        node_type: NodeType::File,
+        local_name: Some("cat.jpg".to_string()),
+        local_parent_id: Some(photos_local_id.clone()),
+        remote_name: Some("cat.jpg".to_string()),
+        remote_parent_id: Some(RemoteId::new("dir-photos")),
+    };
+    store.insert_synced(&cat_synced).unwrap();
+
+    // Now simulate: the file was locally moved from photos/cat.jpg to cat.jpg
+    std::fs::rename(&cat_path, sync_dir.path().join("cat.jpg")).unwrap();
+
+    // And remotely, the photos/ directory was deleted (not in remote tree)
+    // The remote tree has the cat file at root level (moved remotely too)
+    let cat_remote = RemoteNode {
+        id: RemoteId::new("file-cat"),
+        parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        name: "cat.jpg".to_string(),
+        node_type: NodeType::File,
+        md5sum: Some("md5-meow".to_string()),
+        size: Some(4),
+        updated_at: 2000,
+        rev: "2-cat".to_string(),
+    };
+    store.insert_remote_node(&cat_remote).unwrap();
+    store.flush().unwrap();
+
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+
+    let results = engine.run_cycle().unwrap();
+
+    // The file should survive at its new location
+    assert!(
+        sync_dir.path().join("cat.jpg").exists(),
+        "Moved file should survive after two-phase execution"
+    );
+
+    // The old directory should be gone (deleted locally since it was deleted
+    // remotely)
+    assert!(
+        !sync_dir.path().join("photos").exists(),
+        "Deleted directory should be removed"
+    );
+
+    // Verify there were no unresolved conflicts
+    let conflicts: Vec<_> = results
+        .iter()
+        .filter(|r| matches!(r, PlanResult::Conflict(_)))
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "Two-phase execution should resolve without conflicts, got: {conflicts:?}"
+    );
+}

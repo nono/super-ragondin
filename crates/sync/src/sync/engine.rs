@@ -159,6 +159,11 @@ impl SyncEngine {
 
     /// Run a full sync cycle: scan, plan, and execute all operations.
     ///
+    /// Execution uses two phases to prevent cascade deletions from orphaning
+    /// files that were moved out of a directory being deleted:
+    ///   Phase 1: execute creates, moves, downloads, uploads (non-delete ops)
+    ///   Phase 2: re-plan, then execute all remaining ops including deletes
+    ///
     /// Returns the plan results for inspection/logging.
     ///
     /// # Errors
@@ -175,20 +180,38 @@ impl SyncEngine {
             .count();
         tracing::info!(operations = op_count, "📋 Planned operations");
 
-        for result in &results {
+        let mut all_results = Vec::new();
+        let (non_delete, delete) = Self::partition_results(results);
+
+        // Phase 1: execute non-delete ops and resolve conflicts
+        for result in &non_delete {
             match result {
-                PlanResult::Op(sync_op) => {
-                    self.execute_op(sync_op)?;
-                }
-                PlanResult::Conflict(conflict) => {
-                    self.resolve_conflict(conflict)?;
-                }
+                PlanResult::Op(sync_op) => self.execute_op(sync_op)?,
+                PlanResult::Conflict(conflict) => self.resolve_conflict(conflict)?,
                 PlanResult::NoOp => {}
             }
         }
+        all_results.extend(non_delete);
+
+        // Phase 2: re-plan before deletes so that moves/creates executed in
+        // phase 1 are taken into account (e.g. a file moved out of a directory
+        // that is about to be deleted).
+        if !delete.is_empty() {
+            self.initial_scan()?;
+            let fresh = self.plan()?;
+
+            for result in &fresh {
+                match result {
+                    PlanResult::Op(sync_op) => self.execute_op(sync_op)?,
+                    PlanResult::Conflict(conflict) => self.resolve_conflict(conflict)?,
+                    PlanResult::NoOp => {}
+                }
+            }
+            all_results.extend(fresh);
+        }
 
         tracing::info!("🔄 Sync cycle complete");
-        Ok(results)
+        Ok(all_results)
     }
 
     /// Fetch remote changes and apply them to the remote tree.
@@ -288,12 +311,15 @@ impl SyncEngine {
 
     /// Run a full sync cycle with async network support: scan, plan, and execute all operations.
     ///
+    /// Execution uses two phases to prevent cascade deletions from orphaning
+    /// files that were moved out of a directory being deleted:
+    ///   Phase 1: execute creates, moves, downloads, uploads (non-delete ops)
+    ///   Phase 2: re-plan, then execute all remaining ops including deletes
+    ///
     /// # Errors
     ///
     /// Returns an error if scanning, planning, or execution fails.
     pub async fn run_cycle_async(&mut self, client: &CozyClient) -> Result<Vec<PlanResult>> {
-        use futures::stream::{self, StreamExt as _};
-
         tracing::info!("🔄 Starting async sync cycle");
         self.initial_scan()?;
 
@@ -304,8 +330,10 @@ impl SyncEngine {
             .count();
         tracing::info!(operations = op_count, "📋 Planned operations");
 
-        let mut plan_results = results;
-        let conflicts: Vec<_> = plan_results
+        let mut all_results = Vec::new();
+
+        // Resolve conflicts first, then re-plan
+        let conflicts: Vec<_> = results
             .iter()
             .filter_map(|r| {
                 if let PlanResult::Conflict(c) = r {
@@ -316,21 +344,57 @@ impl SyncEngine {
             })
             .collect();
 
-        if !conflicts.is_empty() {
-            for conflict in conflicts {
-                self.resolve_conflict_async(client, &conflict).await?;
+        let plan_results = if conflicts.is_empty() {
+            results
+        } else {
+            for conflict in &conflicts {
+                self.resolve_conflict_async(client, conflict).await?;
             }
-            // Re-plan after resolving conflicts to ensure the operation list is not stale.
-            plan_results = self.plan()?;
-        }
+            self.plan()?
+        };
 
-        let ops: Vec<SyncOp> = plan_results
+        let (non_delete, delete) = Self::partition_results(plan_results);
+
+        // Phase 1: execute non-delete ops
+        let non_delete_ops: Vec<SyncOp> = non_delete
             .iter()
             .filter_map(|r| match r {
                 PlanResult::Op(op) => Some(op.clone()),
                 _ => None,
             })
             .collect();
+        self.execute_ops_async(client, &non_delete_ops).await?;
+        all_results.extend(non_delete);
+
+        // Phase 2: re-plan before deletes
+        if !delete.is_empty() {
+            self.initial_scan()?;
+            let fresh = self.plan()?;
+
+            let fresh_ops: Vec<SyncOp> = fresh
+                .iter()
+                .filter_map(|r| match r {
+                    PlanResult::Op(op) => Some(op.clone()),
+                    _ => None,
+                })
+                .collect();
+            self.execute_ops_async(client, &fresh_ops).await?;
+
+            for result in &fresh {
+                if let PlanResult::Conflict(conflict) = result {
+                    self.resolve_conflict_async(client, conflict).await?;
+                }
+            }
+            all_results.extend(fresh);
+        }
+
+        tracing::info!("🔄 Async sync cycle complete");
+        Ok(all_results)
+    }
+
+    /// Execute a batch of sync operations, running transfers concurrently.
+    async fn execute_ops_async(&self, client: &CozyClient, ops: &[SyncOp]) -> Result<()> {
+        use futures::stream::{self, StreamExt as _};
 
         let mut i = 0;
         while i < ops.len() {
@@ -339,7 +403,7 @@ impl SyncEngine {
                 while i < ops.len() && ops[i].is_transfer() {
                     i += 1;
                 }
-                let engine_ref = &*self;
+                let engine_ref = self;
                 let mut stream = stream::iter(ops[start..i].iter())
                     .map(|op| engine_ref.execute_op_async(client, op))
                     .buffer_unordered(2);
@@ -351,9 +415,7 @@ impl SyncEngine {
                 i += 1;
             }
         }
-
-        tracing::info!("🔄 Async sync cycle complete");
-        Ok(plan_results)
+        Ok(())
     }
 
     /// Execute a single sync operation, using the client for network ops.
@@ -1139,6 +1201,19 @@ impl SyncEngine {
         }
 
         Ok(())
+    }
+
+    // ==================== Two-phase helpers ====================
+
+    /// Partition plan results into (non-delete, delete) groups.
+    ///
+    /// Delete operations (`DeleteLocal`, `DeleteRemote`, `DeleteSynced`) are
+    /// separated so they can be deferred until after a re-plan.
+    fn partition_results(results: Vec<PlanResult>) -> (Vec<PlanResult>, Vec<PlanResult>) {
+        results.into_iter().partition(|r| match r {
+            PlanResult::Op(op) => !op.is_delete(),
+            _ => true,
+        })
     }
 
     // ==================== Helpers ====================
