@@ -273,6 +273,44 @@ pub fn get_recent_files() -> Result<Vec<String>, String> {
     get_recent_files_from(&config.store_dir(), &config.sync_dir)
 }
 
+/// Testable core: loads config from `config_path`, runs `SuggestionEngine`.
+pub async fn get_suggestions_from(config_path: &std::path::Path) -> Result<Vec<String>, String> {
+    use super_ragondin_codemode::suggestions::{NoFilesIndexed, SuggestionEngine};
+    use super_ragondin_rag::config::RagConfig;
+
+    let config = Config::load(config_path)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No config".to_string())?;
+
+    let api_key = config
+        .api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "NoApiKey".to_string())?
+        .to_string();
+
+    let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
+    rag_config.api_key = api_key;
+
+    let engine = SuggestionEngine::new(rag_config, config.sync_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    engine.generate(None).await.map_err(|e| {
+        if e.downcast_ref::<NoFilesIndexed>().is_some() {
+            "NoFilesIndexed".to_string()
+        } else {
+            e.to_string()
+        }
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_suggestions() -> Result<Vec<String>, String> {
+    get_suggestions_from(&config_path()).await
+}
+
 /// Build the tauri-specta builder — shared by `main()` and the export test.
 pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
@@ -282,6 +320,7 @@ pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
             start_auth,
             start_sync,
             get_recent_files,
+            get_suggestions,
         ])
         .events(tauri_specta::collect_events![
             AuthCompleteEvent,
@@ -655,5 +694,43 @@ mod tests {
                 "../../gui-frontend/src/bindings.ts",
             )
             .expect("Failed to export bindings");
+    }
+
+    #[tokio::test]
+    async fn get_suggestions_no_api_key_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        // Save a config with no api_key
+        let config = super_ragondin_sync::config::Config {
+            instance_url: "https://x.mycozy.cloud".to_string(),
+            sync_dir: dir.path().join("sync"),
+            data_dir: dir.path().to_path_buf(),
+            oauth_client: None,
+            last_seq: None,
+            api_key: None,
+        };
+        config.save(&config_path).unwrap();
+
+        let result = get_suggestions_from(&config_path).await;
+        assert_eq!(result, Err("NoApiKey".to_string()));
+    }
+
+    #[tokio::test]
+    async fn get_suggestions_no_files_indexed_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let config = super_ragondin_sync::config::Config {
+            instance_url: "https://x.mycozy.cloud".to_string(),
+            sync_dir: dir.path().join("sync"),
+            data_dir: dir.path().to_path_buf(),
+            oauth_client: None,
+            last_seq: None,
+            api_key: Some("sk-test".to_string()),
+        };
+        std::fs::create_dir_all(config.rag_dir()).unwrap();
+        config.save(&config_path).unwrap();
+
+        let result = get_suggestions_from(&config_path).await;
+        assert_eq!(result, Err("NoFilesIndexed".to_string()));
     }
 }
