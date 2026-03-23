@@ -2231,3 +2231,178 @@ fn test_local_only_node_collides_with_synced_remote_at_root() {
         ops
     );
 }
+
+#[test]
+fn test_local_only_node_in_unsynced_parent_not_false_collision_with_root_remote() {
+    // A local-only node whose parent has no synced record should NOT be falsely
+    // flagged as colliding with a root-level remote node of the same name.
+    // find_parent_remote_id returns None both for root-level nodes and for nodes
+    // whose parent is not yet synced; the collision check must distinguish them.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // A remote file at root (parent_id = None), already synced.
+    let synced_lid = local_id(1, 50);
+    let synced_rid = remote_id("f_synced_root");
+    let synced_file = make_synced_with_location(
+        synced_lid.clone(),
+        synced_rid.clone(),
+        "notes.txt",
+        Some("root_hash"),
+        NodeType::File,
+        "notes.txt",
+        None,
+        "notes.txt",
+        None,
+    );
+    store.insert_synced(&synced_file).unwrap();
+    store
+        .insert_remote_node(&make_remote_file(
+            synced_rid.clone(),
+            None,
+            "notes.txt",
+            "root_hash",
+        ))
+        .unwrap();
+    store
+        .insert_local_node(&make_local_file(
+            synced_lid.clone(),
+            None,
+            "notes.txt",
+            "root_hash",
+        ))
+        .unwrap();
+
+    // A local-only directory "subdir" at root (no synced record).
+    let subdir_lid = local_id(1, 100);
+    store
+        .insert_local_node(&make_local_dir(subdir_lid.clone(), None, "subdir"))
+        .unwrap();
+
+    // A local-only file "notes.txt" INSIDE the unsynced "subdir".
+    // Its name matches the root-level synced remote file, but it lives in a
+    // different (unsynced) parent — no collision should be emitted.
+    let inner_lid = local_id(1, 200);
+    store
+        .insert_local_node(&make_local_file(
+            inner_lid.clone(),
+            Some(subdir_lid.clone()),
+            "notes.txt",
+            "inner_hash",
+        ))
+        .unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let collision = ops.iter().find(|r| {
+        if let PlanResult::Conflict(Conflict {
+            kind: ConflictKind::NameCollision,
+            local_id: Some(lid),
+            ..
+        }) = r
+        {
+            lid == &inner_lid
+        } else {
+            false
+        }
+    });
+    assert!(
+        collision.is_none(),
+        "Should NOT produce NameCollision for local-only node inside an unsynced parent, got: {ops:?}"
+    );
+}
+
+#[test]
+fn test_remote_only_dir_conflicting_with_synced_file_emits_name_collision() {
+    // A new remote-only directory created at a path already occupied by a
+    // different synced local file should emit a NameCollision conflict.
+    // Without this, CreateLocalDir is silently skipped every cycle, leaving
+    // any subsequent remote moves permanently un-applyable locally.
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+
+    // Set up root dir (synced on all three sides)
+    let root_lid = local_id(1, 1);
+    let root_rid = remote_id("root");
+    store
+        .insert_synced(&make_synced_with_location(
+            root_lid.clone(),
+            root_rid.clone(),
+            "",
+            None,
+            NodeType::Directory,
+            "",
+            None,
+            "",
+            None,
+        ))
+        .unwrap();
+    store
+        .insert_local_node(&make_local_dir(root_lid.clone(), None, ""))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_dir(root_rid.clone(), None, ""))
+        .unwrap();
+
+    // A synced file "résumé.doc" at root
+    let file_lid = local_id(1, 10);
+    let file_rid = remote_id("r_resume_file");
+    store
+        .insert_synced(&make_synced_with_location(
+            file_lid.clone(),
+            file_rid.clone(),
+            "résumé.doc",
+            Some("abc123"),
+            NodeType::File,
+            "résumé.doc",
+            Some(root_lid.clone()),
+            "résumé.doc",
+            Some(root_rid.clone()),
+        ))
+        .unwrap();
+    store
+        .insert_local_node(&make_local_file(
+            file_lid.clone(),
+            Some(root_lid.clone()),
+            "résumé.doc",
+            "abc123",
+        ))
+        .unwrap();
+    store
+        .insert_remote_node(&make_remote_file(
+            file_rid.clone(),
+            Some(root_rid.clone()),
+            "résumé.doc",
+            "abc123",
+        ))
+        .unwrap();
+
+    // A new remote-only dir "résumé.doc" at root — conflicts with the synced file!
+    let new_dir_rid = remote_id("r_new_resume_dir");
+    store
+        .insert_remote_node(&make_remote_dir(
+            new_dir_rid.clone(),
+            Some(root_rid.clone()),
+            "résumé.doc",
+        ))
+        .unwrap();
+
+    let rules = IgnoreRules::none();
+    let planner = Planner::new(&store, PathBuf::from("/sync"), &rules);
+    let ops = planner.plan().unwrap();
+
+    let collision = ops.iter().find(|r| {
+        matches!(r, PlanResult::Conflict(Conflict {
+            kind: ConflictKind::NameCollision,
+            local_id: Some(lid),
+            remote_id: Some(rid),
+            ..
+        }) if lid == &file_lid && rid == &new_dir_rid)
+    });
+    assert!(
+        collision.is_some(),
+        "Should produce NameCollision for synced file vs new remote-only dir at same path, got: {ops:?}"
+    );
+}
