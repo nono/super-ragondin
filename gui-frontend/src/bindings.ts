@@ -8,9 +8,9 @@ export const commands = {
 async getAppState() : Promise<AppState> {
     return await TAURI_INVOKE("get_app_state");
 },
-async initConfig(instanceUrl: string, syncDir: string) : Promise<Result<null, string>> {
+async initConfig(instanceUrl: string, syncDir: string, apiKey: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("init_config", { instanceUrl, syncDir }) };
+    return { status: "ok", data: await TAURI_INVOKE("init_config", { instanceUrl, syncDir, apiKey }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
