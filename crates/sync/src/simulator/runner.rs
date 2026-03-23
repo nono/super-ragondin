@@ -1106,13 +1106,7 @@ impl SimulationRunner {
     fn partition_ops(
         ops: Vec<crate::model::SyncOp>,
     ) -> (Vec<crate::model::SyncOp>, Vec<crate::model::SyncOp>) {
-        ops.into_iter().partition(|op| {
-            !matches!(
-                op,
-                crate::model::SyncOp::DeleteLocal { .. }
-                    | crate::model::SyncOp::DeleteRemote { .. }
-            )
-        })
+        ops.into_iter().partition(|op| !op.is_delete())
     }
 
     fn execute_op(&mut self, op: crate::model::SyncOp) -> Result<(), String> {
