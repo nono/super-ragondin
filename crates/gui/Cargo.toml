@@ -22,6 +22,8 @@ urlencoding = "2.1.3"
 specta-typescript = "0.0.9"
 tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
 specta = "=2.0.0-rc.22"
+super-ragondin-rag = { version = "0.1.0", path = "../rag" }
+super-ragondin-codemode = { version = "0.1.0", path = "../codemode" }
 
 [dev-dependencies]
 tempfile = "3"
