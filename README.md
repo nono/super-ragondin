@@ -141,6 +141,15 @@ cargo test -q                 # Run tests
 cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 ```
 
+To run GUI end-to-end tests (requires `tauri-driver`, `WebKitWebDriver`, and `xvfb`):
+
+```bash
+cargo install tauri-driver --locked
+sudo apt install webkit2gtk-driver xvfb
+cargo build -p super-ragondin-gui --no-default-features
+xvfb-run cargo test -p gui-e2e -- --ignored
+```
+
 To run 100 simulation tests:
 
 ```bash

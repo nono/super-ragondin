@@ -12,8 +12,11 @@ use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
+#[cfg(feature = "tray")]
 pub static TRAY_ID: &str = "main-tray";
+#[cfg(feature = "tray")]
 pub static TRAY_IDLE_BYTES: &[u8] = include_bytes!("../icons/tray-idle.png");
+#[cfg(feature = "tray")]
 pub static TRAY_SYNCING_BYTES: &[u8] = include_bytes!("../icons/tray-syncing.png");
 
 /// Emitted when OAuth completes successfully.
@@ -462,6 +465,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
         }
     };
     rt.block_on(async {
+        #[cfg(feature = "tray")]
         let update_tray_icon = |state: &SyncState| {
             let bytes = match state {
                 SyncState::Syncing => TRAY_SYNCING_BYTES,
@@ -476,6 +480,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
 
         let mut last_sync: Option<String> = None;
         loop {
+            #[cfg(feature = "tray")]
             update_tray_icon(&SyncState::Syncing);
             let _ = SyncStatusEvent {
                 status: SyncState::Syncing,
@@ -491,6 +496,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
                 }
             };
 
+            #[cfg(feature = "tray")]
             update_tray_icon(&SyncState::Idle);
             let _ = SyncStatusEvent {
                 status: SyncState::Idle,
@@ -731,6 +737,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "tray")]
     fn tray_icon_bytes_are_valid_images() {
         use tauri::image::Image;
         assert!(

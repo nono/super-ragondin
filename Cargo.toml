@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sync", "crates/rag", "crates/cli", "crates/codemode", "crates/cozy-client", "crates/gui"]
+members = ["crates/sync", "crates/rag", "crates/cli", "crates/codemode", "crates/cozy-client", "crates/gui", "crates/gui-e2e"]
 resolver = "3"
 
 [workspace.lints.rust]
