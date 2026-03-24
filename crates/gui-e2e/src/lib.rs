@@ -127,9 +127,6 @@ pub fn compare_or_create_baseline(
     }
 
     if std::env::var("UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
-        if let Some(parent) = reference.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
         std::fs::copy(screenshot, reference).map_err(|e| e.to_string())?;
         let diff = diff_image_path(screenshot);
         if diff.exists() {
@@ -189,6 +186,12 @@ pub fn compare_or_create_baseline(
             "pixel diff {diff_pct:.2}% exceeds threshold {threshold_pct:.1}% — see {}",
             diff_path.display()
         ));
+    }
+
+    // Clean up any stale diff image from a previous failing run
+    let diff = diff_image_path(screenshot);
+    if diff.exists() {
+        std::fs::remove_file(&diff).ok();
     }
 
     Ok(())
