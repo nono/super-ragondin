@@ -7,8 +7,12 @@ description = "Super Ragondin desktop application"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = ["tray"]
+tray = ["tauri/tray-icon", "tauri/image-png"]
+
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

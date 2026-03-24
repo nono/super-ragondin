@@ -19,7 +19,9 @@ cargo build                   # Build the project
 cargo fmt --all               # Format the code
 cargo test -q                 # Run tests
 cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
-cargo test --test integration_tests -- --ignored  # Run integration tests (requires cozy-stack serve)
+cargo test --test integration_tests -- --ignored                              # Run integration tests (requires cozy-stack serve)
+cargo build -p super-ragondin-gui --no-default-features                      # Build GUI binary for E2E tests (no tray icon)
+xvfb-run cargo test -p gui-e2e -- --ignored                                  # Run GUI E2E tests (requires tauri-driver + WebKitWebDriver + xvfb)
 ```
 
 ### Environment Variables
@@ -95,6 +97,9 @@ Cargo workspace with crates and a Svelte frontend:
   - `src/tools/path_utils.rs` - `check_relative_path()` — shared path traversal validation used by `save_file` and `generate_image`
   - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
   - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
+- `crates/gui-e2e/` (`gui-e2e`) - GUI end-to-end tests via WebDriver
+  - `src/lib.rs` - Helpers: `start_tauri_driver()`, `connect_driver()`, `save_screenshot()`
+  - `tests/setup_screen.rs` - Setup screen rendering test with screenshot
 
 ## Findings
 
@@ -108,6 +113,7 @@ Cargo workspace with crates and a Svelte frontend:
 - Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
 - Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt install` before building `crates/gui`
 - Tauri v2 custom commands registered via `invoke_handler` are covered by `core:default` in capabilities — no per-command capability entries needed
+- Tauri v2 E2E tests on Linux use `tauri-driver` + `WebKitWebDriver` (package `webkit2gtk-driver`) with `thirtyfour` as the Rust WebDriver client
 
 ## RAG Environment Variables
 
