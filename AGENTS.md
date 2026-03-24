@@ -22,6 +22,7 @@ cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 cargo test --test integration_tests -- --ignored                              # Run integration tests (requires cozy-stack serve)
 cargo build -p super-ragondin-gui --no-default-features                      # Build GUI binary for E2E tests (no tray icon)
 xvfb-run cargo test -p gui-e2e -- --ignored                                  # Run GUI E2E tests (requires tauri-driver + WebKitWebDriver + xvfb)
+UPDATE_SNAPSHOTS=1 xvfb-run cargo test -p gui-e2e -- --ignored               # Update visual regression baselines
 ```
 
 ### Environment Variables
@@ -29,6 +30,7 @@ xvfb-run cargo test -p gui-e2e -- --ignored                                  # R
 | Variable | Default | Description |
 |---|---|---|
 | `PROPTEST_CASES` | `50` | Number of cases for proptest-based simulator tests (set to `500` in CI via `.github/workflows/ci.yml`) |
+| `UPDATE_SNAPSHOTS` | unset | Set to `1` to overwrite visual regression baselines instead of comparing |
 
 ### Cozy-stack
 

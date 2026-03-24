@@ -55,4 +55,6 @@ Tests are `#[ignore]` so they don't run during regular `cargo test`.
 5. Assert: 3 input fields present (URL, sync dir, API key)
 6. Assert: "Connect to Cozy →" button present
 7. Take screenshot → `screenshots/setup_screen.png`
-8. Quit driver, kill `tauri-driver`
+8. Compare screenshot against committed baseline in `references/setup_screen.png` (1% pixel-diff tolerance)
+   - If `UPDATE_SNAPSHOTS=1` is set, overwrite the baseline instead of comparing
+8a. Quit driver, kill `tauri-driver`
