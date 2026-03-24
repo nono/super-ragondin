@@ -207,39 +207,80 @@ impl<'a> Planner<'a> {
             // returns None both for root-level nodes (correct to check) and for
             // nodes whose parent is not yet synced (wrong to check — they would be
             // matched against root-level remote nodes, causing false positives).
-            if (local.parent_id.is_none() || parent_remote_id.is_some())
-                && let Some(conflicting_remote) =
-                    remote_by_parent_name.get(&(parent_remote_id, local.name.clone()))
-                && let Some(conflicting_synced) = synced_by_remote.get(&conflicting_remote.id)
-                && conflicting_synced.local_id != local.id
-                && let Some(conflicting_local) = local_by_id.get(&conflicting_synced.local_id)
-                // Only flag a collision when the synced local counterpart is still at
-                // its recorded location. If it was moved away, the planner will emit a
-                // MoveRemote for the remote node, and this local node can be uploaded
-                // once that move lands — no rename needed.
-                && conflicting_local.parent_id == conflicting_synced.local_parent_id
-                && conflicting_synced
-                    .local_name
-                    .as_deref()
-                    .is_some_and(|n| n == conflicting_local.name)
-            {
-                let local_path = self.compute_local_path_from_local(local);
-                tracing::debug!(
-                    name = &local.name,
-                    remote_id = conflicting_remote.id.as_str(),
-                    "⚠️ Local-only node conflicts with already-synced remote node at same path"
-                );
-                results.push(PlanResult::Conflict(Conflict {
-                    local_id: Some(local.id.clone()),
-                    remote_id: Some(conflicting_remote.id.clone()),
-                    local_path: Some(local_path),
-                    reason: format!(
-                        "Local-only {:?} \"{}\" conflicts with already-synced remote node",
-                        local.node_type, local.name
-                    ),
-                    kind: ConflictKind::NameCollision,
-                }));
-                continue;
+            let parent_ready = local.parent_id.is_none() || parent_remote_id.is_some();
+            let same_path_remote = if parent_ready {
+                remote_by_parent_name
+                    .get(&(parent_remote_id.clone(), local.name.clone()))
+                    .copied()
+            } else {
+                None
+            };
+            if let Some(conflicting_remote) = same_path_remote {
+                let conflicting_synced = synced_by_remote.get(&conflicting_remote.id);
+                if let Some(conflicting_synced) = conflicting_synced
+                    && conflicting_synced.local_id != local.id
+                    && let Some(conflicting_local) =
+                        local_by_id.get(&conflicting_synced.local_id)
+                    // Only flag a collision when the synced local counterpart is still at
+                    // its recorded location. If it was moved away, the planner will emit a
+                    // MoveRemote for the remote node, and this local node can be uploaded
+                    // once that move lands — no rename needed.
+                    && conflicting_local.parent_id == conflicting_synced.local_parent_id
+                    && conflicting_synced
+                        .local_name
+                        .as_deref()
+                        .is_some_and(|n| n == conflicting_local.name)
+                {
+                    let local_path = self.compute_local_path_from_local(local);
+                    tracing::debug!(
+                        name = &local.name,
+                        remote_id = conflicting_remote.id.as_str(),
+                        "⚠️ Local-only node conflicts with already-synced remote node at same path"
+                    );
+                    results.push(PlanResult::Conflict(Conflict {
+                        local_id: Some(local.id.clone()),
+                        remote_id: Some(conflicting_remote.id.clone()),
+                        local_path: Some(local_path),
+                        reason: format!(
+                            "Local-only {:?} \"{}\" conflicts with already-synced remote node",
+                            local.node_type, local.name
+                        ),
+                        kind: ConflictKind::NameCollision,
+                    }));
+                    continue;
+                }
+
+                // Detect deadlock between a local-only and a remote-only node sharing
+                // the same (parent, name). Neither can proceed: the local upload is
+                // blocked by the remote node occupying the name, and the remote download
+                // is blocked by the local node.  Treat it as a NameCollision so the
+                // local side is renamed and the remote side can be downloaded cleanly.
+                //
+                // Exception: when the local and remote nodes have identical content
+                // (same type and, for files, same checksum/size), this is a "bind" case
+                // where both sides independently created the same thing — let the
+                // remote loop handle it via plan_created_both_sides.
+                if conflicting_synced.is_none()
+                    && !Self::remote_equals_local(conflicting_remote, local)
+                {
+                    let local_path = self.compute_local_path_from_local(local);
+                    tracing::debug!(
+                        name = &local.name,
+                        remote_id = conflicting_remote.id.as_str(),
+                        "⚠️ Local-only node conflicts with remote-only node at same path (deadlock)"
+                    );
+                    results.push(PlanResult::Conflict(Conflict {
+                        local_id: Some(local.id.clone()),
+                        remote_id: Some(conflicting_remote.id.clone()),
+                        local_path: Some(local_path),
+                        reason: format!(
+                            "Local-only {:?} \"{}\" conflicts with remote-only node at same path",
+                            local.node_type, local.name
+                        ),
+                        kind: ConflictKind::NameCollision,
+                    }));
+                    continue;
+                }
             }
 
             results.extend(self.plan_local_only(local));
