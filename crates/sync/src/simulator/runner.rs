@@ -822,14 +822,13 @@ impl SimulationRunner {
                     continue;
                 }
 
-                // If the node's parent no longer exists in remote.nodes, the node
-                // is orphaned (e.g., moved under a parent that was already deleted).
-                // Treat it as deleted to trigger a DeleteLocal for the local counterpart.
-                if node
-                    .parent_id
-                    .as_ref()
-                    .is_some_and(|p| self.remote.get_node(p).is_none())
-                {
+                // If the node's ancestor chain does not reach root (e.g. the
+                // parent was deleted, or the chain forms a cycle), treat it
+                // as a remote deletion so the planner can clean up the local
+                // counterpart.  Using the full reachability check (rather
+                // than just the immediate parent) also handles the case where
+                // an intermediate ancestor is missing from MockRemote.
+                if node.parent_id.is_some() && !self.remote_node_reachable(&node) {
                     self.delete_remote_tree_from_store(&node.id)?;
                     continue;
                 }
@@ -837,6 +836,13 @@ impl SimulationRunner {
                 self.store
                     .insert_remote_node(&node)
                     .map_err(|e| e.to_string())?;
+
+                // Re-populate any descendants that may have been evicted from
+                // the store when this node was previously treated as unreachable
+                // (e.g., temporarily in a cycle). Those descendants don't get
+                // their own change records when their ancestor is restored, so
+                // we proactively sync MockRemote's subtree into the store.
+                self.ensure_subtree_in_store(&node.id)?;
 
                 if node.parent_id.is_none() && !self.remote_to_local.contains_key(&node.id) {
                     self.bind_root_directory(&node)?;
@@ -1060,10 +1066,24 @@ impl SimulationRunner {
                     if conflict.kind == crate::model::ConflictKind::ParentMissing
                         && conflict.remote_id.is_none() =>
                 {
-                    // Local-only file whose parent directory no longer has a synced
-                    // record (ancestor was deleted on remote). Delete locally to converge.
+                    // Local-only node whose parent has no synced record.  This
+                    // happens either because the parent was deleted on remote, or
+                    // because the parent is itself local-only and not yet uploaded
+                    // (e.g. after a conflict-rename in the same planning pass).
+                    //
+                    // Only delete when the parent no longer exists in the local FS
+                    // (ancestor truly gone). If the parent is still present locally
+                    // it will be uploaded in a subsequent cycle, and this node will
+                    // be uploadable once the parent's synced record exists.
                     if let Some(ref local_id) = conflict.local_id {
-                        self.execute_delete_local(local_id)?;
+                        let parent_gone = self
+                            .local_fs
+                            .get_node(local_id)
+                            .and_then(|n| n.parent_id.as_ref())
+                            .is_none_or(|pid| !self.local_fs.exists(pid));
+                        if parent_gone {
+                            self.execute_delete_local(local_id)?;
+                        }
                     }
                 }
                 _ => {}
@@ -1830,6 +1850,34 @@ impl SimulationRunner {
             }
         }
         true
+    }
+
+    /// Ensure that all reachable descendants of `root_id` in `MockRemote` are
+    /// also present in the store's remote table.
+    ///
+    /// This is called after a node is (re-)inserted into the store to handle
+    /// the case where the node was previously evicted (together with its
+    /// subtree) because it was temporarily unreachable (e.g., inside a cycle).
+    /// Those descendants have no new change records, so they would otherwise
+    /// never be re-added to the store.
+    fn ensure_subtree_in_store(&mut self, root_id: &RemoteId) -> Result<(), String> {
+        let children: Vec<RemoteNode> = self
+            .remote
+            .nodes
+            .values()
+            .filter(|n| n.parent_id.as_ref() == Some(root_id))
+            .cloned()
+            .collect();
+        for child in children {
+            if self.is_under_trash(&child) {
+                continue;
+            }
+            self.store
+                .insert_remote_node(&child)
+                .map_err(|e| e.to_string())?;
+            self.ensure_subtree_in_store(&child.id)?;
+        }
+        Ok(())
     }
 
     /// Check invariant: after sync, local and remote should have same files
