@@ -79,6 +79,121 @@ pub fn screenshots_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("screenshots")
 }
 
+/// Returns the references directory for this crate (committed baseline PNGs).
+#[must_use]
+pub fn references_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("references")
+}
+
+/// Derives the diff image path from a screenshot path by inserting `.diff` before the extension.
+/// E.g. `screenshots/setup_screen.png` → `screenshots/setup_screen.diff.png`.
+fn diff_image_path(screenshot: &Path) -> PathBuf {
+    let stem = screenshot.file_stem().unwrap_or_default().to_string_lossy();
+    let diff_name = format!("{stem}.diff.png");
+    screenshot.with_file_name(diff_name)
+}
+
+/// Compares a screenshot against a committed baseline PNG using fuzzy pixel comparison.
+///
+/// # Behaviour
+///
+/// - If the reference does not exist: copies the screenshot to the reference path (creating
+///   parent directories) and returns `Err` asking the developer to review and commit it.
+/// - If `UPDATE_SNAPSHOTS=1`: overwrites the reference, deletes any stale diff image, prints
+///   a notice to stderr, and returns `Ok(())`. "Reference does not exist" takes precedence:
+///   if the reference is missing, the create-baseline path runs instead.
+/// - Otherwise: loads both images (as RGB, alpha ignored), checks dimensions match, counts
+///   pixels where the max RGB channel delta exceeds 8/255, and fails with a diff percentage
+///   and a saved diff image if `diff_pct > threshold_pct`.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on baseline creation, visual regression, or I/O failure.
+pub fn compare_or_create_baseline(
+    screenshot: &Path,
+    reference: &Path,
+    threshold_pct: f64,
+) -> Result<(), String> {
+    // "reference does not exist" takes precedence over UPDATE_SNAPSHOTS
+    if !reference.exists() {
+        if let Some(parent) = reference.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(screenshot, reference).map_err(|e| e.to_string())?;
+        return Err(format!(
+            "Baseline created at {} — review and commit it, then re-run",
+            reference.display()
+        ));
+    }
+
+    if std::env::var("UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+        if let Some(parent) = reference.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(screenshot, reference).map_err(|e| e.to_string())?;
+        let diff = diff_image_path(screenshot);
+        if diff.exists() {
+            std::fs::remove_file(&diff).ok();
+        }
+        eprintln!("[gui-e2e] baseline updated: {}", reference.display());
+        return Ok(());
+    }
+
+    let ref_img = image::open(reference)
+        .map_err(|e| format!("failed to open reference {}: {e}", reference.display()))?
+        .into_rgb8();
+    let new_img = image::open(screenshot)
+        .map_err(|e| format!("failed to open screenshot {}: {e}", screenshot.display()))?
+        .into_rgb8();
+
+    let (ref_w, ref_h) = ref_img.dimensions();
+    let (new_w, new_h) = new_img.dimensions();
+    if ref_w != new_w || ref_h != new_h {
+        return Err(format!(
+            "dimension mismatch: reference is {ref_w}x{ref_h}, screenshot is {new_w}x{new_h}"
+        ));
+    }
+
+    let total = u64::from(ref_w) * u64::from(ref_h);
+    let mut differing: u64 = 0;
+    let mut diff_img = image::RgbImage::new(ref_w, ref_h);
+
+    for (x, y, ref_pixel) in ref_img.enumerate_pixels() {
+        let new_pixel = new_img.get_pixel(x, y);
+        let max_delta = ref_pixel
+            .0
+            .iter()
+            .zip(new_pixel.0.iter())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+
+        if max_delta > 8 {
+            differing += 1;
+            diff_img.put_pixel(x, y, image::Rgb([255, 0, 0]));
+        } else {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let faded = image::Rgb(ref_pixel.0.map(|c| (f64::from(c) * 0.3) as u8));
+            diff_img.put_pixel(x, y, faded);
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let diff_pct = differing as f64 / total as f64 * 100.0;
+    if diff_pct > threshold_pct {
+        let diff_path = diff_image_path(screenshot);
+        diff_img
+            .save(&diff_path)
+            .map_err(|e| format!("failed to save diff image: {e}"))?;
+        return Err(format!(
+            "pixel diff {diff_pct:.2}% exceeds threshold {threshold_pct:.1}% — see {}",
+            diff_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
 /// Finds the `tauri-driver` binary, checking `~/.cargo/bin` as a fallback.
 fn find_tauri_driver() -> PathBuf {
     if let Ok(path) = which("tauri-driver") {
