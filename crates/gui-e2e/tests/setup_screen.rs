@@ -80,7 +80,7 @@ async fn setup_screen_renders_correctly() -> WebDriverResult<()> {
     compare_or_create_baseline(
         &screenshot_path,
         &references_dir().join("setup_screen.png"),
-        1.0,
+        1.0, // 1% pixel-diff tolerance
     )
     .map_err(WebDriverError::CustomError)?;
 
