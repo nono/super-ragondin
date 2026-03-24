@@ -1,5 +1,6 @@
 use gui_e2e::{
-    app_binary_path, connect_driver, save_screenshot, screenshots_dir, start_tauri_driver,
+    app_binary_path, compare_or_create_baseline, connect_driver, references_dir, save_screenshot,
+    screenshots_dir, start_tauri_driver,
 };
 use thirtyfour::prelude::*;
 
@@ -72,7 +73,16 @@ async fn setup_screen_renders_correctly() -> WebDriverResult<()> {
     save_screenshot(&driver, &screenshot_path).await?;
     assert!(screenshot_path.exists(), "Screenshot was not saved");
 
+    // Quit driver before comparison so the session closes even when comparison fails
     driver.quit().await?;
+
+    // Visual regression: compare against committed baseline
+    compare_or_create_baseline(
+        &screenshot_path,
+        &references_dir().join("setup_screen.png"),
+        1.0,
+    )
+    .map_err(WebDriverError::CustomError)?;
 
     Ok(())
 }
