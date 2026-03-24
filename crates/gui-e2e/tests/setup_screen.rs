@@ -82,7 +82,7 @@ async fn setup_screen_renders_correctly() -> WebDriverResult<()> {
         &references_dir().join("setup_screen.png"),
         1.0, // 1% pixel-diff tolerance
     )
-    .map_err(WebDriverError::CustomError)?;
+    .map_err(WebDriverError::ParseError)?;
 
     Ok(())
 }

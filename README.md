@@ -150,6 +150,13 @@ cargo build -p super-ragondin-gui --no-default-features
 xvfb-run cargo test -p gui-e2e -- --ignored
 ```
 
+To create or update visual regression baselines:
+
+```bash
+UPDATE_SNAPSHOTS=1 xvfb-run cargo test -p gui-e2e -- --ignored
+# Review crates/gui-e2e/references/*.png, then commit them
+```
+
 To run 100 simulation tests:
 
 ```bash
