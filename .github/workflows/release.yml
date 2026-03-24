@@ -14,12 +14,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Build release binary
-        run: cargo build --release --locked --bin super-ragondin
+      - uses: ./.github/actions/install-system-deps
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: gui-frontend
+      - name: Build release binaries
+        run: cargo build --release --locked --bin super-ragondin --bin super-ragondin-gui
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/super-ragondin
+          files: |
+            target/release/super-ragondin
+            target/release/super-ragondin-gui
           generate_release_notes: true
