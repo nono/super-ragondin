@@ -3445,6 +3445,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "serde_json",
+ "temp-env",
  "tempfile",
  "thirtyfour",
  "tokio",

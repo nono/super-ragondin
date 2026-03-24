@@ -99,3 +99,147 @@ fn which(name: &str) -> Result<PathBuf, ()> {
         })
         .ok_or(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    fn solid_png(path: &std::path::Path, color: Rgb<u8>, w: u32, h: u32) {
+        let mut img = RgbImage::new(w, h);
+        for p in img.pixels_mut() {
+            *p = color;
+        }
+        img.save(path).unwrap();
+    }
+
+    #[test]
+    fn no_baseline_creates_it_and_returns_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("refs/shot.png");
+        solid_png(&shot, Rgb([100, 100, 100]), 10, 10);
+
+        let result = compare_or_create_baseline(&shot, &reference, 1.0);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("Baseline created"), "got: {msg}");
+        assert!(msg.contains(reference.to_str().unwrap()), "got: {msg}");
+        assert!(reference.exists(), "reference was not created");
+    }
+
+    #[test]
+    fn identical_images_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("shot_ref.png");
+        solid_png(&shot, Rgb([80, 160, 200]), 20, 20);
+        std::fs::copy(&shot, &reference).unwrap();
+
+        assert!(compare_or_create_baseline(&shot, &reference, 1.0).is_ok());
+    }
+
+    #[test]
+    fn small_diff_below_threshold_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        // 10×10 = 100 pixels. One pixel has delta 9 (> 8) so it is counted as differing.
+        // 1 / 100 = 1.0% which equals the threshold — not above it — so the test must pass.
+        solid_png(&reference, Rgb([100, 100, 100]), 10, 10);
+        let mut img = RgbImage::new(10, 10);
+        for p in img.pixels_mut() {
+            *p = Rgb([100, 100, 100]);
+        }
+        img.put_pixel(0, 0, Rgb([109, 100, 100])); // delta 9 > 8 → counted; 1/100 = 1.0% == threshold
+        img.save(&shot).unwrap();
+
+        assert!(compare_or_create_baseline(&shot, &reference, 1.0).is_ok());
+    }
+
+    #[test]
+    fn large_diff_above_threshold_fails_and_saves_diff_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        // All pixels differ by 100 in the red channel → 100 % diff
+        solid_png(&reference, Rgb([0, 0, 0]), 10, 10);
+        solid_png(&shot, Rgb([100, 0, 0]), 10, 10);
+
+        let result = compare_or_create_baseline(&shot, &reference, 1.0);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("pixel diff"), "got: {msg}");
+        assert!(msg.contains("exceeds threshold"), "got: {msg}");
+
+        // Diff image should be saved next to the screenshot as shot.diff.png
+        let diff_path = dir.path().join("shot.diff.png");
+        assert!(diff_path.exists(), "diff image was not saved");
+    }
+
+    #[test]
+    fn dimension_mismatch_returns_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        solid_png(&shot, Rgb([0, 0, 0]), 10, 10);
+        solid_png(&reference, Rgb([0, 0, 0]), 20, 20);
+
+        let result = compare_or_create_baseline(&shot, &reference, 1.0);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("dimension mismatch"), "got: {msg}");
+    }
+
+    #[test]
+    fn update_snapshots_overwrites_reference_and_returns_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        solid_png(&shot, Rgb([200, 0, 0]), 10, 10);
+        solid_png(&reference, Rgb([0, 0, 0]), 10, 10); // existing baseline
+
+        temp_env::with_var("UPDATE_SNAPSHOTS", Some("1"), || {
+            let result = compare_or_create_baseline(&shot, &reference, 1.0);
+            assert!(result.is_ok(), "got: {:?}", result);
+        });
+
+        // Reference must now match the screenshot
+        let updated = image::open(&reference).unwrap().into_rgb8();
+        assert_eq!(updated.get_pixel(0, 0), &Rgb([200, 0, 0]));
+    }
+
+    #[test]
+    fn update_snapshots_deletes_stale_diff_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        let diff = dir.path().join("shot.diff.png");
+        solid_png(&shot, Rgb([200, 0, 0]), 10, 10);
+        solid_png(&reference, Rgb([0, 0, 0]), 10, 10);
+        solid_png(&diff, Rgb([255, 0, 0]), 10, 10); // stale diff
+
+        temp_env::with_var("UPDATE_SNAPSHOTS", Some("1"), || {
+            compare_or_create_baseline(&shot, &reference, 1.0).unwrap();
+        });
+
+        assert!(!diff.exists(), "stale diff image should have been deleted");
+    }
+
+    #[test]
+    fn update_snapshots_with_no_baseline_creates_it_and_returns_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("refs/shot.png");
+        solid_png(&shot, Rgb([50, 50, 50]), 10, 10);
+
+        temp_env::with_var("UPDATE_SNAPSHOTS", Some("1"), || {
+            let result = compare_or_create_baseline(&shot, &reference, 1.0);
+            // "reference does not exist" takes precedence over UPDATE_SNAPSHOTS
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Baseline created"));
+        });
+
+        assert!(reference.exists());
+    }
+}
