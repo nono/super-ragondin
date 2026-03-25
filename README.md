@@ -3,34 +3,11 @@
 ![Logo](docs/logo_Super_Ragondin.jpeg)
 
 This repository is a place where I can put ideas and experiments on a new
-desktop client for Cozy Cloud.
+desktop client for Cozy Cloud. Super Ragondin comes in two flavors: CLI and
+GUI. You can download it from
+[the releases on GitHub](https://github.com/nono/super-ragondin/releases).
 
 ## Usage
-
-### Prerequisites
-
-- Rust (edition 2024)
-- A [Cozy Cloud](https://cozy.io) instance
-- (Optional) `OPENROUTER_API_KEY` for RAG indexing and the `ask` command
-- (Optional) `protoc` (Protocol Buffers compiler) — required by LanceDB at build time
-- (GUI only, Linux) `sudo apt-get install pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev`
-- (GUI only) Node.js + npm — for the Svelte frontend
-
-### Build
-
-```bash
-cargo build --release
-```
-
-The CLI binary will be available at `target/release/super-ragondin`.
-
-To build and run the desktop GUI (requires Node.js and the Linux packages listed above):
-
-```bash
-cargo install tauri-cli --version "^2"
-cd crates/gui && cargo tauri dev    # development mode
-cd crates/gui && cargo tauri build  # production build
-```
 
 ### Getting started
 
@@ -116,11 +93,10 @@ There are a lot of things that are out of the scope for this proof of concept.
 This work would be needed if we want to release a new desktop client for Cozy
 users:
 
-- Support of Windows and macOS
-- GUI
-- packagingn auto-update, and auto-start
+- support of Windows and macOS
+- packaging, auto-update, and auto-start
 - logs, sentry, and a way to contact the support team
-- documentation
+- more documentation
 - use the trash of the local computer
 - managing errors like cozy blocked or moved to a new address
 - quota on the Cozy, and no more space on the local disk
@@ -129,6 +105,32 @@ users:
 - etc.
 
 ## Development
+
+### Prerequisites
+
+- Rust (edition 2024)
+- A [Cozy Cloud](https://cozy.io) instance
+- `OPENROUTER_API_KEY` for RAG indexing and the `ask` command
+- `protoc` (Protocol Buffers compiler) — required by LanceDB at build time
+- (GUI only) `sudo apt install pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev`
+- (GUI only) Node.js + npm — for the Svelte frontend
+
+### Build
+
+```bash
+cargo build --release
+```
+
+The CLI binary will be available at `target/release/super-ragondin`.
+
+To build and run the desktop GUI:
+
+```bash
+cargo install tauri-cli --version "^2"
+cd crates/gui && cargo tauri dev    # development mode
+cd crates/gui && cargo tauri build  # production build
+```
+
 
 ### Commands
 

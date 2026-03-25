@@ -107,7 +107,7 @@ Cargo workspace with crates and a Svelte frontend:
 - `infer` crate only detects MIME by magic bytes, not file extension — plain text files (`.txt`, `.md`, `.csv`) need an extension-based fallback in `detect_mime()`
 - chonkie 0.1.1 feature is `tiktoken` (not `tiktoken-rs`)
 - Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
-- Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt-get install` before building `crates/gui`
+- Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt install` before building `crates/gui`
 - Tauri v2 custom commands registered via `invoke_handler` are covered by `core:default` in capabilities — no per-command capability entries needed
 
 ## RAG Environment Variables
