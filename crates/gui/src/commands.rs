@@ -433,26 +433,15 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
     config.last_seq = Some(new_seq);
     config.save(&path)?;
 
-    // RAG reconciliation — only if API key is available (env var or config)
-    let api_key = std::env::var("OPENROUTER_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .or_else(|| config.api_key.clone().filter(|k| !k.is_empty()));
-
-    if let Some(api_key) = api_key {
-        let mut rag_config =
-            super_ragondin_rag::config::RagConfig::from_env_with_db_path(config.rag_dir());
-        rag_config.api_key = api_key;
-        let embedder = super_ragondin_rag::embedder::OpenRouterEmbedder::new(rag_config.clone());
-        let synced = engine.store().list_all_synced()?;
-        let rag_store = super_ragondin_rag::store::RagStore::open(&rag_config.db_path).await?;
-        if let Err(e) =
-            super_ragondin_rag::indexer::reconcile(&synced, &config.sync_dir, &rag_store, &embedder)
-                .await
-        {
-            tracing::warn!(error = %e, "RAG reconciliation failed (non-fatal)");
-        }
-    }
+    let api_key = super_ragondin_rag::config::RagConfig::resolve_api_key(config.api_key.as_deref());
+    let synced = engine.store().list_all_synced()?;
+    super_ragondin_rag::indexer::reconcile_if_configured(
+        api_key,
+        config.rag_dir(),
+        &synced,
+        &config.sync_dir,
+    )
+    .await;
 
     Ok(chrono::Utc::now().to_rfc3339())
 }

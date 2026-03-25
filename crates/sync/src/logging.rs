@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+
+const STDERR_LOG_FILTER: &str = "super_ragondin=info,super_ragondin_sync=info,super_ragondin_rag=info,super_ragondin_codemode=info,super_ragondin_gui=info";
+const FILE_LOG_FILTER: &str = "super_ragondin=debug,super_ragondin_sync=debug,super_ragondin_rag=debug,super_ragondin_codemode=debug,super_ragondin_gui=debug";
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -54,14 +57,11 @@ pub fn init() {
     tracing_subscriber::registry()
         .with(
             stderr_layer.with_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                    "super_ragondin=info,super_ragondin_sync=info,super_ragondin_rag=info,super_ragondin_codemode=info,super_ragondin_gui=info".into()
-                }),
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| STDERR_LOG_FILTER.into()),
             ),
         )
-        .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new(
-            "super_ragondin=debug,super_ragondin_sync=debug,super_ragondin_rag=debug,super_ragondin_codemode=debug,super_ragondin_gui=debug",
-        )))
+        .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new(FILE_LOG_FILTER)))
         .init();
 
     tracing::info!(log_dir = %dir.display(), "⚙️ Logging initialized");

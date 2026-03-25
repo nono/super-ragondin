@@ -30,6 +30,16 @@ impl std::fmt::Debug for RagConfig {
 }
 
 impl RagConfig {
+    /// Resolve an API key, preferring the `OPENROUTER_API_KEY` env var and
+    /// falling back to `config_key`. Returns `None` if both are absent or empty.
+    #[must_use]
+    pub fn resolve_api_key(config_key: Option<&str>) -> Option<String> {
+        std::env::var("OPENROUTER_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+            .or_else(|| config_key.filter(|k| !k.is_empty()).map(str::to_owned))
+    }
+
     #[must_use]
     pub fn from_env_with_db_path(db_path: PathBuf) -> Self {
         Self {
@@ -114,5 +124,59 @@ mod tests {
                 assert_eq!(config.image_model, "custom/img-model");
             },
         );
+    }
+
+    #[test]
+    fn test_resolve_api_key_from_env() {
+        temp_env::with_vars([("OPENROUTER_API_KEY", Some("env-key"))], || {
+            assert_eq!(
+                RagConfig::resolve_api_key(None),
+                Some("env-key".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_api_key_from_config_when_env_absent() {
+        temp_env::with_vars_unset(["OPENROUTER_API_KEY"], || {
+            assert_eq!(
+                RagConfig::resolve_api_key(Some("config-key")),
+                Some("config-key".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_api_key_env_takes_priority_over_config() {
+        temp_env::with_vars([("OPENROUTER_API_KEY", Some("env-key"))], || {
+            assert_eq!(
+                RagConfig::resolve_api_key(Some("config-key")),
+                Some("env-key".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_api_key_returns_none_when_both_absent() {
+        temp_env::with_vars_unset(["OPENROUTER_API_KEY"], || {
+            assert_eq!(RagConfig::resolve_api_key(None), None);
+        });
+    }
+
+    #[test]
+    fn test_resolve_api_key_ignores_empty_env_var() {
+        temp_env::with_vars([("OPENROUTER_API_KEY", Some(""))], || {
+            assert_eq!(
+                RagConfig::resolve_api_key(Some("config-key")),
+                Some("config-key".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_resolve_api_key_ignores_empty_config_key() {
+        temp_env::with_vars_unset(["OPENROUTER_API_KEY"], || {
+            assert_eq!(RagConfig::resolve_api_key(Some("")), None);
+        });
     }
 }

@@ -319,9 +319,7 @@ fn run_sync_cycle(
     config: &mut Config,
 ) -> Result<()> {
     use super_ragondin_rag::config::RagConfig;
-    use super_ragondin_rag::embedder::OpenRouterEmbedder;
-    use super_ragondin_rag::indexer::reconcile;
-    use super_ragondin_rag::store::RagStore;
+    use super_ragondin_rag::indexer::reconcile_if_configured;
 
     let last_seq =
         rt.block_on(engine.fetch_and_apply_remote_changes(client, config.last_seq.as_deref()))?;
@@ -330,26 +328,14 @@ fn run_sync_cycle(
 
     rt.block_on(engine.run_cycle_async(client))?;
 
-    // RAG reconciliation — only if API key is available (env var or config)
-    let api_key = std::env::var("OPENROUTER_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .or_else(|| config.api_key.clone().filter(|k| !k.is_empty()));
-
-    if let Some(api_key) = api_key {
-        let db_path = config.rag_dir();
-        let mut rag_config = RagConfig::from_env_with_db_path(db_path);
-        rag_config.api_key = api_key;
-        let embedder = OpenRouterEmbedder::new(rag_config.clone());
-        let synced = engine.store().list_all_synced()?;
-
-        if let Err(e) = rt.block_on(async {
-            let rag_store = RagStore::open(&rag_config.db_path).await?;
-            reconcile(&synced, &config.sync_dir, &rag_store, &embedder).await
-        }) {
-            tracing::warn!(error = %e, "RAG reconciliation failed (non-fatal)");
-        }
-    }
+    let api_key = RagConfig::resolve_api_key(config.api_key.as_deref());
+    let synced = engine.store().list_all_synced()?;
+    rt.block_on(reconcile_if_configured(
+        api_key,
+        config.rag_dir(),
+        &synced,
+        &config.sync_dir,
+    ));
 
     Ok(())
 }
@@ -362,17 +348,13 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
     let db_path = config.rag_dir();
     let mut rag_config = RagConfig::from_env_with_db_path(db_path);
-    // Use config.api_key as fallback if env var is not set
-    if rag_config.api_key.is_empty()
-        && let Some(key) = config.api_key.as_deref().filter(|k| !k.is_empty())
-    {
-        rag_config.api_key = key.to_string();
-    }
-    if rag_config.api_key.is_empty() {
-        return Err(Error::Permanent(
-            "OPENROUTER_API_KEY environment variable not set".to_string(),
-        ));
-    }
+    rag_config.api_key =
+        RagConfig::resolve_api_key(config.api_key.as_deref()).ok_or_else(|| {
+            Error::Permanent(
+                "No API key configured (set OPENROUTER_API_KEY or add api_key to config)"
+                    .to_string(),
+            )
+        })?;
     let rt = tokio::runtime::Runtime::new()?;
 
     if args.is_empty() {
