@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-rust"
       - uses: ./.github/actions/install-system-deps
       - name: Run tests
         env:
@@ -49,6 +51,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-rust"
+          save-if: false
       - uses: ./.github/actions/install-system-deps
       - name: Run clippy
         run: cargo clippy --all-features --no-deps -- -D warnings
@@ -74,10 +79,22 @@ jobs:
           path: gui-frontend/dist/
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-rust"
+          save-if: false
       - uses: ./.github/actions/install-system-deps
       - name: Install e2e system dependencies
         run: sudo apt-get install -y xvfb webkit2gtk-driver
+      - name: Cache tauri-driver
+        id: cache-tauri-driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            tauri-driver-${{ runner.os }}-
       - name: Install tauri-driver
+        if: steps.cache-tauri-driver.outputs.cache-hit != 'true'
         run: cargo install tauri-driver
       - name: Build GUI binary
         run: cargo build -p super-ragondin-gui --no-default-features --features custom-protocol
@@ -93,6 +110,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-rust"
+          save-if: false
       - uses: ./.github/actions/install-system-deps
       - uses: actions/setup-go@v5
         with:
