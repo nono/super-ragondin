@@ -20,7 +20,7 @@ async fn setup_screen_renders_correctly() -> WebDriverResult<()> {
     let app_binary = app_binary_path();
     assert!(
         app_binary.exists(),
-        "App binary not found at {path}. Run `cargo build -p super-ragondin-gui` first.",
+        "App binary not found at {path}. Run `cargo build -p super-ragondin-gui --no-default-features --features custom-protocol` first.",
         path = app_binary.display()
     );
 
@@ -30,11 +30,18 @@ async fn setup_screen_renders_correctly() -> WebDriverResult<()> {
 
     let driver = connect_driver(&app_binary).await?;
 
+    // Navigate to the Tauri app URL to ensure a clean load with Tauri's JS bridge
+    // properly injected. WebKitWebDriver may reset the page during session setup.
+    driver.goto("tauri://localhost").await.ok();
+
+    // Give Tauri time to inject its JS bridge and let Svelte render
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
     // Wait for the app to load and the Setup screen to appear
     let heading = driver
         .query(By::Css("h1"))
         .wait(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
             std::time::Duration::from_millis(500),
         )
         .first()
