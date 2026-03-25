@@ -258,6 +258,23 @@ mod tests {
     }
 
     #[test]
+    fn passing_comparison_deletes_stale_diff_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let shot = dir.path().join("shot.png");
+        let reference = dir.path().join("ref.png");
+        let diff = dir.path().join("shot.diff.png");
+        solid_png(&shot, Rgb([80, 80, 80]), 10, 10);
+        std::fs::copy(&shot, &reference).unwrap(); // identical → will pass
+        solid_png(&diff, Rgb([255, 0, 0]), 10, 10); // stale diff from previous run
+
+        assert!(compare_or_create_baseline(&shot, &reference, 1.0).is_ok());
+        assert!(
+            !diff.exists(),
+            "stale diff should be deleted on passing comparison"
+        );
+    }
+
+    #[test]
     fn small_diff_below_threshold_passes() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
