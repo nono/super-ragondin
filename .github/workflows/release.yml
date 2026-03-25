@@ -17,7 +17,9 @@ jobs:
       - uses: ./.github/actions/install-system-deps
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: gui-frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
         working-directory: gui-frontend
