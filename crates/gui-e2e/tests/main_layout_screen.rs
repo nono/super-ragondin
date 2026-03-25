@@ -14,29 +14,6 @@ impl Drop for TauriDriverGuard {
     }
 }
 
-/// Config JSON for the Ready state: fake OAuth access token + fake API key.
-///
-/// - `app_state_from_config` returns `Ready` (access_token is set).
-/// - `getSuggestions()` opens an empty LanceDB store → returns "NoFilesIndexed" →
-///   AskPanel shows idle state with "No files indexed yet" hint and the ask input.
-/// - `startSync()` fails on the first network request but handles the error gracefully.
-/// - `getRecentFiles()` returns an empty list (empty store) → SyncPanel shows "No files yet".
-const READY_CONFIG: &str = r#"{
-  "instance_url": "https://alice.mycozy.cloud",
-  "sync_dir": "/tmp/sr-e2e-sync",
-  "data_dir": "/tmp/sr-e2e-data",
-  "api_key": "fake-openrouter-key",
-  "oauth_client": {
-    "instance_url": "https://alice.mycozy.cloud",
-    "client_id": "fake-client-id",
-    "client_secret": "fake-client-secret",
-    "registration_access_token": "fake-reg-token",
-    "access_token": "fake-access-token",
-    "refresh_token": null
-  },
-  "last_seq": null
-}"#;
-
 #[tokio::test]
 #[ignore = "requires built GUI binary and tauri-driver"]
 async fn main_layout_screen_renders_correctly() -> WebDriverResult<()> {
@@ -47,9 +24,41 @@ async fn main_layout_screen_renders_correctly() -> WebDriverResult<()> {
         path = app_binary.display()
     );
 
+    // Use unique temp directories per test run to avoid state leakage between runs.
+    // TempDir cleans up on drop; keep the handles alive for the duration of the test.
+    let sync_dir = tempfile::tempdir().expect("failed to create temp sync dir");
+    let data_dir = tempfile::tempdir().expect("failed to create temp data dir");
+
+    // Config JSON for the Ready state: fake OAuth access token + fake API key.
+    //
+    // - `app_state_from_config` returns `Ready` (access_token is set).
+    // - `getSuggestions()` opens an empty LanceDB store → returns "NoFilesIndexed" →
+    //   AskPanel shows idle state with "No files indexed yet" hint and the ask input.
+    // - `startSync()` fails on the first network request but handles the error gracefully.
+    // - `getRecentFiles()` returns an empty list (empty store) → SyncPanel shows "No files yet".
+    let ready_config = format!(
+        r#"{{
+  "instance_url": "https://alice.mycozy.cloud",
+  "sync_dir": "{}",
+  "data_dir": "{}",
+  "api_key": "fake-openrouter-key",
+  "oauth_client": {{
+    "instance_url": "https://alice.mycozy.cloud",
+    "client_id": "fake-client-id",
+    "client_secret": "fake-client-secret",
+    "registration_access_token": "fake-reg-token",
+    "access_token": "fake-access-token",
+    "refresh_token": null
+  }},
+  "last_seq": null
+}}"#,
+        sync_dir.path().display(),
+        data_dir.path().display()
+    );
+
     // ConfigGuard restores the original config on drop.
     // Declare before TauriDriverGuard so it is dropped after the app is killed.
-    let _config_guard = ConfigGuard::install(READY_CONFIG);
+    let _config_guard = ConfigGuard::install(&ready_config);
 
     let _tauri_driver = TauriDriverGuard(start_tauri_driver().expect(
         "Failed to start tauri-driver. Is it installed? (`cargo install tauri-driver --locked`)",
@@ -87,7 +96,14 @@ async fn main_layout_screen_renders_correctly() -> WebDriverResult<()> {
         .await?;
 
     // Verify the idle hint text (no suggestions, no error).
-    let hint = driver.find(By::Css(".panel-body .hint")).await?;
+    let hint = driver
+        .query(By::Css(".panel-body .hint"))
+        .wait(
+            std::time::Duration::from_secs(15),
+            std::time::Duration::from_millis(300),
+        )
+        .first()
+        .await?;
     let hint_text = hint.text().await?;
     assert!(
         hint_text.contains("No files indexed"),
@@ -110,7 +126,14 @@ async fn main_layout_screen_renders_correctly() -> WebDriverResult<()> {
     );
 
     // Verify the SyncPanel shows "No files yet" (empty store, no synced files).
-    let empty_msg = driver.find(By::Css(".empty")).await?;
+    let empty_msg = driver
+        .query(By::Css(".empty"))
+        .wait(
+            std::time::Duration::from_secs(15),
+            std::time::Duration::from_millis(300),
+        )
+        .first()
+        .await?;
     let empty_text = empty_msg.text().await?;
     assert_eq!(empty_text, "No files yet");
 
