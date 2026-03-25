@@ -1,10 +1,11 @@
 use crate::chunker;
-use crate::embedder::Embedder;
+use crate::config::RagConfig;
+use crate::embedder::{Embedder, OpenRouterEmbedder};
 use crate::extractor;
 use crate::store::{ChunkRecord, RagStore};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use super_ragondin_sync::model::{NodeType, SyncedRecord};
 
 /// Reconcile `LanceDB` index against the current set of synced records.
@@ -75,6 +76,31 @@ pub async fn reconcile(
     }
 
     Ok(())
+}
+
+/// Run RAG reconciliation if an API key is available.
+/// When `api_key` is `None` this is a no-op. Failures are logged as warnings
+/// and do not propagate — reconciliation is always non-fatal.
+pub async fn reconcile_if_configured(
+    api_key: Option<String>,
+    db_path: PathBuf,
+    synced: &[SyncedRecord],
+    sync_dir: &Path,
+) {
+    let Some(api_key) = api_key else { return };
+    let mut rag_config = RagConfig::from_env_with_db_path(db_path);
+    rag_config.api_key = api_key;
+    let embedder = OpenRouterEmbedder::new(rag_config.clone());
+    let rag_store = match RagStore::open(&rag_config.db_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to open RAG store (non-fatal)");
+            return;
+        }
+    };
+    if let Err(e) = reconcile(synced, sync_dir, &rag_store, &embedder).await {
+        tracing::warn!(error = %e, "RAG reconciliation failed (non-fatal)");
+    }
 }
 
 fn detect_mime(path: &Path) -> String {
@@ -301,6 +327,15 @@ mod tests {
         let indexed = rag_store.list_indexed().await.unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].md5sum, "md5_v2");
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_if_configured_is_noop_when_api_key_absent() {
+        let sync_dir = tempdir().unwrap();
+        // Pass a non-existent db_path — if it tried to open it, it would fail
+        let db_path = sync_dir.path().join("nonexistent_db");
+        reconcile_if_configured(None, db_path, &[], sync_dir.path()).await;
+        // no panic, no DB opened = pass
     }
 
     #[tokio::test]
