@@ -54,12 +54,13 @@ pub fn init() {
     tracing_subscriber::registry()
         .with(
             stderr_layer.with_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "super_ragondin_sync=info".into()),
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    "super_ragondin=info,super_ragondin_sync=info,super_ragondin_rag=info,super_ragondin_codemode=info,super_ragondin_gui=info".into()
+                }),
             ),
         )
         .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new(
-            "super_ragondin_sync=debug",
+            "super_ragondin=debug,super_ragondin_sync=debug,super_ragondin_rag=debug,super_ragondin_codemode=debug,super_ragondin_gui=debug",
         )))
         .init();
 

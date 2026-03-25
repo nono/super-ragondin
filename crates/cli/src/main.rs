@@ -330,11 +330,16 @@ fn run_sync_cycle(
 
     rt.block_on(engine.run_cycle_async(client))?;
 
-    // RAG reconciliation — only if API key is set
-    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();
-    if !api_key.is_empty() {
+    // RAG reconciliation — only if API key is available (env var or config)
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .or_else(|| config.api_key.clone().filter(|k| !k.is_empty()));
+
+    if let Some(api_key) = api_key {
         let db_path = config.rag_dir();
-        let rag_config = RagConfig::from_env_with_db_path(db_path);
+        let mut rag_config = RagConfig::from_env_with_db_path(db_path);
+        rag_config.api_key = api_key;
         let embedder = OpenRouterEmbedder::new(rag_config.clone());
         let synced = engine.store().list_all_synced()?;
 
@@ -356,7 +361,13 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     let config = Config::load(&config_path())?
         .ok_or_else(|| Error::NotFound("Config not found".to_string()))?;
     let db_path = config.rag_dir();
-    let rag_config = RagConfig::from_env_with_db_path(db_path);
+    let mut rag_config = RagConfig::from_env_with_db_path(db_path);
+    // Use config.api_key as fallback if env var is not set
+    if rag_config.api_key.is_empty()
+        && let Some(key) = config.api_key.as_deref().filter(|k| !k.is_empty())
+    {
+        rag_config.api_key = key.to_string();
+    }
     if rag_config.api_key.is_empty() {
         return Err(Error::Permanent(
             "OPENROUTER_API_KEY environment variable not set".to_string(),
