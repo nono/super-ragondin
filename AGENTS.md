@@ -100,8 +100,10 @@ Cargo workspace with crates and a Svelte frontend:
   - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
   - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
 - `crates/gui-e2e/` (`gui-e2e`) - GUI end-to-end tests via WebDriver
-  - `src/lib.rs` - Helpers: `start_tauri_driver()`, `connect_driver()`, `save_screenshot()`
-  - `tests/setup_screen.rs` - Setup screen rendering test with screenshot
+  - `src/lib.rs` - Helpers: `start_tauri_driver()`, `connect_driver()`, `save_screenshot()`, `ConfigGuard` (writes/restores test config)
+  - `tests/setup_screen.rs` - Setup screen (Unconfigured state) rendering test with screenshot
+  - `tests/auth_screen.rs` - Auth screen (Unauthenticated state) rendering test; uses a TCP listener to keep OAuth in waiting state
+  - `tests/main_layout_screen.rs` - MainLayout screen (Ready state) rendering test; uses a fake config with access token
 
 ## Findings
 

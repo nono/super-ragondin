@@ -197,6 +197,61 @@ pub fn compare_or_create_baseline(
     Ok(())
 }
 
+/// Returns the path to `super-ragondin`'s config file.
+///
+/// Mirrors the logic in `crates/gui/src/commands.rs::config_path()`.
+///
+/// # Panics
+///
+/// Panics if the `HOME` environment variable is not set and `XDG_CONFIG_HOME` is also unset.
+#[must_use]
+pub fn app_config_path() -> PathBuf {
+    #[allow(clippy::option_if_let_else)]
+    let config_dir = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => {
+            PathBuf::from(std::env::var("HOME").expect("HOME env var not set")).join(".config")
+        }
+    };
+    config_dir.join("super-ragondin").join("config.json")
+}
+
+/// RAII guard that writes a test config on construction and restores the original on drop.
+pub struct ConfigGuard {
+    path: PathBuf,
+    original: Option<Vec<u8>>,
+}
+
+impl ConfigGuard {
+    /// Write `config_json` to the app config path, saving any existing file for restoration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the config directory cannot be created or the file cannot be written.
+    #[must_use]
+    pub fn install(config_json: &str) -> Self {
+        let path = app_config_path();
+        let original = std::fs::read(&path).ok();
+        std::fs::create_dir_all(path.parent().expect("config path has no parent"))
+            .expect("failed to create config dir");
+        std::fs::write(&path, config_json).expect("failed to write test config");
+        Self { path, original }
+    }
+}
+
+impl Drop for ConfigGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(bytes) => {
+                std::fs::write(&self.path, bytes).ok();
+            }
+            None => {
+                std::fs::remove_file(&self.path).ok();
+            }
+        }
+    }
+}
+
 /// Finds the `tauri-driver` binary, checking `~/.cargo/bin` as a fallback.
 fn find_tauri_driver() -> PathBuf {
     if let Ok(path) = which("tauri-driver") {
