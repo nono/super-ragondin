@@ -66,13 +66,17 @@ fn cmd_init(args: &[String]) -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("super-ragondin");
 
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty());
+
     let config = Config {
         instance_url: instance_url.clone(),
         sync_dir: sync_dir.clone(),
         data_dir: data_dir.clone(),
         oauth_client: None,
         last_seq: None,
-        api_key: None,
+        api_key,
     };
 
     fs::create_dir_all(&sync_dir)?;
