@@ -25,9 +25,10 @@ crate connects as a WebDriver client to interact with the running app.
 ```
 crates/gui-e2e/
 ├── Cargo.toml
+├── references/           # committed baseline PNGs
 ├── screenshots/          # saved PNGs (gitignored)
 ├── src/
-│   └── lib.rs            # helpers: start tauri-driver, connect, screenshot
+│   └── lib.rs            # helpers: start tauri-driver, connect, screenshot, compare
 └── tests/
     └── setup_screen.rs   # first test: Setup screen renders correctly
 ```
@@ -56,5 +57,6 @@ Tests are `#[ignore]` so they don't run during regular `cargo test`.
 6. Assert: "Connect to Cozy →" button present
 7. Take screenshot → `screenshots/setup_screen.png`
 8. Compare screenshot against committed baseline in `references/setup_screen.png` (1% pixel-diff tolerance)
+   - If no baseline exists yet, the test creates it and fails asking you to review and commit it
    - If `UPDATE_SNAPSHOTS=1` is set, overwrite the baseline instead of comparing
-8a. Quit driver, kill `tauri-driver`
+9. Quit driver, kill `tauri-driver`
