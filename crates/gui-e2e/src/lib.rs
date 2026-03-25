@@ -199,27 +199,28 @@ pub fn compare_or_create_baseline(
 
 /// Returns the path to `super-ragondin`'s config file.
 ///
-/// Mirrors the logic in `crates/gui/src/commands.rs::config_path()`.
-///
-/// # Panics
-///
-/// Panics if the `HOME` environment variable is not set and `XDG_CONFIG_HOME` is also unset.
+/// Uses the same logic as `crates/gui/src/commands.rs::config_path()`.
 #[must_use]
 pub fn app_config_path() -> PathBuf {
-    #[allow(clippy::option_if_let_else)]
-    let config_dir = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(v) => PathBuf::from(v),
-        Err(_) => {
-            PathBuf::from(std::env::var("HOME").expect("HOME env var not set")).join(".config")
-        }
-    };
-    config_dir.join("super-ragondin").join("config.json")
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("super-ragondin")
+        .join("config.json")
 }
 
 /// RAII guard that writes a test config on construction and restores the original on drop.
+enum OriginalConfig {
+    /// No file existed at the path before installation.
+    Absent,
+    /// A file existed and was successfully read.
+    Present(Vec<u8>),
+    /// A file existed but could not be read (e.g. permission denied).
+    Unreadable,
+}
+
 pub struct ConfigGuard {
     path: PathBuf,
-    original: Option<Vec<u8>>,
+    original: OriginalConfig,
 }
 
 impl ConfigGuard {
@@ -231,7 +232,11 @@ impl ConfigGuard {
     #[must_use]
     pub fn install(config_json: &str) -> Self {
         let path = app_config_path();
-        let original = std::fs::read(&path).ok();
+        let original = match std::fs::read(&path) {
+            Ok(bytes) => OriginalConfig::Present(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => OriginalConfig::Absent,
+            Err(_) => OriginalConfig::Unreadable,
+        };
         std::fs::create_dir_all(path.parent().expect("config path has no parent"))
             .expect("failed to create config dir");
         std::fs::write(&path, config_json).expect("failed to write test config");
@@ -242,11 +247,15 @@ impl ConfigGuard {
 impl Drop for ConfigGuard {
     fn drop(&mut self) {
         match &self.original {
-            Some(bytes) => {
+            OriginalConfig::Present(bytes) => {
                 std::fs::write(&self.path, bytes).ok();
             }
-            None => {
+            OriginalConfig::Absent => {
                 std::fs::remove_file(&self.path).ok();
+            }
+            OriginalConfig::Unreadable => {
+                // The file existed but we couldn't read it — leave it as-is to avoid
+                // destroying a config file we never had permission to inspect.
             }
         }
     }
