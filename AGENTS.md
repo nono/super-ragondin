@@ -20,7 +20,7 @@ cargo fmt --all               # Format the code
 cargo test -q                 # Run tests
 cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
 cargo test --test integration_tests -- --ignored                              # Run integration tests (requires cozy-stack serve)
-cargo build -p super-ragondin-gui --no-default-features                      # Build GUI binary for E2E tests (no tray icon)
+cargo build -p super-ragondin-gui --no-default-features --features custom-protocol  # Build GUI binary for E2E tests
 xvfb-run cargo test -p gui-e2e -- --ignored                                  # Run GUI E2E tests (requires tauri-driver + WebKitWebDriver + xvfb)
 UPDATE_SNAPSHOTS=1 xvfb-run cargo test -p gui-e2e -- --ignored               # Update visual regression baselines
 ```
@@ -116,6 +116,9 @@ Cargo workspace with crates and a Svelte frontend:
 - Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt install` before building `crates/gui`
 - Tauri v2 custom commands registered via `invoke_handler` are covered by `core:default` in capabilities — no per-command capability entries needed
 - Tauri v2 E2E tests on Linux use `tauri-driver` + `WebKitWebDriver` (package `webkit2gtk-driver`) with `thirtyfour` as the Rust WebDriver client
+- Tauri v2 E2E builds require `--features custom-protocol` so the binary embeds the frontend (without it, `cfg(dev)=true` and the binary tries to connect to `devUrl` at runtime)
+- Svelte 5 components with runes must be mounted via `mount()` (not legacy `new App()`); the legacy API throws `effect_orphan` in WebKitWebDriver automation mode
+- After `connect_driver()`, call `driver.goto("tauri://localhost")` to ensure a clean page load with Tauri's JS bridge properly injected
 
 ## RAG Environment Variables
 

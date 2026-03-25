@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 [features]
 default = ["tray"]
 tray = ["tauri/tray-icon", "tauri/image-png"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 tauri = { version = "2" }
