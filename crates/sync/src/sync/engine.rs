@@ -244,6 +244,7 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if the HTTP request or store operations fail.
+    #[tracing::instrument(skip(self, client), fields(since))]
     pub async fn fetch_and_apply_remote_changes(
         &self,
         client: &CozyClient,
@@ -281,6 +282,7 @@ impl SyncEngine {
         }
 
         self.store.flush()?;
+        tracing::debug!(changes_applied = changes.results.len(), last_seq = %changes.last_seq, "applied remote changes");
         Ok(changes.last_seq)
     }
 
@@ -341,6 +343,7 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if scanning, planning, or execution fails.
+    #[tracing::instrument(skip(self, client))]
     pub async fn run_cycle_async(&mut self, client: &CozyClient) -> Result<Vec<PlanResult>> {
         tracing::info!("🔄 Starting async sync cycle");
         self.initial_scan()?;
@@ -440,6 +443,7 @@ impl SyncEngine {
     ///
     /// Returns an error if the operation fails.
     pub async fn execute_op_async(&self, client: &CozyClient, op: &SyncOp) -> Result<()> {
+        tracing::debug!(op = ?op, "executing sync op");
         match op {
             SyncOp::CreateLocalDir { .. }
             | SyncOp::DeleteLocal { .. }
@@ -545,6 +549,7 @@ impl SyncEngine {
     ///
     /// Returns an error if the operation fails.
     pub fn execute_op(&self, op: &SyncOp) -> Result<()> {
+        tracing::debug!(op = ?op, "executing sync op");
         match op {
             SyncOp::CreateLocalDir {
                 remote_id,
