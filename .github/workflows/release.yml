@@ -27,7 +27,7 @@ jobs:
         run: npm run build
         working-directory: gui-frontend
       - name: Build release binaries
-        run: cargo build --release --locked --bin super-ragondin -p super-ragondin-gui --features super-ragondin-gui/custom-protocol
+        run: cargo build --release --locked --bin super-ragondin --bin super-ragondin-gui --features super-ragondin-gui/custom-protocol
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
