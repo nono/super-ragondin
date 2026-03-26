@@ -16,7 +16,7 @@ use super_ragondin_sync::sync::engine::SyncEngine;
 use super_ragondin_sync::watcher_mux::{SyncTrigger, start_watchers};
 
 fn main() -> Result<()> {
-    super_ragondin_sync::logging::init();
+    super_ragondin_sync::logging::init("super-ragondin-cli");
 
     let args: Vec<String> = env::args().collect();
 
