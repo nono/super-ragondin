@@ -797,13 +797,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_open_recreates_table_with_wrong_embed_dim() {
-        let dir = tempdir().unwrap();
+    async fn test_open_recreates_table_with_wrong_embed_dim() -> anyhow::Result<()> {
+        let dir = tempdir()?;
         // Create a table with the old 3072 schema
         let db: Connection = lancedb::connect(dir.path().to_str().unwrap())
             .execute()
-            .await
-            .unwrap();
+            .await?;
         let old_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("doc_id", DataType::Utf8, false),
@@ -823,17 +822,15 @@ mod tests {
         ]));
         db.create_empty_table(TABLE_NAME, old_schema)
             .execute()
-            .await
-            .unwrap();
+            .await?;
         // Also create skipped_docs so open() doesn't fail
         db.create_empty_table(SKIPPED_TABLE_NAME, skipped_schema())
             .execute()
-            .await
-            .unwrap();
+            .await?;
         drop(db);
 
         // Open should detect wrong dim and recreate
-        let store = RagStore::open(dir.path()).await.unwrap();
+        let store = RagStore::open(dir.path()).await?;
 
         // Verify we can insert 1024-dim embeddings
         let chunk = ChunkRecord {
@@ -846,15 +843,16 @@ mod tests {
             md5sum: "abc".to_string(),
             embedding: vec![0.0_f32; 1024],
         };
-        store.upsert_chunks(&[chunk]).await.unwrap();
-        let indexed = store.list_indexed().await.unwrap();
+        store.upsert_chunks(&[chunk]).await?;
+        let indexed = store.list_indexed().await?;
         assert_eq!(indexed.len(), 1);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_upsert_with_1024_dim_embedding() {
-        let dir = tempdir().unwrap();
-        let store = RagStore::open(dir.path()).await.unwrap();
+    async fn test_upsert_with_1024_dim_embedding() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let store = RagStore::open(dir.path()).await?;
         let chunk = ChunkRecord {
             id: "doc.md:0".to_string(),
             doc_id: "doc.md".to_string(),
@@ -865,11 +863,12 @@ mod tests {
             md5sum: "abc123".to_string(),
             embedding: vec![0.0_f32; 1024],
         };
-        store.upsert_chunks(&[chunk]).await.unwrap();
+        store.upsert_chunks(&[chunk]).await?;
 
-        let indexed = store.list_indexed().await.unwrap();
+        let indexed = store.list_indexed().await?;
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].doc_id, "doc.md");
+        Ok(())
     }
 
     #[tokio::test]
