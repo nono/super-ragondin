@@ -23,22 +23,22 @@ pub fn log_dir() -> PathBuf {
 
 /// Initialize the dual-output logging system.
 ///
-/// - stderr: human-readable, colored, controlled by `RUST_LOG` (default: `super_ragondin_sync=info`)
+/// - stderr: human-readable, colored, controlled by `RUST_LOG` (default: `super_ragondin*=info`)
 /// - file: JSONL format, daily rotation, always at DEBUG level
 ///
-/// Log files are written to `log_dir()` with the prefix `super-ragondin`
-/// and suffix `.jsonl`, e.g. `super-ragondin.2026-02-08.jsonl`.
+/// Log files are written to `log_dir()` with the given `prefix`
+/// and suffix `.jsonl`, e.g. `super-ragondin-cli.2026-02-08.jsonl`.
 ///
 /// # Panics
 ///
 /// Panics if the tracing subscriber cannot be initialized (e.g. called twice).
-pub fn init() {
+pub fn init(prefix: &str) {
     let dir = log_dir();
     std::fs::create_dir_all(&dir).ok();
 
     let file_appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
-        .filename_prefix("super-ragondin")
+        .filename_prefix(prefix)
         .filename_suffix("jsonl")
         .build(&dir)
         .expect("failed to create log file appender");
@@ -64,7 +64,7 @@ pub fn init() {
         .with(file_layer.with_filter(tracing_subscriber::EnvFilter::new(FILE_LOG_FILTER)))
         .init();
 
-    tracing::info!(log_dir = %dir.display(), "⚙️ Logging initialized");
+    tracing::info!(log_dir = %dir.display(), prefix, "⚙️ Logging initialized");
 }
 
 #[cfg(test)]
