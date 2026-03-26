@@ -11,6 +11,9 @@
   let lastQuestion: string = $state('')
   let answer: string = $state('')
   let errorMessage: string = $state('')
+  let apiKeyInput: string = $state('')
+  let savingKey: boolean = $state(false)
+  let keyError: string | null = $state(null)
 
   onMount(async () => {
     await loadSuggestions()
@@ -60,6 +63,26 @@
       ask(question)
     }
   }
+
+  async function saveApiKey() {
+    if (!apiKeyInput.trim()) return
+    savingKey = true
+    keyError = null
+    const result = await commands.setApiKey(apiKeyInput)
+    if (result.status === 'ok') {
+      await loadSuggestions()
+    } else {
+      keyError = result.error
+    }
+    savingKey = false
+  }
+
+  function handleApiKeyKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      saveApiKey()
+    }
+  }
 </script>
 
 <div class="panel">
@@ -74,7 +97,26 @@
 
     {:else if state === 'no-api-key'}
       <div class="banner">
-        Add your OpenRouter API key during setup to use the assistant.
+        <p class="banner-label">No OpenRouter API key configured.</p>
+        <div class="key-form">
+          <input
+            type="password"
+            bind:value={apiKeyInput}
+            placeholder="sk-or-…"
+            disabled={savingKey}
+            onkeydown={handleApiKeyKeydown}
+          />
+          <button
+            class="save-key-btn"
+            onclick={saveApiKey}
+            disabled={savingKey || !apiKeyInput.trim()}
+          >
+            {savingKey ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {#if keyError}
+          <p class="key-error">{keyError}</p>
+        {/if}
       </div>
 
     {:else if state === 'idle'}
@@ -166,6 +208,53 @@
     padding: 10px 14px;
     font-size: 12px;
     color: #e65100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .banner-label {
+    margin: 0;
+  }
+  .key-form {
+    display: flex;
+    gap: 6px;
+  }
+  .key-form input {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid #ffcc80;
+    border-radius: 4px;
+    font-size: 12px;
+    background: #fff;
+    color: #333;
+    outline: none;
+    font-family: inherit;
+  }
+  .key-form input:focus {
+    border-color: #e65100;
+  }
+  .key-form input:disabled {
+    opacity: 0.5;
+  }
+  .save-key-btn {
+    padding: 6px 10px;
+    background: #e65100;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .save-key-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .key-error {
+    margin: 0;
+    color: #c62828;
+    font-size: 11px;
   }
 
   .chips {
