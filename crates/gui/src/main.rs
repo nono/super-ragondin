@@ -20,6 +20,7 @@ fn main() {
         .manage(SyncGuard::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
+            super_ragondin_sync::logging::init("super-ragondin-gui");
             builder.mount_events(app);
 
             #[cfg(feature = "tray")]
