@@ -240,6 +240,24 @@ pub fn init_config(
     init_config_to(instance_url, sync_dir, api_key, &config_path())
 }
 
+pub fn set_api_key_to(api_key: String, config_path: &std::path::Path) -> Result<(), String> {
+    let mut config = Config::load(config_path)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No config".to_string())?;
+    config.api_key = if api_key.is_empty() {
+        None
+    } else {
+        Some(api_key)
+    };
+    config.save(config_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_api_key(api_key: String) -> Result<(), String> {
+    set_api_key_to(api_key, &config_path())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_app_state() -> AppState {
@@ -370,6 +388,7 @@ pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(tauri_specta::collect_commands![
             get_app_state,
             init_config,
+            set_api_key,
             start_auth,
             start_sync,
             get_recent_files,
@@ -854,6 +873,53 @@ mod tests {
         let result = get_suggestions_from(&config_path).await;
         assert_eq!(result, Err("NoApiKey".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn set_api_key_to_updates_only_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_sync_dir, config_path) = saved_config_with_oauth(&dir);
+
+        let result = set_api_key_to("sk-new".to_string(), &config_path);
+        assert!(result.is_ok());
+
+        let loaded = Config::load(&config_path).unwrap().unwrap();
+        assert_eq!(loaded.api_key, Some("sk-new".to_string()));
+        // OAuth and other fields must be preserved
+        assert!(loaded.oauth_client.is_some());
+        assert_eq!(loaded.instance_url, "https://alice.mycozy.cloud");
+        assert_eq!(loaded.last_seq, Some("42-abc".to_string()));
+    }
+
+    #[test]
+    fn set_api_key_to_empty_string_clears_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        Config {
+            instance_url: "https://alice.mycozy.cloud".to_string(),
+            sync_dir: dir.path().join("sync"),
+            data_dir: dir.path().to_path_buf(),
+            oauth_client: None,
+            last_seq: None,
+            api_key: Some("sk-old".to_string()),
+        }
+        .save(&config_path)
+        .unwrap();
+
+        let result = set_api_key_to(String::new(), &config_path);
+        assert!(result.is_ok());
+
+        let loaded = Config::load(&config_path).unwrap().unwrap();
+        assert_eq!(loaded.api_key, None);
+    }
+
+    #[test]
+    fn set_api_key_to_no_config_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let result = set_api_key_to("sk-x".to_string(), &config_path);
+        assert!(result.is_err());
     }
 
     #[tokio::test]
