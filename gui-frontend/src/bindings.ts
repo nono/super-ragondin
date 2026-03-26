@@ -16,6 +16,14 @@ async initConfig(instanceUrl: string, syncDir: string, apiKey: string | null) : 
     else return { status: "error", error: e  as any };
 }
 },
+async setApiKey(apiKey: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_api_key", { apiKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async startAuth() : Promise<void> {
     await TAURI_INVOKE("start_auth");
 },
