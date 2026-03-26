@@ -14,6 +14,7 @@ use super_ragondin_sync::model::{NodeType, SyncedRecord};
 ///
 /// # Errors
 /// Returns error if any database or embedding operation fails.
+#[tracing::instrument(skip(synced, rag_store, embedder), fields(synced_count = synced.len(), sync_dir = %sync_dir.display()))]
 pub async fn reconcile(
     synced: &[SyncedRecord],
     sync_dir: &Path,
@@ -30,6 +31,24 @@ pub async fn reconcile(
     let indexed_map: HashMap<String, String> =
         indexed.into_iter().map(|d| (d.doc_id, d.md5sum)).collect();
 
+    let delete_count = indexed_map
+        .keys()
+        .filter(|k| !synced_map.contains_key(k.as_str()))
+        .count();
+    let reindex_count = synced_map
+        .iter()
+        .filter(|(rel_path, md5sum)| {
+            indexed_map.get(**rel_path).map(String::as_str) != Some(md5sum)
+        })
+        .count();
+    tracing::debug!(
+        synced_files = synced_map.len(),
+        already_indexed = indexed_map.len(),
+        to_delete = delete_count,
+        to_index = reindex_count,
+        "RAG reconcile plan"
+    );
+
     for doc_id in indexed_map.keys() {
         if !synced_map.contains_key(doc_id.as_str()) {
             tracing::debug!(doc_id, "Removing deleted file from index");
@@ -39,6 +58,7 @@ pub async fn reconcile(
 
     for (rel_path, md5sum) in &synced_map {
         if indexed_map.get(*rel_path).map(String::as_str) == Some(md5sum) {
+            tracing::debug!(rel_path, "md5 unchanged, skipping");
             continue;
         }
         let file_path = sync_dir.join(rel_path);
@@ -117,6 +137,7 @@ fn detect_mime(path: &Path) -> String {
     }
 }
 
+#[tracing::instrument(skip(file_path, mtime, md5sum, embedder), fields(rel_path, mime_type))]
 async fn index_file(
     rel_path: &str,
     file_path: &Path,
@@ -152,7 +173,12 @@ async fn index_file(
                         return Ok(Vec::new());
                     }
                 }
-                Some(text) => chunker::chunk_text(&text, mime_type)?,
+                Some(text) => {
+                    tracing::debug!(text_len = text.len(), "extracted text");
+                    let chunks = chunker::chunk_text(&text, mime_type)?;
+                    tracing::debug!(chunk_count = chunks.len(), "chunked text");
+                    chunks
+                }
             }
         }
     };
@@ -161,7 +187,9 @@ async fn index_file(
         return Ok(Vec::new());
     }
 
+    let chunk_count = texts.len();
     let embeddings = embedder.embed_texts(&texts).await?;
+    tracing::debug!(chunk_count, "embedded chunks");
     let chunks = texts
         .into_iter()
         .zip(embeddings)
