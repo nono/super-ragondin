@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::error::Result;
 use crate::ignore::IgnoreRules;
 use crate::local::watcher::{WatchEvent, Watcher};
 use crate::remote::realtime::RealtimeListener;
@@ -17,21 +18,24 @@ pub enum SyncTrigger {
 /// local or remote change is detected, plus a `CancellationToken` to stop the
 /// realtime listener.
 ///
+/// # Errors
+///
+/// Returns an error if the filesystem watcher cannot be initialized (e.g. the
+/// sync directory does not exist or inotify is unavailable).
+///
 /// # Panics
 ///
-/// Panics if the filesystem watcher or the per-thread tokio runtime cannot be
-/// created.
-pub fn start_watchers(config: &Config) -> (mpsc::Receiver<SyncTrigger>, CancellationToken) {
+/// The background watcher thread panics if the watcher fails after
+/// initialization, or if the per-thread tokio runtime cannot be created.
+pub fn start_watchers(config: &Config) -> Result<(mpsc::Receiver<SyncTrigger>, CancellationToken)> {
     let (tx, rx) = mpsc::channel::<SyncTrigger>();
 
-    // Local filesystem watcher
+    // Local filesystem watcher — create before spawning so init errors propagate to caller.
     let local_tx = tx.clone();
     let (local_watch_tx, local_watch_rx) = mpsc::channel::<WatchEvent>();
-    let sync_dir = config.sync_dir.clone();
     let watcher_rules = IgnoreRules::load(Some(&config.syncignore_path()));
+    let mut watcher = Watcher::new(&config.sync_dir, local_watch_tx, watcher_rules)?;
     std::thread::spawn(move || {
-        let mut watcher = Watcher::new(&sync_dir, local_watch_tx, watcher_rules)
-            .expect("Failed to create watcher");
         watcher.run().expect("Watcher failed");
     });
     std::thread::spawn(move || {
@@ -65,5 +69,30 @@ pub fn start_watchers(config: &Config) -> (mpsc::Receiver<SyncTrigger>, Cancella
         tracing::warn!("🔌 No access token, realtime notifications disabled");
     }
 
-    (rx, cancel)
+    Ok((rx, cancel))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn config_with_sync_dir(sync_dir: PathBuf) -> Config {
+        Config {
+            instance_url: "https://test.mycozy.cloud".to_string(),
+            sync_dir,
+            data_dir: PathBuf::from("/tmp/data"),
+            oauth_client: None,
+            last_seq: None,
+            api_key: None,
+        }
+    }
+
+    #[test]
+    fn start_watchers_fails_for_nonexistent_sync_dir() {
+        let config = config_with_sync_dir(PathBuf::from("/nonexistent/path/that/does/not/exist"));
+        let result = start_watchers(&config);
+        assert!(result.is_err());
+    }
 }

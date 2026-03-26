@@ -506,7 +506,13 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
         }
     };
 
-    let (rx, cancel) = start_watchers(&config);
+    let (rx, cancel) = match start_watchers(&config) {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::error!("Failed to initialize filesystem watcher: {e}");
+            return;
+        }
+    };
 
     rt.block_on(async {
         #[cfg(feature = "tray")]

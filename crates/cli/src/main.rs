@@ -176,7 +176,7 @@ fn cmd_watch() -> Result<()> {
     let client = open_client(&config)?;
     let mut engine = open_engine(&config)?;
     let rt = tokio::runtime::Runtime::new()?;
-    let (rx, cancel) = start_watchers(&config);
+    let (rx, cancel) = start_watchers(&config)?;
 
     tracing::info!(sync_dir = %config.sync_dir.display(), "👁️ Watching for changes, press Ctrl+C to stop");
 
