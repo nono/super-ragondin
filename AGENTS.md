@@ -77,6 +77,7 @@ Cargo workspace with crates and a Svelte frontend:
   - `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
   - `src/sync.rs` - Sync engine (with `src/sync/` submodules)
   - `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
+  - `src/watcher_mux.rs` - `SyncTrigger` enum + `start_watchers()` — shared by CLI and GUI; add watch-loop primitives here, not in the binaries
   - `tests/` - Integration tests
 - `crates/rag/` (`super-ragondin-rag`) - RAG indexing and search
   - `src/config.rs` - `RagConfig` — loads env vars, holds model names + LanceDB path
