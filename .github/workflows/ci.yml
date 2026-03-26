@@ -91,11 +91,9 @@ jobs:
         with:
           path: ~/.cargo/bin/tauri-driver
           key: tauri-driver-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            tauri-driver-${{ runner.os }}-
       - name: Install tauri-driver
         if: steps.cache-tauri-driver.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver
+        run: cargo install tauri-driver --locked
       - name: Build GUI binary
         run: cargo build -p super-ragondin-gui --no-default-features --features custom-protocol
       - name: Run e2e tests
