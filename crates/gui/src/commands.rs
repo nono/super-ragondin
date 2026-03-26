@@ -240,6 +240,9 @@ pub fn init_config(
     init_config_to(instance_url, sync_dir, api_key, &config_path())
 }
 
+/// Testable core of `set_api_key`: loads the config at `config_path`,
+/// updates only the `api_key` field (clearing it when `api_key` is empty),
+/// and saves it back.
 pub fn set_api_key_to(api_key: String, config_path: &std::path::Path) -> Result<(), String> {
     let mut config = Config::load(config_path)
         .map_err(|e| e.to_string())?
