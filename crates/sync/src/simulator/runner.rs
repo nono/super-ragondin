@@ -287,6 +287,7 @@ impl SimulationRunner {
     /// # Errors
     /// Returns an error if the action fails
     pub fn apply(&mut self, action: SimAction) -> Result<(), String> {
+        tracing::debug!(action = %action, "sim apply");
         match action {
             SimAction::LocalCreateFile {
                 local_id,
@@ -2235,21 +2236,27 @@ impl SimulationRunner {
         let mut errors = Vec::new();
 
         if let Err(e) = self.check_no_orphaned_store_nodes() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_no_orphaned_store_nodes] {e}"));
         }
         if let Err(e) = self.check_store_consistency() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_store_consistency] {e}"));
         }
         if let Err(e) = self.check_no_duplicate_local_paths() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_no_duplicate_local_paths] {e}"));
         }
         if let Err(e) = self.check_convergence() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_convergence] {e}"));
         }
         if let Err(e) = self.check_content_integrity() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_content_integrity] {e}"));
         }
         if let Err(e) = self.check_idempotency() {
+            tracing::warn!(error = %e, "invariant violated");
             errors.push(format!("[check_idempotency] {e}"));
         }
 
