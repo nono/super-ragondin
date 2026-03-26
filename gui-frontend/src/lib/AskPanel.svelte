@@ -70,6 +70,7 @@
     keyError = null
     const result = await commands.setApiKey(apiKeyInput)
     if (result.status === 'ok') {
+      apiKeyInput = ''
       await loadSuggestions()
     } else {
       keyError = result.error
@@ -80,7 +81,7 @@
   function handleApiKeyKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault()
-      saveApiKey()
+      void saveApiKey()
     }
   }
 </script>
@@ -105,6 +106,7 @@
             placeholder="sk-or-…"
             disabled={savingKey}
             onkeydown={handleApiKeyKeydown}
+            oninput={() => { keyError = null }}
           />
           <button
             class="save-key-btn"
