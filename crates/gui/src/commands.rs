@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use super_ragondin_sync::config::Config;
 use super_ragondin_sync::ignore::IgnoreRules;
+use super_ragondin_sync::local::watcher::WatchEventKind;
 use super_ragondin_sync::remote::auth::OAuthClient;
 use super_ragondin_sync::remote::client::CozyClient;
 use super_ragondin_sync::store::TreeStore;
 use super_ragondin_sync::sync::engine::SyncEngine;
+use super_ragondin_sync::watcher_mux::{start_watchers, SyncTrigger};
 use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -471,10 +475,12 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
     Ok(chrono::Utc::now().to_rfc3339())
 }
 
-/// Run the sync loop indefinitely: emit `sync_status` events and sleep 30s between cycles.
+/// Run the sync loop indefinitely: emit `sync_status` events and react to
+/// local filesystem and remote WebSocket events, with a 30s fallback.
 ///
 /// This runs on a dedicated OS thread with its own tokio runtime to work around
 /// HRTB lifetime constraints in `SyncEngine::run_cycle_async`.
+#[allow(clippy::too_many_lines)]
 pub fn run_sync_loop(app: &tauri::AppHandle) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -486,6 +492,21 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
             return;
         }
     };
+
+    let config = match Config::load(&config_path()) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            tracing::error!("No config found, cannot start sync loop");
+            return;
+        }
+        Err(e) => {
+            tracing::error!("Failed to load config: {e}");
+            return;
+        }
+    };
+
+    let (rx, _cancel) = start_watchers(&config);
+
     rt.block_on(async {
         #[cfg(feature = "tray")]
         let update_tray_icon = |state: &SyncState| {
@@ -500,33 +521,104 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
             }
         };
 
-        let mut last_sync: Option<String> = None;
+        let mut last_sync_ts: Option<String> = None;
+        let mut last_sync: Option<Instant> = None;
+        let mut pending_writes: HashMap<PathBuf, Instant> = HashMap::new();
+        let mut pending = true;
+        let debounce = Duration::from_millis(200);
+        let write_timeout = Duration::from_secs(30);
+
         loop {
-            #[cfg(feature = "tray")]
-            update_tray_icon(&SyncState::Syncing);
-            let _ = SyncStatusEvent {
-                status: SyncState::Syncing,
-                last_sync: last_sync.clone(),
-            }
-            .emit(app);
+            let debounce_ok = last_sync.is_none_or(|t| t.elapsed() > debounce);
 
-            last_sync = match do_sync_cycle().await {
-                Ok(ts) => Some(ts),
-                Err(e) => {
-                    tracing::error!("Sync cycle failed: {e}");
-                    last_sync
+            // Expire stale pending writes (safety net for mmap / non-close writers)
+            let now = Instant::now();
+            let expired: Vec<_> = pending_writes
+                .iter()
+                .filter(|&(_, &t)| now.duration_since(t) > write_timeout)
+                .map(|(p, _)| p.clone())
+                .collect();
+            for path in &expired {
+                tracing::debug!(path = %path.display(), "⏰ Pending write timed out, releasing");
+                pending_writes.remove(path);
+            }
+            if !expired.is_empty() {
+                pending = true;
+            }
+
+            if pending && debounce_ok && pending_writes.is_empty() {
+                pending = false;
+
+                #[cfg(feature = "tray")]
+                update_tray_icon(&SyncState::Syncing);
+                let _ = SyncStatusEvent {
+                    status: SyncState::Syncing,
+                    last_sync: last_sync_ts.clone(),
                 }
-            };
+                .emit(app);
 
-            #[cfg(feature = "tray")]
-            update_tray_icon(&SyncState::Idle);
-            let _ = SyncStatusEvent {
-                status: SyncState::Idle,
-                last_sync: last_sync.clone(),
+                last_sync_ts = match do_sync_cycle().await {
+                    Ok(ts) => Some(ts),
+                    Err(e) => {
+                        tracing::error!("Sync cycle failed: {e}");
+                        last_sync_ts
+                    }
+                };
+
+                #[cfg(feature = "tray")]
+                update_tray_icon(&SyncState::Idle);
+                let _ = SyncStatusEvent {
+                    status: SyncState::Idle,
+                    last_sync: last_sync_ts.clone(),
+                }
+                .emit(app);
+
+                last_sync = Some(Instant::now());
             }
-            .emit(app);
 
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(trigger) => {
+                    match &trigger {
+                        SyncTrigger::Local(event) => {
+                            tracing::debug!(event = ?event, "👁️ Local watch event received");
+                            match event.kind {
+                                WatchEventKind::Create | WatchEventKind::Modify
+                                    if !event.is_dir =>
+                                {
+                                    pending_writes
+                                        .entry(event.path.clone())
+                                        .or_insert_with(Instant::now);
+                                }
+                                WatchEventKind::CloseWrite => {
+                                    if pending_writes.remove(&event.path).is_some() {
+                                        tracing::debug!(
+                                            path = %event.path.display(),
+                                            "✅ Write complete (CLOSE_WRITE)"
+                                        );
+                                    }
+                                }
+                                WatchEventKind::Delete => {
+                                    pending_writes.remove(&event.path);
+                                }
+                                _ => {}
+                            }
+                        }
+                        SyncTrigger::Remote => {
+                            tracing::info!("🔌 Remote change notification received");
+                        }
+                    }
+                    pending = true;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if last_sync.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
+                        pending = true;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    tracing::error!("❌ All event sources disconnected");
+                    break;
+                }
+            }
         }
     });
     tracing::info!("Sync loop exited");

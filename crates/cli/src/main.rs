@@ -3,19 +3,17 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 use super_ragondin_sync::config::Config;
 use super_ragondin_sync::error::{Error, Result};
 use super_ragondin_sync::ignore::IgnoreRules;
-use super_ragondin_sync::local::watcher::{WatchEvent, WatchEventKind, Watcher};
+use super_ragondin_sync::local::watcher::WatchEventKind;
 use super_ragondin_sync::model::PlanResult;
 use super_ragondin_sync::planner::Planner;
 use super_ragondin_sync::remote::auth::OAuthClient;
-use super_ragondin_sync::remote::realtime::RealtimeListener;
 use super_ragondin_sync::store::TreeStore;
 use super_ragondin_sync::sync::engine::SyncEngine;
-use tokio_util::sync::CancellationToken;
+use super_ragondin_sync::watcher_mux::{SyncTrigger, start_watchers};
 
 fn main() -> Result<()> {
     super_ragondin_sync::logging::init();
@@ -169,58 +167,6 @@ fn open_engine(config: &Config) -> Result<SyncEngine> {
         config.staging_dir(),
         rules,
     ))
-}
-
-enum SyncTrigger {
-    Local(WatchEvent),
-    Remote,
-}
-
-fn start_watchers(config: &Config) -> (mpsc::Receiver<SyncTrigger>, CancellationToken) {
-    let (tx, rx) = mpsc::channel::<SyncTrigger>();
-
-    // Local filesystem watcher
-    let local_tx = tx.clone();
-    let (local_watch_tx, local_watch_rx) = mpsc::channel::<WatchEvent>();
-    let sync_dir = config.sync_dir.clone();
-    let watcher_rules = IgnoreRules::load(Some(&config.syncignore_path()));
-    thread::spawn(move || {
-        let mut watcher = Watcher::new(&sync_dir, local_watch_tx, watcher_rules)
-            .expect("Failed to create watcher");
-        watcher.run().expect("Watcher failed");
-    });
-    thread::spawn(move || {
-        for event in local_watch_rx {
-            if local_tx.send(SyncTrigger::Local(event)).is_err() {
-                break;
-            }
-        }
-    });
-
-    // Realtime WebSocket listener
-    let cancel = CancellationToken::new();
-    let oauth = config.oauth_client.as_ref();
-    if let Some(access_token) = oauth.and_then(|o| o.access_token().map(String::from)) {
-        let instance_url = config.instance_url.clone();
-        let remote_tx = tx;
-        let cancel2 = cancel.clone();
-        thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-            rt.block_on(async {
-                let listener = RealtimeListener::new(&instance_url, &access_token);
-                let mut rx = listener.start(cancel2);
-                while rx.recv().await.is_some() {
-                    if remote_tx.send(SyncTrigger::Remote).is_err() {
-                        break;
-                    }
-                }
-            });
-        });
-    } else {
-        tracing::warn!("🔌 No access token, realtime notifications disabled");
-    }
-
-    (rx, cancel)
 }
 
 fn cmd_watch() -> Result<()> {
