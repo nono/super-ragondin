@@ -244,7 +244,7 @@ impl SyncEngine {
     /// # Errors
     ///
     /// Returns an error if the HTTP request or store operations fail.
-    #[tracing::instrument(skip(self, client), fields(since))]
+    #[tracing::instrument(skip(self, client), fields(since = ?since))]
     pub async fn fetch_and_apply_remote_changes(
         &self,
         client: &CozyClient,

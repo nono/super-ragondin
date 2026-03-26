@@ -137,7 +137,7 @@ fn detect_mime(path: &Path) -> String {
     }
 }
 
-#[tracing::instrument(skip(file_path, mtime, md5sum, embedder), fields(rel_path, mime_type))]
+#[tracing::instrument(skip(file_path, mtime, md5sum, embedder), fields(rel_path = rel_path, mime_type = mime_type))]
 async fn index_file(
     rel_path: &str,
     file_path: &Path,
