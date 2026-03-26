@@ -52,7 +52,7 @@
   }
 
   function friendlyError(err: string): string {
-    if (err === 'NoApiKey') return 'No OpenRouter API key configured. Add it in the setup screen.'
+    if (err === 'NoApiKey') return 'No OpenRouter API key configured.'
     if (err === 'NoFilesIndexed') return 'No files indexed yet — waiting for first sync.'
     return 'Something went wrong. Please try again.'
   }
@@ -68,14 +68,17 @@
     if (!apiKeyInput.trim()) return
     savingKey = true
     keyError = null
-    const result = await commands.setApiKey(apiKeyInput)
-    if (result.status === 'ok') {
-      apiKeyInput = ''
-      await loadSuggestions()
-    } else {
-      keyError = result.error
+    try {
+      const result = await commands.setApiKey(apiKeyInput)
+      if (result.status === 'ok') {
+        apiKeyInput = ''
+        await loadSuggestions()
+      } else {
+        keyError = result.error
+      }
+    } finally {
+      savingKey = false
     }
-    savingKey = false
   }
 
   function handleApiKeyKeydown(e: KeyboardEvent) {
@@ -106,7 +109,7 @@
             placeholder="sk-or-…"
             disabled={savingKey}
             onkeydown={handleApiKeyKeydown}
-            oninput={() => { keyError = null }}
+            oninput={() => { if (keyError) keyError = null }}
           />
           <button
             class="save-key-btn"
