@@ -455,12 +455,13 @@ pub async fn do_sync_cycle() -> Result<String, Box<dyn std::error::Error + Send 
         .fetch_and_apply_remote_changes(&client, since)
         .await?;
 
-    engine.run_cycle_async(&client).await?;
-
-    // Persist sequence number after the sync cycle completes to avoid advancing
-    // past a failed cycle (which would silently drop remote changes).
+    // Persist sequence number immediately after remote changes are applied so
+    // that a failure in run_cycle_async does not cause the same remote changes
+    // to be re-fetched and re-applied on the next cycle.
     config.last_seq = Some(new_seq);
     config.save(&path)?;
+
+    engine.run_cycle_async(&client).await?;
 
     let api_key = super_ragondin_rag::config::RagConfig::resolve_api_key(config.api_key.as_deref());
     let synced = engine.store().list_all_synced()?;
@@ -505,7 +506,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
         }
     };
 
-    let (rx, _cancel) = start_watchers(&config);
+    let (rx, cancel) = start_watchers(&config);
 
     rt.block_on(async {
         #[cfg(feature = "tray")]
@@ -621,6 +622,7 @@ pub fn run_sync_loop(app: &tauri::AppHandle) {
             }
         }
     });
+    cancel.cancel();
     tracing::info!("Sync loop exited");
 }
 
