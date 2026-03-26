@@ -11,6 +11,8 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 - Always run `cargo fmt --all` after editing Rust files
 - Always run `cargo clippy --all-features` after editing Rust files and fix any warnings
 - Avoid unsafe unwrap() in async tests
+- Avoid code duplication between CLI and GUI
+- Do not background long-running commands like `npm install` or `cargo test`; run them in the foreground and wait for completion before proceeding.
 
 ## Commands
 
@@ -122,6 +124,18 @@ Cargo workspace with crates and a Svelte frontend:
 - Tauri v2 E2E builds require `--features custom-protocol` so the binary embeds the frontend (without it, `cfg(dev)=true` and the binary tries to connect to `devUrl` at runtime)
 - Svelte 5 components with runes must be mounted via `mount()` (not legacy `new App()`); the legacy API throws `effect_orphan` in WebKitWebDriver automation mode
 - After `connect_driver()`, call `driver.goto("tauri://localhost")` to ensure a clean page load with Tauri's JS bridge properly injected
+- `baai/bge-m3` via OpenRouter produces 1024-dimensional vectors — `EMBED_DIM` must match; mismatches cause `Invalid argument error` on `FixedSizeListArray` construction, and existing LanceDB tables must be dropped/recreated on dimension change
+- `detect_mime()` extension fallback must cover common text-based extensions (`.json`, `.yml`, `.rs`, etc.) — `infer` returns `None` for these and they default to `application/octet-stream`, causing the text extractor to skip them
+- Tracing `EnvFilter` in a multi-crate workspace must include all relevant crate targets (e.g. `super_ragondin_rag=info`) — a filter like `super_ragondin_sync=info` silently drops logs from other workspace crates
+- `OPENROUTER_API_KEY` resolution must check both environment variable and config file (`api_key` field) with consistent precedence across CLI and GUI
+- Real-time sync requires coalescing `inotify` + WebSocket events via a `SyncTrigger` enum into a single channel, with `CloseWrite` tracking and a 30s safety timeout for stale pending writes
+- GUI sync loop runs on a dedicated OS thread with its own Tokio runtime due to HRTB lifetime constraints in `SyncEngine::run_cycle_async`
+- GitHub Actions: avoid `restore-keys` when caching single binaries installed via `cargo install` — prefix matches restore the old binary but set `cache-hit=false`, causing `cargo install` to fail on the existing file
+- GitHub Actions: use `--locked` with `cargo install` to avoid version drift and ensure reproducible binary installations
+- GitHub Actions: use `Swatinem/rust-cache@v2` with `shared-key` + `save-if: false` on secondary jobs to share compiled deps without cache thrashing
+- Tauri's `beforeBuildCommand` only runs via `cargo tauri build` — in CI with `cargo build`, the frontend must be built manually first (`npm run build` in `gui-frontend/`)
+- Release builds must target both binaries: `cargo build --release --locked --bin super-ragondin --bin super-ragondin-gui`
+- GPU-related warnings (`libEGL`, `MESA-LOADER`, `ZINK`) in headless CI environments are harmless and can be ignored
 
 ## RAG Environment Variables
 
