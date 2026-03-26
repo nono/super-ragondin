@@ -313,7 +313,7 @@ mod tests {
             chunk_index: 0,
             chunk_text: "hello".to_string(),
             md5sum: "abc".to_string(),
-            embedding: vec![0.0_f32; 3072],
+            embedding: vec![0.0_f32; 1024],
         };
         engine.store.upsert_chunks(&[chunk]).await.unwrap();
 

@@ -32,7 +32,7 @@ mod tests {
     #[async_trait]
     impl Embedder for StubEmbedder {
         async fn embed_texts(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
-            Ok(texts.iter().map(|_| vec![0.0_f32; 3072]).collect())
+            Ok(texts.iter().map(|_| vec![0.0_f32; 1024]).collect())
         }
         async fn describe_image(&self, _b64: &str, _mime: &str) -> anyhow::Result<String> {
             Ok("stub".to_string())
@@ -52,7 +52,7 @@ mod tests {
                 chunk_index: 0,
                 chunk_text: "Remote work policy details here.".to_string(),
                 md5sum: "abc".to_string(),
-                embedding: vec![0.0_f32; 3072],
+                embedding: vec![0.0_f32; 1024],
             }])
             .await
             .unwrap();
