@@ -16,7 +16,7 @@ use lancedb::query::{ExecutableQuery, QueryBase, Select};
 
 const TABLE_NAME: &str = "chunks";
 const SKIPPED_TABLE_NAME: &str = "skipped_docs";
-const EMBED_DIM: i32 = 3072;
+const EMBED_DIM: i32 = 1024;
 
 pub struct ChunkRecord {
     pub id: String,
@@ -147,6 +147,18 @@ fn skipped_schema() -> Arc<Schema> {
     ]))
 }
 
+/// Check whether the schema's embedding column has the expected dimension.
+fn has_correct_embed_dim(schema: &Schema) -> bool {
+    schema
+        .field_with_name("embedding")
+        .ok()
+        .and_then(|f| match f.data_type() {
+            DataType::FixedSizeList(_, dim) => Some(*dim == EMBED_DIM),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn chunks_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -205,7 +217,16 @@ impl RagStore {
             .await?;
         let table_names = db.table_names().execute().await?;
         let table = if table_names.iter().any(|n| n == TABLE_NAME) {
-            db.open_table(TABLE_NAME).execute().await?
+            let existing = db.open_table(TABLE_NAME).execute().await?;
+            let schema = existing.schema().await?;
+            if has_correct_embed_dim(&schema) {
+                existing
+            } else {
+                tracing::warn!("Embedding dimension changed, recreating chunks table");
+                db.drop_table(TABLE_NAME, &[]).await?;
+                let schema = chunks_schema();
+                db.create_empty_table(TABLE_NAME, schema).execute().await?
+            }
         } else {
             let schema = chunks_schema();
             db.create_empty_table(TABLE_NAME, schema).execute().await?
@@ -512,7 +533,7 @@ mod tests {
             chunk_index,
             chunk_text: text.to_string(),
             md5sum: "abc123".to_string(),
-            embedding: vec![0.0_f32; 3072],
+            embedding: vec![0.0_f32; 1024],
         }
     }
 
@@ -665,7 +686,7 @@ mod tests {
             before: None,
         };
         let results = store
-            .search(&vec![0.0_f32; 3072], 5, Some(&filter))
+            .search(&vec![0.0_f32; 1024], 5, Some(&filter))
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -713,7 +734,7 @@ mod tests {
             chunk_index: 0,
             chunk_text: "hello".to_string(),
             md5sum: "abc".to_string(),
-            embedding: vec![0.0_f32; 3072],
+            embedding: vec![0.0_f32; 1024],
         }
     }
 
@@ -773,6 +794,82 @@ mod tests {
         let result = store.list_recent(since).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "docs/multi.md");
+    }
+
+    #[tokio::test]
+    async fn test_open_recreates_table_with_wrong_embed_dim() {
+        let dir = tempdir().unwrap();
+        // Create a table with the old 3072 schema
+        let db: Connection = lancedb::connect(dir.path().to_str().unwrap())
+            .execute()
+            .await
+            .unwrap();
+        let old_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("doc_id", DataType::Utf8, false),
+            Field::new("mime_type", DataType::Utf8, false),
+            Field::new("mtime", DataType::Int64, false),
+            Field::new("chunk_index", DataType::UInt32, false),
+            Field::new("chunk_text", DataType::Utf8, false),
+            Field::new("md5sum", DataType::Utf8, false),
+            Field::new(
+                "embedding",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    3072,
+                ),
+                false,
+            ),
+        ]));
+        db.create_empty_table(TABLE_NAME, old_schema)
+            .execute()
+            .await
+            .unwrap();
+        // Also create skipped_docs so open() doesn't fail
+        db.create_empty_table(SKIPPED_TABLE_NAME, skipped_schema())
+            .execute()
+            .await
+            .unwrap();
+        drop(db);
+
+        // Open should detect wrong dim and recreate
+        let store = RagStore::open(dir.path()).await.unwrap();
+
+        // Verify we can insert 1024-dim embeddings
+        let chunk = ChunkRecord {
+            id: "test:0".to_string(),
+            doc_id: "test".to_string(),
+            mime_type: "text/plain".to_string(),
+            mtime: 1_700_000_000,
+            chunk_index: 0,
+            chunk_text: "works".to_string(),
+            md5sum: "abc".to_string(),
+            embedding: vec![0.0_f32; 1024],
+        };
+        store.upsert_chunks(&[chunk]).await.unwrap();
+        let indexed = store.list_indexed().await.unwrap();
+        assert_eq!(indexed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_with_1024_dim_embedding() {
+        let dir = tempdir().unwrap();
+        let store = RagStore::open(dir.path()).await.unwrap();
+        let chunk = ChunkRecord {
+            id: "doc.md:0".to_string(),
+            doc_id: "doc.md".to_string(),
+            mime_type: "text/plain".to_string(),
+            mtime: 1_700_000_000,
+            chunk_index: 0,
+            chunk_text: "hello world".to_string(),
+            md5sum: "abc123".to_string(),
+            embedding: vec![0.0_f32; 1024],
+        };
+        store.upsert_chunks(&[chunk]).await.unwrap();
+
+        let indexed = store.list_indexed().await.unwrap();
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(indexed[0].doc_id, "doc.md");
     }
 
     #[tokio::test]

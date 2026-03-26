@@ -190,7 +190,7 @@ mod tests {
     #[async_trait::async_trait]
     impl Embedder for StubEmbedder {
         async fn embed_texts(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
-            Ok(texts.iter().map(|_| vec![0.0_f32; 3072]).collect())
+            Ok(texts.iter().map(|_| vec![0.0_f32; 1024]).collect())
         }
         async fn describe_image(&self, _image_b64: &str, _mime: &str) -> anyhow::Result<String> {
             Ok("a test image".to_string())
@@ -204,7 +204,7 @@ mod tests {
             .embed_texts(&["hello".to_string(), "world".to_string()])
             .await?;
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].len(), 3072);
+        assert_eq!(result[0].len(), 1024);
         Ok(())
     }
 }
