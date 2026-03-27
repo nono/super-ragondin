@@ -178,6 +178,7 @@ impl CodeModeEngine {
                             sync_dir_clone,
                             scratchpad_clone,
                             cozy_client_clone,
+                            None,
                         );
                         (id_clone, sandbox.execute(&code_clone))
                     }));

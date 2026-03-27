@@ -6,6 +6,7 @@ use serde_json::Value as SerdeValue;
 use super_ragondin_cozy_client::client::CozyClient;
 use super_ragondin_rag::{config::RagConfig, embedder::OpenRouterEmbedder, store::RagStore};
 
+use crate::interaction::UserInteraction;
 use crate::tools;
 
 /// Shared Rust state available to all JS native functions during a single execution.
@@ -22,6 +23,7 @@ pub struct SandboxContext {
     pub sync_dir: std::path::PathBuf,
     pub scratchpad: crate::tools::scratchpad::Scratchpad,
     pub cozy_client: Option<Arc<CozyClient>>,
+    pub interaction: Option<Arc<dyn UserInteraction>>,
 }
 
 thread_local! {
@@ -68,18 +70,20 @@ pub struct Sandbox {
     sync_dir: std::path::PathBuf,
     scratchpad: crate::tools::scratchpad::Scratchpad,
     cozy_client: Option<Arc<CozyClient>>,
+    interaction: Option<Arc<dyn UserInteraction>>,
 }
 
 #[allow(dead_code)]
 impl Sandbox {
-    /// Create a new sandbox with the given store, config, sync directory, scratchpad, and optional Cozy client.
+    /// Create a new sandbox with the given store, config, sync directory, scratchpad, optional Cozy client, and optional interaction backend.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         store: Arc<RagStore>,
         config: RagConfig,
         sync_dir: std::path::PathBuf,
         scratchpad: crate::tools::scratchpad::Scratchpad,
         cozy_client: Option<Arc<CozyClient>>,
+        interaction: Option<Arc<dyn UserInteraction>>,
     ) -> Self {
         Self {
             store,
@@ -87,6 +91,7 @@ impl Sandbox {
             sync_dir,
             scratchpad,
             cozy_client,
+            interaction,
         }
     }
 
@@ -109,6 +114,7 @@ impl Sandbox {
                 sync_dir: self.sync_dir.clone(),
                 scratchpad: Arc::clone(&self.scratchpad),
                 cozy_client: self.cozy_client.clone(),
+                interaction: self.interaction.clone(),
             });
         });
 
@@ -121,7 +127,6 @@ impl Sandbox {
         result
     }
 
-    #[allow(clippy::unused_self)]
     fn run_boa(&self, code: &str) -> Result<String, String> {
         let mut ctx = Context::default();
 
@@ -143,6 +148,10 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register scratchpad: {e}"))?;
         tools::send_mail::register(&mut ctx)
             .map_err(|e| format!("JS error: register sendMail: {e}"))?;
+        if self.interaction.is_some() {
+            tools::ask_user::register(&mut ctx)
+                .map_err(|e| format!("JS error: register askUser: {e}"))?;
+        }
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -178,6 +187,7 @@ mod tests {
             sync_dir.path().to_path_buf(),
             new_scratchpad(),
             None,
+            None, // no interaction in these tests
         );
         (sandbox, db_dir, sync_dir)
     }
@@ -404,12 +414,14 @@ mod tests {
             sync_dir.path().to_path_buf(),
             Arc::clone(&scratchpad),
             None,
+            None,
         );
         let sandbox_b = Sandbox::new(
             store_b,
             config_b,
             sync_dir.path().to_path_buf(),
             Arc::clone(&scratchpad),
+            None,
             None,
         );
         sandbox_a.execute(r#"remember("x", 42)"#)?;
@@ -439,6 +451,83 @@ mod tests {
         let result = sandbox.execute(r#"recall("k")"#)?;
         assert_eq!(result, r#""second""#);
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_ask_user_not_registered_without_interaction() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox.execute("typeof askUser").unwrap();
+        assert_eq!(
+            result, "\"undefined\"",
+            "askUser must not exist when no interaction provided"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_ask_user_registered_with_interaction() {
+        use crate::interaction::UserInteraction;
+        use crate::tools::scratchpad::new_scratchpad;
+
+        struct Always(String);
+        impl UserInteraction for Always {
+            fn ask(&self, _q: &str, _c: &[&str]) -> String {
+                self.0.clone()
+            }
+        }
+
+        let db_dir = tempdir().expect("db_dir");
+        let sync_dir = tempdir().expect("sync_dir");
+        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
+        let interaction: Arc<dyn crate::interaction::UserInteraction> =
+            Arc::new(Always("choice B".to_string()));
+        let sandbox = Sandbox::new(
+            store,
+            config,
+            sync_dir.path().to_path_buf(),
+            new_scratchpad(),
+            None,
+            Some(interaction),
+        );
+        let result = sandbox.execute("typeof askUser").unwrap();
+        assert_eq!(
+            result, "\"function\"",
+            "askUser must be a function when interaction is provided"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_ask_user_returns_interaction_answer() {
+        use crate::interaction::UserInteraction;
+        use crate::tools::scratchpad::new_scratchpad;
+
+        struct Always(String);
+        impl UserInteraction for Always {
+            fn ask(&self, _q: &str, _c: &[&str]) -> String {
+                self.0.clone()
+            }
+        }
+
+        let db_dir = tempdir().expect("db_dir");
+        let sync_dir = tempdir().expect("sync_dir");
+        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
+        let interaction: Arc<dyn crate::interaction::UserInteraction> =
+            Arc::new(Always("option two".to_string()));
+        let sandbox = Sandbox::new(
+            store,
+            config,
+            sync_dir.path().to_path_buf(),
+            new_scratchpad(),
+            None,
+            Some(interaction),
+        );
+        let result = sandbox
+            .execute(r#"askUser("Which style?", ["option one", "option two", "option three"])"#)
+            .unwrap();
+        // result is a JSON string (quoted)
+        let answer: String = serde_json::from_str(&result).unwrap();
+        assert_eq!(answer, "option two");
     }
 
     #[tokio::test(flavor = "multi_thread")]
