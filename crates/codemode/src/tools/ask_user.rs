@@ -1,11 +1,10 @@
-use crate::sandbox::SANDBOX_CTX;
 use boa_engine::{
-    Context, JsArgs, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string,
+    Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string,
 };
 
 /// Resolve a raw user input string against a choices list.
 ///
-/// If `input` is a decimal integer in range 1..=choices.len(), returns the
+/// If `input` is a decimal integer in range `1..=choices.len()`, returns the
 /// corresponding choice text. Otherwise returns `input` verbatim (trimmed).
 pub fn resolve_answer(input: &str, choices: &[&str]) -> String {
     let trimmed = input.trim();
