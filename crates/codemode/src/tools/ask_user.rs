@@ -6,6 +6,7 @@ use boa_engine::{
 ///
 /// If `input` is a decimal integer in range `1..=choices.len()`, returns the
 /// corresponding choice text. Otherwise returns `input` verbatim (trimmed).
+#[allow(dead_code)]
 pub fn resolve_answer(input: &str, choices: &[&str]) -> String {
     let trimmed = input.trim();
     if let Ok(n) = trimmed.parse::<usize>() && n >= 1 && n <= choices.len() {
@@ -20,6 +21,7 @@ pub fn resolve_answer(input: &str, choices: &[&str]) -> String {
 ///
 /// # Errors
 /// Returns error if the global function cannot be registered.
+#[allow(dead_code)]
 pub fn register(ctx: &mut Context) -> Result<(), JsError> {
     ctx.register_global_callable(
         js_string!("askUser"),
