@@ -340,7 +340,7 @@ pub async fn ask_question_from(
     let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
     rag_config.api_key = api_key;
 
-    let engine = CodeModeEngine::new(rag_config, config.sync_dir, None)
+    let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, None)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "✦ Ask: failed to create engine");
