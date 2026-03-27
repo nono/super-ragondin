@@ -324,6 +324,8 @@ pub async fn ask_question_from(
     use super_ragondin_codemode::engine::CodeModeEngine;
     use super_ragondin_rag::config::RagConfig;
 
+    tracing::info!(question, "✦ Ask: starting");
+
     let config = Config::load(config_path)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "No config".to_string())?;
@@ -340,9 +342,15 @@ pub async fn ask_question_from(
 
     let engine = CodeModeEngine::new(rag_config, config.sync_dir, None)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "✦ Ask: failed to create engine");
+            e.to_string()
+        })?;
 
-    engine.ask(question, None).await.map_err(|e| e.to_string())
+    engine.ask(question, None).await.map_err(|e| {
+        tracing::error!(error = %e, "✦ Ask: query failed");
+        e.to_string()
+    })
 }
 
 #[tauri::command]

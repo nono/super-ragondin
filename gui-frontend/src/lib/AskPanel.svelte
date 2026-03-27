@@ -54,7 +54,7 @@
   function friendlyError(err: string): string {
     if (err === 'NoApiKey') return 'No OpenRouter API key configured.'
     if (err === 'NoFilesIndexed') return 'No files indexed yet — waiting for first sync.'
-    return 'Something went wrong. Please try again.'
+    return `Something went wrong: ${err}`
   }
 
   function handleKeydown(e: KeyboardEvent) {

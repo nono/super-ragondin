@@ -107,6 +107,7 @@ impl CodeModeEngine {
         question: &str,
         context_dir: Option<std::path::PathBuf>,
     ) -> Result<String> {
+        tracing::info!(question, "✦ Ask: engine loop starting");
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -126,6 +127,11 @@ impl CodeModeEngine {
         let scratchpad = new_scratchpad();
 
         for iteration in 0..MAX_ITERATIONS {
+            tracing::debug!(
+                iteration,
+                model = model.as_str(),
+                "✦ Ask: sending request to OpenRouter"
+            );
             let body = serde_json::json!({
                 "model": model,
                 "messages": messages,
@@ -147,6 +153,11 @@ impl CodeModeEngine {
 
             let tool_calls = extract_tool_calls(&response);
             if !tool_calls.is_empty() {
+                tracing::info!(
+                    iteration,
+                    count = tool_calls.len(),
+                    "✦ Ask: executing tool calls"
+                );
                 messages.push(response["choices"][0]["message"].clone());
 
                 // Execute all tool calls concurrently (spawn_blocking requires 'static).
@@ -186,12 +197,19 @@ impl CodeModeEngine {
                     }));
                 }
             } else if let Some(text) = extract_text(&response) {
+                tracing::info!(
+                    iteration,
+                    answer_len = text.len(),
+                    "✦ Ask: finished with answer"
+                );
                 return Ok(text);
             } else {
+                tracing::error!(iteration, response = %response, "✦ Ask: unexpected response format");
                 anyhow::bail!("Unexpected response format from OpenRouter");
             }
 
             if iteration == MAX_ITERATIONS - 1 {
+                tracing::error!("✦ Ask: reached maximum iterations ({MAX_ITERATIONS})");
                 anyhow::bail!(
                     "Reached maximum tool-call iterations ({MAX_ITERATIONS}) without a final answer"
                 );
