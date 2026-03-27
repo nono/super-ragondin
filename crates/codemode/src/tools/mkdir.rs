@@ -19,18 +19,12 @@ pub fn register(ctx: &mut Context) -> Result<(), JsError> {
 
 fn mkdir_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     use boa_engine::JsArgs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let path = args
         .get_or_undefined(0)
         .to_string(ctx)?
-        .to_std_string_escaped();
-
-    if Path::new(&path).is_absolute() {
-        return Err(JsNativeError::error()
-            .with_message("path must be relative")
-            .into());
-    }
+        .to_std_string_lossy();
 
     if let Err(msg) = check_relative_path(&path) {
         return Err(JsNativeError::error().with_message(msg).into());

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
@@ -40,12 +40,6 @@ fn save_file_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         .filter(|v| !v.is_undefined() && !v.is_null())
         .and_then(|v| v.to_string(ctx).ok())
         .map_or_else(|| "utf8".to_string(), |s| s.to_std_string_escaped());
-
-    if Path::new(&path).is_absolute() {
-        return Err(JsNativeError::error()
-            .with_message("path must be relative")
-            .into());
-    }
 
     if let Err(msg) = check_relative_path(&path) {
         return Err(JsNativeError::error().with_message(msg).into());
