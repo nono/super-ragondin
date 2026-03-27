@@ -1,12 +1,14 @@
 use std::path::{Component, Path};
 
-/// Check that a relative path does not escape via `..` or root components.
+/// Check that a path is relative and does not escape via `..` or root
+/// components.
 ///
-/// Does not check whether the path is absolute — callers must do that
-/// separately with `Path::is_absolute()`.
+/// Rejects both absolute paths (those starting with `/`) and any path
+/// containing `..` segments.
 ///
 /// # Errors
-/// Returns `Err` with a message if the path contains a `ParentDir` or `RootDir` component.
+/// Returns `Err` with a message if the path is absolute or contains a
+/// `ParentDir` component.
 pub(crate) fn check_relative_path(path: &str) -> Result<(), &'static str> {
     for component in Path::new(path).components() {
         match component {
@@ -28,6 +30,12 @@ mod tests {
         assert!(check_relative_path("../etc/passwd").is_err());
         assert!(check_relative_path("notes/../../../etc").is_err());
         assert!(check_relative_path("a/b/../../..").is_err());
+    }
+
+    #[test]
+    fn test_rejects_absolute_path() {
+        assert!(check_relative_path("/etc/passwd").is_err());
+        assert!(check_relative_path("/tmp/file.txt").is_err());
     }
 
     #[test]

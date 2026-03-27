@@ -1,20 +1,9 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
 
+use super::path_utils::check_relative_path;
 use crate::sandbox::{SANDBOX_CTX, serde_to_jsvalue};
-
-fn check_relative_path(path: &str) -> Result<(), &'static str> {
-    for component in Path::new(path).components() {
-        match component {
-            Component::ParentDir | Component::RootDir => {
-                return Err("path escapes sync directory");
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
 
 /// Register the `listDirs(prefix?)` global function.
 ///
@@ -40,16 +29,10 @@ fn list_dirs_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
         prefix_val.to_string(ctx)?.to_std_string_lossy()
     };
 
-    if !prefix.is_empty() {
-        if Path::new(&prefix).is_absolute() {
-            return Err(JsNativeError::error()
-                .with_message("path must be relative")
-                .into());
-        }
-
-        if let Err(msg) = check_relative_path(&prefix) {
-            return Err(JsNativeError::error().with_message(msg).into());
-        }
+    if !prefix.is_empty()
+        && let Err(msg) = check_relative_path(&prefix)
+    {
+        return Err(JsNativeError::error().with_message(msg).into());
     }
 
     let sync_dir = SANDBOX_CTX.with(|cell| {
@@ -112,20 +95,5 @@ mod tests {
                 .to_std_string_escaped(),
             "function"
         );
-    }
-
-    #[test]
-    fn test_check_prefix_rejects_parent_dir() {
-        assert!(check_relative_path("../etc/passwd").is_err());
-        assert!(check_relative_path("notes/../../../etc").is_err());
-        assert!(check_relative_path("a/b/../../..").is_err());
-    }
-
-    #[test]
-    fn test_check_prefix_accepts_normal_paths() {
-        assert!(check_relative_path("notes/subdir").is_ok());
-        assert!(check_relative_path("./work").is_ok());
-        assert!(check_relative_path("photos").is_ok());
-        assert!(check_relative_path("a/b/c").is_ok());
     }
 }

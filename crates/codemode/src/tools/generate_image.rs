@@ -48,19 +48,9 @@ fn generate_image_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
 
     // Validate paths early — before any I/O or SANDBOX_CTX access
     if let Some(p) = &path_opt {
-        if Path::new(p).is_absolute() {
-            return Err(JsNativeError::error()
-                .with_message("path must be relative")
-                .into());
-        }
         check_relative_path(p).map_err(|e| JsNativeError::error().with_message(e))?;
     }
     if let Some(r) = &reference_opt {
-        if Path::new(r).is_absolute() {
-            return Err(JsNativeError::error()
-                .with_message("path must be relative")
-                .into());
-        }
         check_relative_path(r).map_err(|e| JsNativeError::error().with_message(e))?;
     }
 
