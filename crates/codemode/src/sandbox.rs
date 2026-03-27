@@ -134,6 +134,7 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register subAgent: {e}"))?;
         tools::save_file::register(&mut ctx)
             .map_err(|e| format!("JS error: register saveFile: {e}"))?;
+        tools::mkdir::register(&mut ctx).map_err(|e| format!("JS error: register mkdir: {e}"))?;
         tools::list_dirs::register(&mut ctx)
             .map_err(|e| format!("JS error: register listDirs: {e}"))?;
         tools::generate_image::register(&mut ctx)
@@ -232,6 +233,7 @@ mod tests {
             "getDocument",
             "subAgent",
             "saveFile",
+            "mkdir",
             "listDirs",
             "generateImage",
             "remember",
@@ -257,6 +259,14 @@ mod tests {
         let content = std::fs::read_to_string(sync_dir.path().join("hello.txt"))
             .expect("file should exist after saveFile");
         assert_eq!(content, "world");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mkdir_creates_directory() {
+        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let result = sandbox.execute(r#"mkdir("my-project/sub")"#).unwrap();
+        assert_eq!(result, "null");
+        assert!(sync_dir.path().join("my-project/sub").is_dir());
     }
 
     #[tokio::test(flavor = "multi_thread")]
