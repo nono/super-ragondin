@@ -117,7 +117,8 @@ impl CodeModeEngine {
 
         let context_msg = self.build_context_message(context_dir).await;
 
-        let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt()})];
+        let mut messages =
+            vec![serde_json::json!({"role": "system", "content": system_prompt(false)})];
         if let Some(ctx) = context_msg {
             messages.push(serde_json::json!({"role": "user", "content": ctx}));
         }
