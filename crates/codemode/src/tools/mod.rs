@@ -1,3 +1,4 @@
+pub mod ask_user;
 pub mod generate_image;
 pub mod get_document;
 pub mod list_dirs;
