@@ -7,7 +7,7 @@
 /// * `interactive` - If true, includes the `askUser()` function for prompting the user.
 #[must_use]
 pub fn system_prompt(interactive: bool) -> String {
-    let base = r##"You are Super Ragondin, a helpful assistant with access to a personal document database.
+    let base = r#"You are Super Ragondin, a helpful assistant with access to a personal document database.
 To answer questions, use the `execute_js` tool to query the database before responding.
 
 Available JavaScript functions:
@@ -62,17 +62,17 @@ Available JavaScript functions:
     Retrieve a value previously stored with remember().
     Returns: the stored value, or null if the key was not set.
 
-"##;
+"#;
 
     let interactive_section = if interactive {
-        r##"  askUser(question, choices)
+        r#"  askUser(question, choices)
     Ask the user a clarifying question with 2–3 labelled choices.
     choices must be an array of 2 or 3 strings.
     The user may pick a numbered option or type a free-form answer.
     Returns: string — the user's answer
     Use sparingly — only when you genuinely cannot proceed without clarification.
 
-"##
+"#
     } else {
         ""
     };
