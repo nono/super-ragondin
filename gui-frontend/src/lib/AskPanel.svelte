@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { marked } from 'marked'
-  import { commands } from '../bindings'
+  import { commands, events } from '../bindings'
 
-  type PanelState = 'loading' | 'no-api-key' | 'idle' | 'asking' | 'done' | 'error'
+  type PanelState = 'loading' | 'no-api-key' | 'idle' | 'asking' | 'clarifying' | 'done' | 'error'
 
   let state: PanelState = $state('loading')
   let suggestions: string[] = $state([])
@@ -11,12 +11,27 @@
   let lastQuestion: string = $state('')
   let answer: string = $state('')
   let errorMessage: string = $state('')
+  let clarifyQuestion: string = $state('')
+  let clarifyChoices: string[] = $state([])
+  let clarifyInput: string = $state('')
   let apiKeyInput: string = $state('')
   let savingKey: boolean = $state(false)
   let keyError: string | null = $state(null)
 
+  let unlistenAskUser: (() => void) | undefined
+
   onMount(async () => {
+    unlistenAskUser = await events.askUserEvent.listen((event) => {
+      clarifyQuestion = event.payload.question
+      clarifyChoices = event.payload.choices
+      clarifyInput = ''
+      state = 'clarifying'
+    })
     await loadSuggestions()
+  })
+
+  onDestroy(() => {
+    unlistenAskUser?.()
   })
 
   async function loadSuggestions() {
@@ -61,6 +76,23 @@
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       ask(question)
+    }
+  }
+
+  async function sendClarification(answer: string) {
+    if (!answer.trim()) return
+    state = 'asking'
+    const result = await commands.answerUser(answer)
+    if (result.status === 'error') {
+      errorMessage = result.error
+      state = 'error'
+    }
+  }
+
+  function handleClarifyKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void sendClarification(clarifyInput)
     }
   }
 
@@ -147,6 +179,36 @@
         Thinking…
       </div>
 
+    {:else if state === 'clarifying'}
+      <div class="message user">{lastQuestion}</div>
+      <div class="clarify-box">
+        <p class="clarify-question">{clarifyQuestion}</p>
+        <ul class="chips">
+          {#each clarifyChoices as choice, i}
+            <li>
+              <button class="chip" onclick={() => sendClarification(choice)}>
+                <span class="chip-arrow">{i + 1}.</span> {choice}
+              </button>
+            </li>
+          {/each}
+        </ul>
+        <div class="clarify-input-row">
+          <input
+            type="text"
+            bind:value={clarifyInput}
+            placeholder="Or type a custom answer…"
+            onkeydown={handleClarifyKeydown}
+          />
+          <button
+            class="send-btn"
+            onclick={() => sendClarification(clarifyInput)}
+            disabled={!clarifyInput.trim()}
+          >
+            Send
+          </button>
+        </div>
+      </div>
+
     {:else if state === 'done'}
       <div class="message user">{lastQuestion}</div>
       <div class="message assistant markdown">{@html marked(answer)}</div>
@@ -163,13 +225,13 @@
         type="text"
         bind:value={question}
         placeholder={state === 'done' || state === 'error' ? 'Ask another question…' : 'Ask anything about your files…'}
-        disabled={state === 'asking' || state === 'loading'}
+        disabled={state === 'asking' || state === 'clarifying' || state === 'loading'}
         onkeydown={handleKeydown}
       />
       <button
         class="send-btn"
         onclick={() => ask(question)}
-        disabled={state === 'asking' || state === 'loading' || !question.trim()}
+        disabled={state === 'asking' || state === 'clarifying' || state === 'loading' || !question.trim()}
       >
         Ask
       </button>
@@ -397,4 +459,37 @@
     cursor: pointer;
   }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .clarify-box {
+    background: #f7f7f3;
+    border: 1px solid #e0e0d8;
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .clarify-question {
+    font-size: 12px;
+    color: #333;
+    font-weight: 500;
+    margin: 0;
+  }
+  .clarify-input-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .clarify-input-row input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #333;
+    background: #fafafa;
+    outline: none;
+    font-family: inherit;
+  }
+  .clarify-input-row input:focus { border-color: #2f80ed; }
 </style>
