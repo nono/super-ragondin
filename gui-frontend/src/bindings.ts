@@ -61,6 +61,19 @@ async askQuestion(question: string) : Promise<Result<string, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Deliver the user's answer to a pending `askUser()` call in the codemode sandbox.
+ * 
+ * If no `askUser()` call is pending (no sender waiting), this is a no-op.
+ */
+async answerUser(answer: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("answer_user", { answer }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -68,10 +81,12 @@ async askQuestion(question: string) : Promise<Result<string, string>> {
 
 
 export const events = __makeEvents__<{
+askUserEvent: AskUserEvent,
 authCompleteEvent: AuthCompleteEvent,
 authErrorEvent: AuthErrorEvent,
 syncStatusEvent: SyncStatusEvent
 }>({
+askUserEvent: "ask-user-event",
 authCompleteEvent: "auth-complete-event",
 authErrorEvent: "auth-error-event",
 syncStatusEvent: "sync-status-event"
@@ -90,6 +105,10 @@ syncStatusEvent: "sync-status-event"
  * these string values are matched verbatim in `App.svelte`.
  */
 export type AppState = "Unconfigured" | "Unauthenticated" | "Ready"
+/**
+ * Payload emitted when the agent needs the user to pick a clarification choice.
+ */
+export type AskUserEvent = { question: string; choices: string[] }
 /**
  * Emitted when OAuth completes successfully.
  */
