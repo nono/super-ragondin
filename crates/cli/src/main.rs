@@ -290,6 +290,37 @@ fn run_sync_cycle(
     Ok(())
 }
 
+/// Resolve a raw user input string against a choices list.
+///
+/// If `input` is a decimal integer in range `1..=choices.len()`, returns the
+/// corresponding choice text. Otherwise returns `input` verbatim (trimmed).
+fn resolve_answer(input: &str, choices: &[&str]) -> String {
+    let trimmed = input.trim();
+    if let Ok(n) = trimmed.parse::<usize>() {
+        if n >= 1 && n <= choices.len() {
+            return choices[n - 1].to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+struct CliInteraction;
+
+impl super_ragondin_codemode::interaction::UserInteraction for CliInteraction {
+    fn ask(&self, question: &str, choices: &[&str]) -> String {
+        use std::io::Write as _;
+        println!("\n{question}");
+        for (i, c) in choices.iter().enumerate() {
+            println!("  {}. {}", i + 1, c);
+        }
+        print!("\nYour answer (number or free text): ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        resolve_answer(&line, choices)
+    }
+}
+
 fn cmd_ask(args: &[String]) -> Result<()> {
     use super_ragondin_codemode::engine::CodeModeEngine;
     use super_ragondin_rag::config::RagConfig;
@@ -342,7 +373,10 @@ fn cmd_ask(args: &[String]) -> Result<()> {
     let cozy_client = open_client(&config).ok().map(std::sync::Arc::new);
 
     rt.block_on(async {
-        let engine = CodeModeEngine::new(rag_config, config.sync_dir, cozy_client, None)
+        let interaction: Option<
+            std::sync::Arc<dyn super_ragondin_codemode::interaction::UserInteraction>,
+        > = Some(std::sync::Arc::new(CliInteraction));
+        let engine = CodeModeEngine::new(rag_config, config.sync_dir, cozy_client, interaction)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
@@ -402,4 +436,33 @@ fn cmd_status() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_resolve_number_picks_choice() {
+        assert_eq!(resolve_answer("2", &["alpha", "beta", "gamma"]), "beta");
+    }
+
+    #[test]
+    fn test_cli_resolve_first() {
+        assert_eq!(resolve_answer("1", &["yes", "no"]), "yes");
+    }
+
+    #[test]
+    fn test_cli_resolve_out_of_range_verbatim() {
+        assert_eq!(resolve_answer("0", &["a", "b"]), "0");
+        assert_eq!(resolve_answer("4", &["a", "b", "c"]), "4");
+    }
+
+    #[test]
+    fn test_cli_resolve_freeform() {
+        assert_eq!(
+            resolve_answer("my custom answer", &["a", "b"]),
+            "my custom answer"
+        );
+    }
 }
