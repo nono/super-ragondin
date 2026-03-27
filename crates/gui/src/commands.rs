@@ -41,6 +41,11 @@ pub struct AskUserEvent {
 }
 
 /// Managed state holding the pending `Sender` for `answer_user`.
+///
+/// # Known Limitation
+/// If two `askUser()` JS calls fire concurrently in the same iteration, the second call
+/// overwrites the first sender — the first pending call receives an empty string. This is
+/// a known limitation.
 #[derive(Default)]
 pub struct AskUserState {
     pub sender: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>>,
