@@ -1,6 +1,6 @@
-use boa_engine::{
-    Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string,
-};
+use crate::sandbox::SANDBOX_CTX;
+use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
+use std::sync::Arc;
 
 /// Resolve a raw user input string against a choices list.
 ///
@@ -9,7 +9,10 @@ use boa_engine::{
 #[allow(dead_code)]
 pub fn resolve_answer(input: &str, choices: &[&str]) -> String {
     let trimmed = input.trim();
-    if let Ok(n) = trimmed.parse::<usize>() && n >= 1 && n <= choices.len() {
+    if let Ok(n) = trimmed.parse::<usize>()
+        && n >= 1
+        && n <= choices.len()
+    {
         return choices[n - 1].to_string();
     }
     trimmed.to_string()
@@ -31,11 +34,53 @@ pub fn register(ctx: &mut Context) -> Result<(), JsError> {
     Ok(())
 }
 
-fn ask_user_fn(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
-    // Full implementation added in Task 3 when SandboxContext::interaction field exists
-    Err(JsNativeError::error()
-        .with_message("askUser not available")
-        .into())
+fn ask_user_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    use crate::sandbox::jsvalue_to_serde;
+    use boa_engine::JsArgs;
+
+    let question = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_lossy();
+
+    let choices_js = args.get_or_undefined(1);
+    let choices_serde = jsvalue_to_serde(choices_js.clone(), ctx);
+    let choices_vec: Vec<String> = match &choices_serde {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => {
+            return Err(JsNativeError::typ()
+                .with_message("askUser: choices must be an array")
+                .into());
+        }
+    };
+
+    if choices_vec.len() < 2 || choices_vec.len() > 3 {
+        return Err(JsNativeError::range()
+            .with_message(format!(
+                "askUser: choices must have 2 or 3 entries, got {}",
+                choices_vec.len()
+            ))
+            .into());
+    }
+
+    let interaction = SANDBOX_CTX.with(|cell| {
+        let borrow = cell.borrow();
+        let sandbox = borrow.as_ref().ok_or_else(|| {
+            JsNativeError::error().with_message("sandbox context not initialized")
+        })?;
+        sandbox
+            .interaction
+            .clone()
+            .ok_or_else(|| JsNativeError::error().with_message("askUser not available"))
+    })?;
+
+    let choices_refs: Vec<&str> = choices_vec.iter().map(String::as_str).collect();
+    let answer = interaction.ask(&question, &choices_refs);
+
+    Ok(JsValue::from(js_string!(answer)))
 }
 
 #[cfg(test)]
