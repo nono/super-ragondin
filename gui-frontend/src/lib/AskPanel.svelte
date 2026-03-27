@@ -186,7 +186,7 @@
         <ul class="chips">
           {#each clarifyChoices as choice, i}
             <li>
-              <button class="chip" onclick={() => sendClarification(choice)}>
+              <button class="chip" onclick={() => void sendClarification(choice)}>
                 <span class="chip-arrow">{i + 1}.</span> {choice}
               </button>
             </li>
@@ -201,7 +201,7 @@
           />
           <button
             class="send-btn"
-            onclick={() => sendClarification(clarifyInput)}
+            onclick={() => void sendClarification(clarifyInput)}
             disabled={!clarifyInput.trim()}
           >
             Send
