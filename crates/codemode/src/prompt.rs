@@ -65,14 +65,14 @@ Available JavaScript functions:
 "#;
 
     let interactive_section = if interactive {
-        r#"  askUser(question, choices)
+        r"  askUser(question, choices)
     Ask the user a clarifying question with 2–3 labelled choices.
     choices must be an array of 2 or 3 strings.
     The user may pick a numbered option or type a free-form answer.
     Returns: string — the user's answer
     Use sparingly — only when you genuinely cannot proceed without clarification.
 
-"#
+"
     } else {
         ""
     };

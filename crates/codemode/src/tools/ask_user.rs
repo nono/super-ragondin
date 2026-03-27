@@ -5,6 +5,7 @@ use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunct
 ///
 /// If `input` is a decimal integer in range `1..=choices.len()`, returns the
 /// corresponding choice text. Otherwise returns `input` verbatim (trimmed).
+#[must_use]
 pub fn resolve_answer(input: &str, choices: &[&str]) -> String {
     let trimmed = input.trim();
     if let Ok(n) = trimmed.parse::<usize>()
