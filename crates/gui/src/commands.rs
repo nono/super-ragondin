@@ -334,15 +334,13 @@ pub fn get_recent_files() -> Result<Vec<String>, String> {
     get_recent_files_from(&config.store_dir(), &config.sync_dir)
 }
 
-/// Testable core: loads config from `config_path`, runs `CodeModeEngine`.
-pub async fn ask_question_from(
-    question: &str,
+/// Load config and build a `RagConfig` from `config_path`.
+///
+/// Returns `Err` if there is no config or no API key.
+fn load_rag_config(
     config_path: &std::path::Path,
-) -> Result<String, String> {
-    use super_ragondin_codemode::engine::CodeModeEngine;
+) -> Result<(super_ragondin_rag::config::RagConfig, Config), String> {
     use super_ragondin_rag::config::RagConfig;
-
-    tracing::info!(question, "✦ Ask: starting");
 
     let config = Config::load(config_path)
         .map_err(|e| e.to_string())?
@@ -357,6 +355,20 @@ pub async fn ask_question_from(
 
     let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
     rag_config.api_key = api_key;
+
+    Ok((rag_config, config))
+}
+
+/// Testable core: loads config from `config_path`, runs `CodeModeEngine`.
+pub async fn ask_question_from(
+    question: &str,
+    config_path: &std::path::Path,
+) -> Result<String, String> {
+    use super_ragondin_codemode::engine::CodeModeEngine;
+
+    tracing::info!(question, "✦ Ask: starting");
+
+    let (rag_config, config) = load_rag_config(config_path)?;
 
     let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, None)
         .await
@@ -424,21 +436,8 @@ pub async fn ask_question(
 ) -> Result<String, String> {
     use super_ragondin_codemode::engine::CodeModeEngine;
     use super_ragondin_codemode::interaction::UserInteraction;
-    use super_ragondin_rag::config::RagConfig;
 
-    let config = Config::load(&config_path())
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "No config".to_string())?;
-
-    let api_key = config
-        .api_key
-        .as_deref()
-        .filter(|k| !k.is_empty())
-        .ok_or_else(|| "NoApiKey".to_string())?
-        .to_string();
-
-    let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
-    rag_config.api_key = api_key;
+    let (rag_config, config) = load_rag_config(&config_path())?;
 
     let interaction: std::sync::Arc<dyn UserInteraction> =
         std::sync::Arc::new(GuiInteraction { app_handle });
@@ -453,21 +452,8 @@ pub async fn ask_question(
 /// Testable core: loads config from `config_path`, runs `SuggestionEngine`.
 pub async fn get_suggestions_from(config_path: &std::path::Path) -> Result<Vec<String>, String> {
     use super_ragondin_codemode::suggestions::{NoFilesIndexed, SuggestionEngine};
-    use super_ragondin_rag::config::RagConfig;
 
-    let config = Config::load(config_path)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "No config".to_string())?;
-
-    let api_key = config
-        .api_key
-        .as_deref()
-        .filter(|k| !k.is_empty())
-        .ok_or_else(|| "NoApiKey".to_string())?
-        .to_string();
-
-    let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
-    rag_config.api_key = api_key;
+    let (rag_config, config) = load_rag_config(config_path)?;
 
     let engine = SuggestionEngine::new(rag_config, config.sync_dir)
         .await

@@ -106,6 +106,7 @@ impl CodeModeEngine {
     ///
     /// # Errors
     /// Returns error if the `OpenRouter` API call fails or the iteration limit is reached.
+    #[allow(clippy::too_many_lines)]
     pub async fn ask(
         &self,
         question: &str,

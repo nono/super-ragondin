@@ -79,11 +79,14 @@
     }
   }
 
-  async function sendClarification(answer: string) {
-    if (!answer.trim()) return
+  async function sendClarification(input: string) {
+    if (!input.trim()) return
     state = 'asking'
-    const result = await commands.answerUser(answer)
-    if (result.status === 'error') {
+    const result = await commands.answerUser(input)
+    if (result.status === 'ok') {
+      answer = result.data
+      state = 'done'
+    } else {
       errorMessage = result.error
       state = 'error'
     }
