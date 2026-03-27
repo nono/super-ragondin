@@ -8,6 +8,7 @@ use super_ragondin_rag::{
 
 use super_ragondin_cozy_client::client::CozyClient;
 
+use crate::interaction::UserInteraction;
 use crate::prompt::system_prompt;
 use crate::sandbox::Sandbox;
 use crate::tools::scratchpad::new_scratchpad;
@@ -75,6 +76,7 @@ pub struct CodeModeEngine {
     config: RagConfig,
     sync_dir: std::path::PathBuf,
     cozy_client: Option<Arc<CozyClient>>,
+    interaction: Option<Arc<dyn UserInteraction>>,
 }
 
 impl CodeModeEngine {
@@ -86,6 +88,7 @@ impl CodeModeEngine {
         config: RagConfig,
         sync_dir: std::path::PathBuf,
         cozy_client: Option<Arc<CozyClient>>,
+        interaction: Option<Arc<dyn UserInteraction>>,
     ) -> Result<Self> {
         let store = Arc::new(RagStore::open(&config.db_path).await?);
         Ok(Self {
@@ -93,6 +96,7 @@ impl CodeModeEngine {
             config,
             sync_dir,
             cozy_client,
+            interaction,
         })
     }
 
@@ -117,8 +121,10 @@ impl CodeModeEngine {
 
         let context_msg = self.build_context_message(context_dir).await;
 
-        let mut messages =
-            vec![serde_json::json!({"role": "system", "content": system_prompt(false)})];
+        let mut messages = vec![
+            serde_json::json!({"role": "system", "content": system_prompt(self.interaction.is_some())}),
+        ];
+
         if let Some(ctx) = context_msg {
             messages.push(serde_json::json!({"role": "user", "content": ctx}));
         }
@@ -170,6 +176,7 @@ impl CodeModeEngine {
                     let sync_dir_clone = self.sync_dir.clone();
                     let scratchpad_clone = Arc::clone(&scratchpad);
                     let cozy_client_clone = self.cozy_client.clone();
+                    let interaction_clone = self.interaction.clone();
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
@@ -179,7 +186,7 @@ impl CodeModeEngine {
                             sync_dir_clone,
                             scratchpad_clone,
                             cozy_client_clone,
-                            None,
+                            interaction_clone,
                         );
                         (id_clone, sandbox.execute(&code_clone))
                     }));
@@ -281,6 +288,7 @@ mod tests {
             config,
             sync_dir: sync_dir.path().to_path_buf(),
             cozy_client: None,
+            interaction: None,
         };
         (engine, db_dir, sync_dir)
     }
@@ -438,5 +446,54 @@ mod tests {
         assert!(extract_tool_calls(&response).is_empty());
         let text = extract_text(&response).unwrap();
         assert_eq!(text, "The answer is 42.");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_engine_passes_interaction_to_sandbox() {
+        use crate::interaction::UserInteraction;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        struct FlagInteraction(Arc<AtomicBool>);
+        impl UserInteraction for FlagInteraction {
+            fn ask(&self, _q: &str, _c: &[&str]) -> String {
+                self.0.store(true, Ordering::SeqCst);
+                "yes".to_string()
+            }
+        }
+
+        let db_dir = tempfile::tempdir().expect("db_dir");
+        let sync_dir = tempfile::tempdir().expect("sync_dir");
+        let store = super_ragondin_rag::store::RagStore::open(db_dir.path())
+            .await
+            .expect("store");
+        let config = super_ragondin_rag::config::RagConfig::from_env_with_db_path(
+            db_dir.path().to_path_buf(),
+        );
+        let flag = Arc::new(AtomicBool::new(false));
+        let interaction: Arc<dyn UserInteraction> = Arc::new(FlagInteraction(Arc::clone(&flag)));
+
+        let engine = CodeModeEngine {
+            store: Arc::new(store),
+            config,
+            sync_dir: sync_dir.path().to_path_buf(),
+            cozy_client: None,
+            interaction: Some(interaction),
+        };
+
+        // Build a sandbox directly and verify askUser is registered
+        use crate::tools::scratchpad::new_scratchpad;
+        let sandbox = crate::sandbox::Sandbox::new(
+            Arc::clone(&engine.store),
+            engine.config.clone(),
+            engine.sync_dir.clone(),
+            new_scratchpad(),
+            None,
+            engine.interaction.clone(),
+        );
+        let result = sandbox.execute("typeof askUser").unwrap();
+        assert_eq!(result, "\"function\"");
     }
 }
