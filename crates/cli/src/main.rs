@@ -290,20 +290,6 @@ fn run_sync_cycle(
     Ok(())
 }
 
-/// Resolve a raw user input string against a choices list.
-///
-/// If `input` is a decimal integer in range `1..=choices.len()`, returns the
-/// corresponding choice text. Otherwise returns `input` verbatim (trimmed).
-fn resolve_answer(input: &str, choices: &[&str]) -> String {
-    let trimmed = input.trim();
-    if let Ok(n) = trimmed.parse::<usize>() {
-        if n >= 1 && n <= choices.len() {
-            return choices[n - 1].to_string();
-        }
-    }
-    trimmed.to_string()
-}
-
 struct CliInteraction;
 
 impl super_ragondin_codemode::interaction::UserInteraction for CliInteraction {
@@ -317,7 +303,7 @@ impl super_ragondin_codemode::interaction::UserInteraction for CliInteraction {
         std::io::stdout().flush().ok();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).ok();
-        resolve_answer(&line, choices)
+        super_ragondin_codemode::tools::ask_user::resolve_answer(&line, choices)
     }
 }
 
@@ -440,7 +426,7 @@ fn cmd_status() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super_ragondin_codemode::tools::ask_user::resolve_answer;
 
     #[test]
     fn test_cli_resolve_number_picks_choice() {
