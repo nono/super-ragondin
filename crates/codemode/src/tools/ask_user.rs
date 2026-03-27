@@ -1,6 +1,5 @@
 use crate::sandbox::SANDBOX_CTX;
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
-use std::sync::Arc;
 
 /// Resolve a raw user input string against a choices list.
 ///
