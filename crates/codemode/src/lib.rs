@@ -4,7 +4,7 @@ pub(crate) mod llm;
 pub mod prompt;
 pub(crate) mod sandbox;
 pub mod suggestions;
-pub(crate) mod tools;
+pub mod tools;
 
 #[cfg(test)]
 mod interaction_trait_test {
