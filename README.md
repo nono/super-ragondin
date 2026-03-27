@@ -87,6 +87,10 @@ RUST_LOG=info super-ragondin watch
 RUST_LOG=debug super-ragondin sync
 ```
 
+Log files are written to `$XDG_STATE_HOME/super-ragondin/` (or
+`~/.local/state/super-ragondin/` by default). They use daily rotation with
+JSONL format, named like `super-ragondin-cli.2026-03-27.jsonl`.
+
 ## What would be needed for a full client
 
 There are a lot of things that are out of the scope for this proof of concept.
