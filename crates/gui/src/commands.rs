@@ -33,6 +33,19 @@ pub struct AuthErrorEvent {
     pub message: String,
 }
 
+/// Payload emitted when the agent needs the user to pick a clarification choice.
+#[derive(Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct AskUserEvent {
+    pub question: String,
+    pub choices: Vec<String>,
+}
+
+/// Managed state holding the pending `Sender` for `answer_user`.
+#[derive(Default)]
+pub struct AskUserState {
+    pub sender: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>>,
+}
+
 /// Extract `(code, state)` from an HTTP GET request line.
 ///
 /// Input: `"GET /callback?code=X&state=Y HTTP/1.1"`
@@ -353,10 +366,83 @@ pub async fn ask_question_from(
     })
 }
 
+/// Deliver the user's answer to a pending `askUser()` call in the codemode sandbox.
+///
+/// If no `askUser()` call is pending (no sender waiting), this is a no-op.
 #[tauri::command]
 #[specta::specta]
-pub async fn ask_question(question: String) -> Result<String, String> {
-    ask_question_from(&question, &config_path()).await
+pub fn answer_user(answer: String, state: tauri::State<AskUserState>) -> Result<(), String> {
+    let mut guard = state
+        .sender
+        .lock()
+        .map_err(|e| format!("mutex poisoned: {e}"))?;
+    if let Some(tx) = guard.take() {
+        tx.send(answer).ok();
+    }
+    Ok(())
+}
+
+/// GUI backend for `UserInteraction`: emits a Tauri event and blocks until
+/// `answer_user` delivers the response via an `mpsc` channel.
+pub struct GuiInteraction {
+    pub app_handle: tauri::AppHandle,
+}
+
+impl super_ragondin_codemode::interaction::UserInteraction for GuiInteraction {
+    fn ask(&self, question: &str, choices: &[&str]) -> String {
+        use tauri::Emitter as _;
+        use tauri::Manager as _;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let state = self.app_handle.state::<AskUserState>();
+        {
+            let mut guard = state.sender.lock().expect("AskUserState mutex poisoned");
+            *guard = Some(tx);
+        }
+        self.app_handle
+            .emit(
+                AskUserEvent::NAME,
+                AskUserEvent {
+                    question: question.to_string(),
+                    choices: choices.iter().map(|s| s.to_string()).collect(),
+                },
+            )
+            .ok();
+        rx.recv().unwrap_or_default()
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn ask_question(
+    question: String,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    use super_ragondin_codemode::engine::CodeModeEngine;
+    use super_ragondin_codemode::interaction::UserInteraction;
+    use super_ragondin_rag::config::RagConfig;
+
+    let config = Config::load(&config_path())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No config".to_string())?;
+
+    let api_key = config
+        .api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "NoApiKey".to_string())?
+        .to_string();
+
+    let mut rag_config = RagConfig::from_env_with_db_path(config.rag_dir());
+    rag_config.api_key = api_key;
+
+    let interaction: std::sync::Arc<dyn UserInteraction> =
+        std::sync::Arc::new(GuiInteraction { app_handle });
+
+    let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, Some(interaction))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    engine.ask(&question, None).await.map_err(|e| e.to_string())
 }
 
 /// Testable core: loads config from `config_path`, runs `SuggestionEngine`.
@@ -409,11 +495,13 @@ pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
             get_recent_files,
             get_suggestions,
             ask_question,
+            answer_user,
         ])
         .events(tauri_specta::collect_events![
             AuthCompleteEvent,
             AuthErrorEvent,
             SyncStatusEvent,
+            AskUserEvent,
         ])
 }
 
@@ -1031,6 +1119,14 @@ mod tests {
 
         let result = set_api_key_to("sk-x".to_string(), &config_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_answer_user_no_pending_sender_is_noop() {
+        // AskUserState with no sender — answer_user should not panic
+        let state = AskUserState::default();
+        let mut guard = state.sender.lock().unwrap();
+        assert!(guard.take().is_none());
     }
 
     #[tokio::test]
