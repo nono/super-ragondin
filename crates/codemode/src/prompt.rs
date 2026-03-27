@@ -32,6 +32,10 @@ Available JavaScript functions:
     Creates intermediate directories automatically.
     Returns: null
 
+  mkdir(path)
+    Create a directory (and any intermediate directories) in the sync directory.
+    Returns: null
+
   listDirs(prefix?)
     Non-recursive: list only immediate subdirectory names at a given path within the sync directory.
     Returns: string[] — directory names only, sorted alphabetically
@@ -92,6 +96,10 @@ listDirs()
 const dirs = listDirs("work");
 // dirs might be ["meetings", "projects"]
 
+// Create a folder to organize output
+mkdir("linkedin-2026-03-27")
+saveFile("linkedin-2026-03-27/draft1.md", "# Draft 1\n\n...")
+
 // Save a text summary
 saveFile("notes/summary.md", "# Summary\n\nKey points...", { encoding: "utf8" })
 
@@ -123,6 +131,7 @@ mod tests {
         assert!(p.contains("getDocument("));
         assert!(p.contains("subAgent("));
         assert!(p.contains("saveFile("));
+        assert!(p.contains("mkdir("));
         assert!(p.contains("listDirs("));
         assert!(p.contains("generateImage("));
         assert!(p.contains("remember("));
