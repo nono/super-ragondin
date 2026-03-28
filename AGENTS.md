@@ -21,144 +21,34 @@ cargo build                   # Build the project
 cargo fmt --all               # Format the code
 cargo test -q                 # Run tests
 cargo clippy --all-features   # Run linter (pedantic + nursery enabled)
-cargo test --test integration_tests -- --ignored                              # Run integration tests (requires cozy-stack serve)
-cargo build -p super-ragondin-gui --no-default-features --features custom-protocol  # Build GUI binary for E2E tests
-xvfb-run cargo test -p gui-e2e -- --ignored                                  # Run GUI E2E tests (requires tauri-driver + WebKitWebDriver + xvfb)
-UPDATE_SNAPSHOTS=1 xvfb-run cargo test -p gui-e2e -- --ignored               # Update visual regression baselines
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `PROPTEST_CASES` | `50` | Number of cases for proptest-based simulator tests (set to `500` in CI via `.github/workflows/ci.yml`) |
-| `UPDATE_SNAPSHOTS` | unset | Set to `1` to overwrite visual regression baselines instead of comparing |
-
-### Cozy-stack
-
-We can start the cozy-stack server, create an instance (aka a cozy or a user), then register an OAuth client, and get an access token.
-
-```bash
-cozy-stack serve
-cozy-stack instances add alice.localhost:8080 --passphrase cozy --apps home,drive --email alice@cozy.localhost --public-name Alice
-CLIENT_ID=$(cozy-stack instances client-oauth alice.localhost:8080 http://localhost/ desktop-ng github.com/nono/cozy-desktop-experiments)
-TOKEN=$(cozy-stack instances token-oauth alice.localhost:8080 $CLIENT_ID "io.cozy.files")
-```
-
-Don't forget to clean the instance when you have finished with:
-
-```bash
-cozy-stack instances rm --force alice.localhost:8080
 ```
 
 ## Project Structure
 
-Cargo workspace with crates and a Svelte frontend:
-
-- `crates/gui/` (`super-ragondin-gui`) - Tauri v2 desktop GUI binary
-  - `src/main.rs` - Tauri builder setup, registers commands and managed state
-  - `src/commands.rs` - All Tauri commands (`get_app_state`, `init_config`, `start_auth`, `start_sync`) + sync loop
-  - `tauri.conf.json` - Window size, frontend paths, app identifier
-  - `capabilities/default.json` - Tauri capability declarations
-- `gui-frontend/` - Svelte 5 + Vite frontend for the GUI
-  - `src/App.svelte` - State machine (Unconfigured → Unauthenticated → Ready)
-  - `src/lib/Setup.svelte` - Setup form (instance URL + sync directory)
-  - `src/lib/Auth.svelte` - OAuth wait screen with retry
-  - `src/lib/Syncing.svelte` - Sync status screen
-- `crates/cli/` (`super-ragondin`) - CLI binary entry point
-- `crates/sync/` (`super-ragondin-sync`) - File synchronization library
-  - `src/config.rs` - Configuration (with `src/config/` submodules)
-  - `src/error.rs` - Error types
-  - `src/ignore.rs` - `IgnoreRules` — gitignore-style file filtering (wraps `ignore` crate)
-  - `src/logging.rs` - File-based tracing appender setup
-  - `src/model.rs` - Core data types (Node, NodeId, SyncOp)
-  - `src/planner.rs` - Sync operation planning
-  - `src/util.rs` - Shared utilities (e.g. MD5 helpers, serde helpers)
-  - `src/local.rs` - Local filesystem watching (with `src/local/` submodules)
-  - `src/remote.rs` - Remote Cozy API client (with `src/remote/` submodules)
-  - `src/store.rs` - Persistent storage via fjall (with `src/store/` submodules)
-  - `src/sync.rs` - Sync engine (with `src/sync/` submodules)
-  - `src/simulator.rs` - Property-based testing simulator (with `src/simulator/` submodules)
-  - `src/watcher_mux.rs` - `SyncTrigger` enum + `start_watchers()` — shared by CLI and GUI; add watch-loop primitives here, not in the binaries
-  - `tests/` - Integration tests
-- `crates/rag/` (`super-ragondin-rag`) - RAG indexing and search
-  - `src/config.rs` - `RagConfig` — loads env vars, holds model names + LanceDB path
-  - `src/store.rs` - `RagStore` — LanceDB wrapper: schema, upsert, delete, vector search; `MetadataFilter`, `DocInfo`, `ChunkInfo`, `DocSort`
-  - `src/embedder.rs` - `Embedder` trait + `OpenRouterEmbedder` — text embeddings + vision descriptions
-  - `src/extractor/` - Text extraction by MIME type (plaintext, PDF, DOCX/ODT/XLSX, images)
-  - `src/chunker.rs` - `chunk_text(text, mime)` — chonkie-based chunking (sentence/recursive/token)
-  - `src/indexer.rs` - `reconcile()` — diffs synced records vs LanceDB, indexes new/changed/deleted files
-  - `src/searcher.rs` - `search()` — embeds question, queries LanceDB, returns ranked chunks
-- `crates/codemode/` (`super-ragondin-codemode`) - JS sandbox + LLM tool-use loop for `ask` command
-  - `src/prompt.rs` - `system_prompt()` — system prompt explaining JS API + examples
-  - `src/sandbox.rs` - `SandboxContext` thread-local, `jsvalue_to_serde`/`serde_to_jsvalue` helpers, `Sandbox` struct (fresh Boa context per call)
-  - `src/tools/search.rs` - `search(query, options?)` JS global — vector search via embedder + RagStore
-  - `src/tools/list_files.rs` - `listFiles(options?)` JS global — metadata-based file discovery
-  - `src/tools/get_document.rs` - `getDocument(docId)` JS global — all chunks for a document
-  - `src/tools/sub_agent.rs` - `subAgent(systemPrompt, userPrompt)` JS global — cheap sub-LLM call
-  - `src/tools/save_file.rs` - `saveFile(path, content, options?)` JS global — write files into sync_dir (utf8/base64 encoding, path traversal prevention)
-  - `src/tools/list_dirs.rs` - `listDirs(prefix?)` JS global — list immediate subdirectory names at a path within sync_dir
-  - `src/tools/generate_image.rs` - `generateImage(prompt, options?)` JS global — image generation via OpenRouter, returns base64 string, optionally saves to sync_dir
-  - `src/tools/path_utils.rs` - `check_relative_path()` — shared path traversal validation used by `save_file` and `generate_image`
-  - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
-  - `src/engine.rs` - `CodeModeEngine` — OpenRouter tool-use loop (max 10 iterations, execute_js tool)
-- `crates/gui-e2e/` (`gui-e2e`) - GUI end-to-end tests via WebDriver
-  - `src/lib.rs` - Helpers: `start_tauri_driver()`, `connect_driver()`, `save_screenshot()`, `ConfigGuard` (writes/restores test config)
-  - `tests/setup_screen.rs` - Setup screen (Unconfigured state) rendering test with screenshot
-  - `tests/auth_screen.rs` - Auth screen (Unauthenticated state) rendering test; uses a TCP listener to keep OAuth in waiting state
-  - `tests/main_layout_screen.rs` - MainLayout screen (Ready state) rendering test; uses a fake config with access token
-
-## Findings
-
-- Proptest regression files (`*.proptest-regressions`) must be kept and checked into source control — they ensure known failure cases are always re-tested
-- reqwest requires `rustls-tls` feature instead of default (native-tls) to avoid OpenSSL system dependency
-- Clippy pedantic warns about "CouchDB" needing backticks in doc comments
-- LanceDB (0.20+) requires `protoc` (Protocol Buffers compiler) at build time — install via `apt install protobuf-compiler` or set `PROTOC=/path/to/protoc`
-- LanceDB 0.20 resolved to arrow 55, not arrow 54 — use `arrow-array = "55"` and `arrow-schema = "55"` in Cargo.toml
-- `infer` crate only detects MIME by magic bytes, not file extension — plain text files (`.txt`, `.md`, `.csv`) need an extension-based fallback in `detect_mime()`
-- chonkie 0.1.1 feature is `tiktoken` (not `tiktoken-rs`)
-- Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
-- Tauri v2 on Linux requires system packages: `pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev` — install via `sudo apt install` before building `crates/gui`
-- Tauri v2 custom commands registered via `invoke_handler` are covered by `core:default` in capabilities — no per-command capability entries needed
-- Tauri v2 E2E tests on Linux use `tauri-driver` + `WebKitWebDriver` (package `webkit2gtk-driver`) with `thirtyfour` as the Rust WebDriver client
-- Tauri v2 E2E builds require `--features custom-protocol` so the binary embeds the frontend (without it, `cfg(dev)=true` and the binary tries to connect to `devUrl` at runtime)
-- Svelte 5 components with runes must be mounted via `mount()` (not legacy `new App()`); the legacy API throws `effect_orphan` in WebKitWebDriver automation mode
-- After `connect_driver()`, call `driver.goto("tauri://localhost")` to ensure a clean page load with Tauri's JS bridge properly injected
-- `baai/bge-m3` via OpenRouter produces 1024-dimensional vectors — `EMBED_DIM` must match; mismatches cause `Invalid argument error` on `FixedSizeListArray` construction, and existing LanceDB tables must be dropped/recreated on dimension change
-- `detect_mime()` extension fallback must cover common text-based extensions (`.json`, `.yml`, `.rs`, etc.) — `infer` returns `None` for these and they default to `application/octet-stream`, causing the text extractor to skip them
-- Tracing `EnvFilter` in a multi-crate workspace must include all relevant crate targets (e.g. `super_ragondin_rag=info`) — a filter like `super_ragondin_sync=info` silently drops logs from other workspace crates
-- `OPENROUTER_API_KEY` resolution must check both environment variable and config file (`api_key` field) with consistent precedence across CLI and GUI
-- Real-time sync requires coalescing `inotify` + WebSocket events via a `SyncTrigger` enum into a single channel, with `CloseWrite` tracking and a 30s safety timeout for stale pending writes
-- GUI sync loop runs on a dedicated OS thread with its own Tokio runtime due to HRTB lifetime constraints in `SyncEngine::run_cycle_async`
-- GitHub Actions: avoid `restore-keys` when caching single binaries installed via `cargo install` — prefix matches restore the old binary but set `cache-hit=false`, causing `cargo install` to fail on the existing file
-- GitHub Actions: use `--locked` with `cargo install` to avoid version drift and ensure reproducible binary installations
-- GitHub Actions: use `Swatinem/rust-cache@v2` with `shared-key` + `save-if: false` on secondary jobs to share compiled deps without cache thrashing
-- Tauri's `beforeBuildCommand` only runs via `cargo tauri build` — in CI with `cargo build`, the frontend must be built manually first (`npm run build` in `gui-frontend/`)
-- Release builds must target both binaries: `cargo build --release --locked --bin super-ragondin --bin super-ragondin-gui`
-- GPU-related warnings (`libEGL`, `MESA-LOADER`, `ZINK`) in headless CI environments are harmless and can be ignored
-
-## RAG Environment Variables
-
-| Variable | Default | Description |
+| Crate | Description | Guide |
 |---|---|---|
-| `OPENROUTER_API_KEY` | required | API key for OpenRouter |
-| `OPENROUTER_EMBED_MODEL` | `baai/bge-m3` | Embedding model |
-| `OPENROUTER_VISION_MODEL` | `google/gemini-2.5-flash` | Vision/image model |
-| `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-2603` | Chat completion model (main reasoning loop) |
-| `OPENROUTER_SUBAGENT_MODEL` | `google/gemini-2.5-flash` | Model for sub-agent summarization calls (cheaper/faster) |
-| `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image-preview` | Image generation model |
+| `crates/sync/` | File synchronization library | [sync](docs/guides/sync.md) |
+| `crates/cli/` | CLI binary entry point | [sync](docs/guides/sync.md) |
+| `crates/gui/` | Tauri v2 desktop GUI binary | [frontend](docs/guides/frontend.md) |
+| `gui-frontend/` | Svelte 5 + Vite frontend | [frontend](docs/guides/frontend.md) |
+| `crates/gui-e2e/` | GUI end-to-end tests via WebDriver | [frontend](docs/guides/frontend.md) |
+| `crates/rag/` | RAG indexing and search | [rag](docs/guides/rag.md) |
+| `crates/codemode/` | JS sandbox + LLM tool-use loop for `ask` | [rag](docs/guides/rag.md) |
 
-The LanceDB database is stored at `<data_dir>/rag/` (e.g. `~/.local/share/super-ragondin/rag/`), accessible via `config.rag_dir()`.
+## Domain Guides
+
+- [Sync](docs/guides/sync.md) — sync engine, cozy-stack setup, integration tests
+- [Proptest & Simulation](docs/guides/proptest.md) — property-based testing, simulator, debugging failures
+- [Frontend, GUI & E2E](docs/guides/frontend.md) — Tauri v2, Svelte 5, E2E tests
+- [RAG, Codemode & Ask](docs/guides/rag.md) — RAG indexing, JS sandbox, LLM tool-use loop
+- [GitHub Actions CI/CD](docs/guides/ci.md) — CI/release workflows, caching tricks
+
+## Cross-Cutting Findings
+
+- Workspace has `unsafe_code = "forbid"` — use `temp-env` crate for env var manipulation in tests instead of `unsafe { std::env::set_var(...) }`
+- reqwest requires `rustls-tls` feature instead of default (native-tls) to avoid OpenSSL system dependency
+- Tracing `EnvFilter` in a multi-crate workspace must include all relevant crate targets (e.g. `super_ragondin_rag=info`) — a filter like `super_ragondin_sync=info` silently drops logs from other workspace crates
 
 ## References
 
-- [Cozy-stack authentication](https://docs.cozy.io/en/cozy-stack/auth/)
-- [Cozy-stack files API](https://docs.cozy.io/en/cozy-stack/files/)
-- [io.cozy.files doctype](https://github.com/cozy/cozy-doctypes/blob/master/docs/io.cozy.files.md)
 - [Rust guidelines](https://microsoft.github.io/rust-guidelines/agents/all.txt)
-- [inotify-rs](https://github.com/hannobraun/inotify-rs)
-- [fjall - Log-structured, embeddable key-value storage engine in Rust](https://github.com/fjall-rs/fjall)
-- [proptest - Hypothesis-like property testing for Rust](https://github.com/proptest-rs/proptest)
-- [LanceDB Rust docs](https://docs.rs/lancedb)
-- [chonkie - Rust chunking library](https://docs.rs/chonkie)
-- [OpenRouter API](https://openrouter.ai/docs)

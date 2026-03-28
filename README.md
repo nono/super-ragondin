@@ -3,9 +3,13 @@
 ![Logo](docs/logo_Super_Ragondin.jpeg)
 
 This repository is a place where I can put ideas and experiments on a new
-desktop client for Cozy Cloud. Super Ragondin comes in two flavors: CLI and
-GUI. You can download it from
-[the releases on GitHub](https://github.com/nono/super-ragondin/releases).
+desktop client for Cozy Cloud. But, Super Ragondin is more that just a
+synchronization engine: it also a small personal agent. With the files indexed
+in a vector database and a code mode, it can answer questions with a LLM and do
+some basic stuff like creating images.
+
+Super Ragondin comes in two flavors: CLI and GUI. You can download it from [the
+releases on GitHub](https://github.com/nono/super-ragondin/releases).
 
 ## Usage
 
