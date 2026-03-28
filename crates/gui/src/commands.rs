@@ -360,6 +360,7 @@ fn load_rag_config(
 }
 
 /// Testable core: loads config from `config_path`, runs `CodeModeEngine`.
+#[cfg(test)]
 pub async fn ask_question_from(
     question: &str,
     config_path: &std::path::Path,
@@ -388,6 +389,7 @@ pub async fn ask_question_from(
 /// If no `askUser()` call is pending (no sender waiting), this is a no-op.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands require State by value
 pub fn answer_user(answer: String, state: tauri::State<AskUserState>) -> Result<(), String> {
     let mut guard = state
         .sender
@@ -396,6 +398,7 @@ pub fn answer_user(answer: String, state: tauri::State<AskUserState>) -> Result<
     if let Some(tx) = guard.take() {
         tx.send(answer).ok();
     }
+    drop(guard);
     Ok(())
 }
 
@@ -420,7 +423,10 @@ impl super_ragondin_codemode::interaction::UserInteraction for GuiInteraction {
                 AskUserEvent::NAME,
                 AskUserEvent {
                     question: question.to_string(),
-                    choices: choices.iter().map(|s| s.to_string()).collect(),
+                    choices: choices
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
                 },
             )
             .ok();

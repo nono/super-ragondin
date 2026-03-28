@@ -13,6 +13,7 @@ pub struct RagConfig {
     pub subagent_model: String,
     pub image_model: String,
     pub db_path: PathBuf,
+    pub api_url: String,
 }
 
 impl std::fmt::Debug for RagConfig {
@@ -25,6 +26,7 @@ impl std::fmt::Debug for RagConfig {
             .field("subagent_model", &self.subagent_model)
             .field("image_model", &self.image_model)
             .field("db_path", &self.db_path)
+            .field("api_url", &self.api_url)
             .finish()
     }
 }
@@ -55,6 +57,7 @@ impl RagConfig {
             image_model: std::env::var("OPENROUTER_IMAGE_MODEL")
                 .unwrap_or_else(|_| OPENROUTER_IMAGE_MODEL_DEFAULT.to_string()),
             db_path,
+            api_url: OPENROUTER_API_URL.to_string(),
         }
     }
 }

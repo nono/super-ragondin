@@ -6,6 +6,8 @@ pub(crate) mod sandbox;
 pub mod suggestions;
 pub mod tools;
 
+pub use engine::CodeModeEngine;
+
 #[cfg(test)]
 mod interaction_trait_test {
     use crate::interaction::UserInteraction;
