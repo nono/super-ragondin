@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use super_ragondin_rag::{
-    config::{OPENROUTER_API_URL, OPENROUTER_REFERER, RagConfig},
+    config::{OPENROUTER_REFERER, RagConfig},
     store::RagStore,
 };
 
@@ -100,6 +100,24 @@ impl CodeModeEngine {
         })
     }
 
+    /// Create a new engine with a pre-opened RAG store.
+    #[must_use]
+    pub fn new_with_store(
+        store: Arc<RagStore>,
+        config: RagConfig,
+        sync_dir: std::path::PathBuf,
+        cozy_client: Option<Arc<CozyClient>>,
+        interaction: Option<Arc<dyn UserInteraction>>,
+    ) -> Self {
+        Self {
+            store,
+            config,
+            sync_dir,
+            cozy_client,
+            interaction,
+        }
+    }
+
     /// Ask a question using the code-mode LLM loop.
     ///
     /// Runs the tool-use loop (max `MAX_ITERATIONS` iterations), then returns the final answer.
@@ -118,6 +136,7 @@ impl CodeModeEngine {
             .build()
             .context("Failed to build HTTP client")?;
         let api_key = &self.config.api_key;
+        let api_url = &self.config.api_url;
         let model = &self.config.chat_model;
 
         let context_msg = self.build_context_message(context_dir).await;
@@ -148,7 +167,7 @@ impl CodeModeEngine {
             });
 
             let resp = client
-                .post(OPENROUTER_API_URL)
+                .post(api_url)
                 .bearer_auth(api_key)
                 .header("HTTP-Referer", OPENROUTER_REFERER)
                 .json(&body)
