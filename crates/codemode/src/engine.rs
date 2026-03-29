@@ -28,7 +28,7 @@ pub(crate) fn execute_js_tool_definition() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "execute_js",
-            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), generateImage(), remember(), recall(), and sendMail(subject, body) functions to query the document database, write files, generate images, store values across tool calls, and send emails to the user.",
+            "description": "Execute JavaScript code in a sandbox. Use the search(), listFiles(), getDocument(), subAgent(), saveFile(), listDirs(), generateImage(), remember(), recall(), sendMail(subject, body), webFetch(url), and webSearch(query, options?) functions to query the document database, write files, generate images, store values across tool calls, send emails, fetch web pages, and search the web.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -143,7 +143,7 @@ impl CodeModeEngine {
         let context_msg = self.build_context_message(context_dir).await;
 
         let mut messages = vec![
-            serde_json::json!({"role": "system", "content": system_prompt(self.interaction.is_some())}),
+            serde_json::json!({"role": "system", "content": system_prompt(self.interaction.is_some(), web_search)}),
         ];
 
         if let Some(ctx) = context_msg {
