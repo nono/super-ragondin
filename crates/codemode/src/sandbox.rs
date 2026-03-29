@@ -148,6 +148,8 @@ impl Sandbox {
             .map_err(|e| format!("JS error: register scratchpad: {e}"))?;
         tools::send_mail::register(&mut ctx)
             .map_err(|e| format!("JS error: register sendMail: {e}"))?;
+        tools::web_fetch::register(&mut ctx)
+            .map_err(|e| format!("JS error: register webFetch: {e}"))?;
         if self.interaction.is_some() {
             tools::ask_user::register(&mut ctx)
                 .map_err(|e| format!("JS error: register askUser: {e}"))?;
@@ -249,6 +251,7 @@ mod tests {
             "remember",
             "recall",
             "sendMail",
+            "webFetch",
         ] {
             let result = sandbox.execute(&format!("typeof {fn_name}")).unwrap();
             assert_eq!(
