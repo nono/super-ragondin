@@ -36,7 +36,9 @@ fn main() -> Result<()> {
             println!("  sync                             Run one sync cycle");
             println!("  watch                            Watch and sync continuously");
             println!("  status                           Show sync status");
-            println!("  ask <question>                   Ask a question about your files");
+            println!(
+                "  ask [--web] <question>           Ask a question (--web enables web search)"
+            );
             Ok(())
         }
     }
@@ -324,7 +326,14 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         })?;
     let rt = tokio::runtime::Runtime::new()?;
 
-    if args.is_empty() {
+    let web_search = args.iter().any(|a| a == "--web");
+    let question_args: Vec<&str> = args
+        .iter()
+        .filter(|a| a.as_str() != "--web")
+        .map(String::as_str)
+        .collect();
+
+    if question_args.is_empty() {
         rt.block_on(async {
             let engine =
                 super_ragondin_codemode::suggestions::SuggestionEngine::new(rag_config, config.sync_dir)
@@ -354,7 +363,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         })?;
         return Ok(());
     }
-    let question = args.join(" ");
+    let question = question_args.join(" ");
 
     let cozy_client = open_client(&config).ok().map(std::sync::Arc::new);
 
@@ -367,7 +376,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
         let answer = engine
-            .ask(&question, cwd)
+            .ask(&question, cwd, web_search)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         println!("{answer}");
