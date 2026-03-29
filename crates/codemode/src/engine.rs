@@ -13,7 +13,7 @@ use crate::prompt::system_prompt;
 use crate::sandbox::Sandbox;
 use crate::tools::scratchpad::new_scratchpad;
 
-const MAX_ITERATIONS: usize = 10;
+const MAX_ITERATIONS: usize = 30;
 
 /// Extracted tool call from an LLM response.
 pub(crate) struct ToolCall {
