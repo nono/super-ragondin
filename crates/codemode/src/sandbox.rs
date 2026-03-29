@@ -24,6 +24,7 @@ pub struct SandboxContext {
     pub scratchpad: crate::tools::scratchpad::Scratchpad,
     pub cozy_client: Option<Arc<CozyClient>>,
     pub interaction: Option<Arc<dyn UserInteraction>>,
+    pub web_search_enabled: bool,
 }
 
 thread_local! {
@@ -71,6 +72,7 @@ pub struct Sandbox {
     scratchpad: crate::tools::scratchpad::Scratchpad,
     cozy_client: Option<Arc<CozyClient>>,
     interaction: Option<Arc<dyn UserInteraction>>,
+    web_search_enabled: bool,
 }
 
 #[allow(dead_code)]
@@ -84,6 +86,7 @@ impl Sandbox {
         scratchpad: crate::tools::scratchpad::Scratchpad,
         cozy_client: Option<Arc<CozyClient>>,
         interaction: Option<Arc<dyn UserInteraction>>,
+        web_search_enabled: bool,
     ) -> Self {
         Self {
             store,
@@ -92,6 +95,7 @@ impl Sandbox {
             scratchpad,
             cozy_client,
             interaction,
+            web_search_enabled,
         }
     }
 
@@ -115,6 +119,7 @@ impl Sandbox {
                 scratchpad: Arc::clone(&self.scratchpad),
                 cozy_client: self.cozy_client.clone(),
                 interaction: self.interaction.clone(),
+                web_search_enabled: self.web_search_enabled,
             });
         });
 
@@ -154,6 +159,10 @@ impl Sandbox {
             tools::ask_user::register(&mut ctx)
                 .map_err(|e| format!("JS error: register askUser: {e}"))?;
         }
+        if self.web_search_enabled {
+            tools::web_search::register(&mut ctx)
+                .map_err(|e| format!("JS error: register webSearch: {e}"))?;
+        }
 
         let val = ctx
             .eval(Source::from_bytes(code.as_bytes()))
@@ -190,6 +199,7 @@ mod tests {
             new_scratchpad(),
             None,
             None, // no interaction in these tests
+            false,
         );
         (sandbox, db_dir, sync_dir)
     }
@@ -418,6 +428,7 @@ mod tests {
             Arc::clone(&scratchpad),
             None,
             None,
+            false,
         );
         let sandbox_b = Sandbox::new(
             store_b,
@@ -426,6 +437,7 @@ mod tests {
             Arc::clone(&scratchpad),
             None,
             None,
+            false,
         );
         sandbox_a.execute(r#"remember("x", 42)"#)?;
         let result = sandbox_b.execute(r#"recall("x")"#)?;
@@ -491,6 +503,7 @@ mod tests {
             new_scratchpad(),
             None,
             Some(interaction),
+            false,
         );
         let result = sandbox.execute("typeof askUser").unwrap();
         assert_eq!(
@@ -524,6 +537,7 @@ mod tests {
             new_scratchpad(),
             None,
             Some(interaction),
+            false,
         );
         let result = sandbox
             .execute(r#"askUser("Which style?", ["option one", "option two", "option three"])"#)
@@ -557,5 +571,35 @@ mod tests {
             .expect("generateImage with reference should succeed");
         let b64: String = serde_json::from_str(&result).expect("result should be a JSON string");
         assert!(!b64.is_empty(), "should return non-empty base64");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_web_search_not_registered_by_default() {
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let result = sandbox.execute("typeof webSearch").unwrap();
+        assert_eq!(
+            result, "\"undefined\"",
+            "webSearch must not exist by default"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_web_search_registered_when_enabled() {
+        use crate::tools::scratchpad::new_scratchpad;
+        let db_dir = tempdir().expect("db_dir");
+        let sync_dir = tempdir().expect("sync_dir");
+        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
+        let sandbox = Sandbox::new(
+            store,
+            config,
+            sync_dir.path().to_path_buf(),
+            new_scratchpad(),
+            None,
+            None,
+            true, // web_search_enabled
+        );
+        let result = sandbox.execute("typeof webSearch").unwrap();
+        assert_eq!(result, "\"function\"");
     }
 }

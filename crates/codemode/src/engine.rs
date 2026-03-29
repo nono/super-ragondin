@@ -129,6 +129,7 @@ impl CodeModeEngine {
         &self,
         question: &str,
         context_dir: Option<std::path::PathBuf>,
+        web_search: bool,
     ) -> Result<String> {
         tracing::info!(question, "✦ Ask: engine loop starting");
         let client = reqwest::Client::builder()
@@ -197,6 +198,7 @@ impl CodeModeEngine {
                     let scratchpad_clone = Arc::clone(&scratchpad);
                     let cozy_client_clone = self.cozy_client.clone();
                     let interaction_clone = self.interaction.clone();
+                    let web_search_flag = web_search;
                     let code_clone = tool_call.code.clone();
                     let id_clone = tool_call.id.clone();
                     handles.push(tokio::task::spawn_blocking(move || {
@@ -207,6 +209,7 @@ impl CodeModeEngine {
                             scratchpad_clone,
                             cozy_client_clone,
                             interaction_clone,
+                            web_search_flag,
                         );
                         (id_clone, sandbox.execute(&code_clone))
                     }));
@@ -512,6 +515,7 @@ mod tests {
             new_scratchpad(),
             None,
             engine.interaction.clone(),
+            false,
         );
         let result = sandbox.execute("typeof askUser").unwrap();
         assert_eq!(result, "\"function\"");
