@@ -11,3 +11,4 @@ pub mod scratchpad;
 pub mod search;
 pub mod send_mail;
 pub mod sub_agent;
+pub mod web_fetch;
