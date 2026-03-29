@@ -5,8 +5,9 @@
 ///
 /// # Arguments
 /// * `interactive` - If true, includes the `askUser()` function for prompting the user.
+/// * `web_search` - If true, includes the `webSearch()` function docs.
 #[must_use]
-pub fn system_prompt(interactive: bool) -> String {
+pub fn system_prompt(interactive: bool, web_search: bool) -> String {
     let base = r#"You are Super Ragondin, a helpful assistant with access to a personal document database.
 To answer questions, use the `execute_js` tool to query the database before responding.
 
@@ -62,6 +63,11 @@ Available JavaScript functions:
     Retrieve a value previously stored with remember().
     Returns: the stored value, or null if the key was not set.
 
+  webFetch(url)
+    HTTP GET a URL and return the response.
+    Returns: { status: number, contentType: string, body: string }
+    Body is text only (empty for binary content types). Max 1 MB, 30s timeout.
+
 "#;
 
     let interactive_section = if interactive {
@@ -71,6 +77,17 @@ Available JavaScript functions:
     The user may pick a numbered option or type a free-form answer.
     Returns: string — the user's answer
     Use sparingly — only when you genuinely cannot proceed without clarification.
+
+"
+    } else {
+        ""
+    };
+
+    let web_search_section = if web_search {
+        r"  webSearch(query, options?)
+    Search the web using Exa. Options: { limit } (default: 5, max: 10)
+    Returns: [{ title, url, snippet }, ...]
+    Use sparingly — web search has significant API cost.
 
 "
     } else {
@@ -132,9 +149,13 @@ const b64 = generateImage(
 
 // Store an intermediate result and reuse it in a later call
 const files = listFiles({ sort: "recent", limit: 5 });
-remember("recent_ids", files.map(f => f.doc_id));"##;
+remember("recent_ids", files.map(f => f.doc_id));
 
-    format!("{base}{interactive_section}{rules}")
+// Fetch a web page and summarize it
+const page = webFetch("https://example.com/article");
+subAgent("Summarize this page concisely.", page.body)"##;
+
+    format!("{base}{interactive_section}{web_search_section}{rules}")
 }
 
 #[cfg(test)]
@@ -143,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_prompt_contains_key_elements() {
-        let p = system_prompt(false);
+        let p = system_prompt(false, false);
         assert!(p.contains("Super Ragondin"));
         assert!(p.contains("execute_js"));
         assert!(p.contains("search("));
@@ -156,12 +177,13 @@ mod tests {
         assert!(p.contains("generateImage("));
         assert!(p.contains("remember("));
         assert!(p.contains("recall("));
+        assert!(p.contains("webFetch("));
         assert!(p.contains("ISO 8601"));
     }
 
     #[test]
     fn test_prompt_interactive_contains_ask_user() {
-        let p = system_prompt(true);
+        let p = system_prompt(true, false);
         assert!(
             p.contains("askUser("),
             "interactive prompt must mention askUser"
@@ -170,10 +192,28 @@ mod tests {
 
     #[test]
     fn test_prompt_non_interactive_omits_ask_user() {
-        let p = system_prompt(false);
+        let p = system_prompt(false, false);
         assert!(
             !p.contains("askUser("),
             "non-interactive prompt must not mention askUser"
+        );
+    }
+
+    #[test]
+    fn test_prompt_web_search_included_when_enabled() {
+        let p = system_prompt(false, true);
+        assert!(
+            p.contains("webSearch("),
+            "web_search prompt must mention webSearch"
+        );
+    }
+
+    #[test]
+    fn test_prompt_web_search_excluded_when_disabled() {
+        let p = system_prompt(false, false);
+        assert!(
+            !p.contains("webSearch("),
+            "non-web prompt must not mention webSearch"
         );
     }
 }
