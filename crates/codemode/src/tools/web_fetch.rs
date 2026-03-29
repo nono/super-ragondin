@@ -101,6 +101,7 @@ mod tests {
             new_scratchpad(),
             None,
             None,
+            false,
         );
         (sandbox, db_dir, sync_dir)
     }
