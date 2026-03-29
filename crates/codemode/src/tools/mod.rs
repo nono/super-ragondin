@@ -12,3 +12,4 @@ pub mod search;
 pub mod send_mail;
 pub mod sub_agent;
 pub mod web_fetch;
+pub mod web_search;
