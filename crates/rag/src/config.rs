@@ -12,6 +12,7 @@ pub struct RagConfig {
     pub chat_model: String,
     pub subagent_model: String,
     pub image_model: String,
+    pub search_model: String,
     pub db_path: PathBuf,
     pub api_url: String,
 }
@@ -25,6 +26,7 @@ impl std::fmt::Debug for RagConfig {
             .field("chat_model", &self.chat_model)
             .field("subagent_model", &self.subagent_model)
             .field("image_model", &self.image_model)
+            .field("search_model", &self.search_model)
             .field("db_path", &self.db_path)
             .field("api_url", &self.api_url)
             .finish()
@@ -56,6 +58,8 @@ impl RagConfig {
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             image_model: std::env::var("OPENROUTER_IMAGE_MODEL")
                 .unwrap_or_else(|_| OPENROUTER_IMAGE_MODEL_DEFAULT.to_string()),
+            search_model: std::env::var("OPENROUTER_SEARCH_MODEL")
+                .unwrap_or_else(|_| "exa/exa".to_string()),
             db_path,
             api_url: OPENROUTER_API_URL.to_string(),
         }
@@ -76,6 +80,7 @@ mod tests {
                 "OPENROUTER_CHAT_MODEL",
                 "OPENROUTER_SUBAGENT_MODEL",
                 "OPENROUTER_IMAGE_MODEL",
+                "OPENROUTER_SEARCH_MODEL",
             ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
@@ -180,6 +185,33 @@ mod tests {
     fn test_resolve_api_key_ignores_empty_config_key() {
         temp_env::with_vars_unset(["OPENROUTER_API_KEY"], || {
             assert_eq!(RagConfig::resolve_api_key(Some("")), None);
+        });
+    }
+
+    #[test]
+    fn test_config_defaults_include_search_model() {
+        temp_env::with_vars_unset(
+            [
+                "OPENROUTER_API_KEY",
+                "OPENROUTER_EMBED_MODEL",
+                "OPENROUTER_VISION_MODEL",
+                "OPENROUTER_CHAT_MODEL",
+                "OPENROUTER_SUBAGENT_MODEL",
+                "OPENROUTER_IMAGE_MODEL",
+                "OPENROUTER_SEARCH_MODEL",
+            ],
+            || {
+                let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
+                assert_eq!(config.search_model, "exa/exa");
+            },
+        );
+    }
+
+    #[test]
+    fn test_search_model_from_env() {
+        temp_env::with_vars([("OPENROUTER_SEARCH_MODEL", Some("custom/search"))], || {
+            let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
+            assert_eq!(config.search_model, "custom/search");
         });
     }
 }
