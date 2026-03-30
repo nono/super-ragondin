@@ -11,14 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: gui-frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: gui-frontend/pnpm-lock.yaml
       - name: Build frontend
         working-directory: gui-frontend
-        run: npm ci && npm run build
+        run: pnpm install --frozen-lockfile && pnpm run build
       - uses: actions/upload-artifact@v4
         with:
           name: gui-frontend-dist
