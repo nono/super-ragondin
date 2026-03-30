@@ -326,10 +326,10 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         })?;
     let rt = tokio::runtime::Runtime::new()?;
 
-    let web_search = args.iter().any(|a| a == "--web");
+    let web_search = args.first().is_some_and(|a| a == "--web");
     let question_args: Vec<&str> = args
         .iter()
-        .filter(|a| a.as_str() != "--web")
+        .skip(usize::from(web_search))
         .map(String::as_str)
         .collect();
 

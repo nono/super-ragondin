@@ -1,9 +1,23 @@
+use std::sync::OnceLock;
+
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
 
 use crate::sandbox::SANDBOX_CTX;
 
 const TIMEOUT_SECS: u64 = 30;
 const MAX_BODY_BYTES: usize = 1_048_576; // 1 MB
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+            .user_agent("SuperRagondin/0.1")
+            .build()
+            .expect("failed to build reqwest client")
+    })
+}
 
 /// Register the `webFetch(url)` global function.
 ///
@@ -35,13 +49,11 @@ fn web_fetch_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     })?;
 
     let result = handle.block_on(async {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .user_agent("SuperRagondin/0.1")
-            .build()
+        let resp = http_client()
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| e.to_string())?;
-
-        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
 
         let status = resp.status().as_u16();
         let content_type = resp
@@ -80,31 +92,6 @@ fn web_fetch_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use super_ragondin_rag::{config::RagConfig, store::RagStore};
-    use tempfile::tempdir;
-
-    async fn make_sandbox() -> (
-        crate::sandbox::Sandbox,
-        tempfile::TempDir,
-        tempfile::TempDir,
-    ) {
-        use crate::tools::scratchpad::new_scratchpad;
-        let db_dir = tempdir().expect("db dir");
-        let sync_dir = tempdir().expect("sync dir");
-        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
-        let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
-        let sandbox = crate::sandbox::Sandbox::new(
-            store,
-            config,
-            sync_dir.path().to_path_buf(),
-            new_scratchpad(),
-            None,
-            None,
-            false,
-        );
-        (sandbox, db_dir, sync_dir)
-    }
 
     #[test]
     fn test_registers_without_panic() {
@@ -131,7 +118,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let (sandbox, _db, _sync) = make_sandbox().await;
+        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox().await;
         let uri = mock_server.uri();
         let result = tokio::task::spawn_blocking(move || {
             let code = format!(r#"webFetch("{uri}")"#);
@@ -160,7 +147,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let (sandbox, _db, _sync) = make_sandbox().await;
+        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox().await;
         let uri = mock_server.uri();
         let result = tokio::task::spawn_blocking(move || {
             let code = format!(r#"webFetch("{uri}")"#);

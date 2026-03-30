@@ -174,7 +174,7 @@ impl Sandbox {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use base64::Engine as _;
     use boa_engine::Context;
@@ -182,7 +182,7 @@ mod tests {
     use super_ragondin_rag::{config::RagConfig, store::RagStore};
     use tempfile::tempdir;
 
-    async fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
+    pub(crate) async fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
         use crate::tools::scratchpad::new_scratchpad;
         let db_dir = tempdir().expect("failed to create temp db dir");
         let sync_dir = tempdir().expect("failed to create temp sync dir");

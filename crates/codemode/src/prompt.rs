@@ -7,6 +7,7 @@
 /// * `interactive` - If true, includes the `askUser()` function for prompting the user.
 /// * `web_search` - If true, includes the `webSearch()` function docs.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn system_prompt(interactive: bool, web_search: bool) -> String {
     let base = r#"You are Super Ragondin, a helpful assistant with access to a personal document database.
 To answer questions, use the `execute_js` tool to query the database before responding.
