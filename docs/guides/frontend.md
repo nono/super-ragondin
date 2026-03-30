@@ -51,4 +51,4 @@ UPDATE_SNAPSHOTS=1 xvfb-run cargo test -p gui-e2e -- --ignored                  
 - Svelte 5 components with runes must be mounted via `mount()` (not legacy `new App()`); the legacy API throws `effect_orphan` in WebKitWebDriver automation mode
 - After `connect_driver()`, call `driver.goto("tauri://localhost")` to ensure a clean page load with Tauri's JS bridge properly injected
 - Tauri v2 E2E tests on Linux use `tauri-driver` + `WebKitWebDriver` (package `webkit2gtk-driver`) with `thirtyfour` as the Rust WebDriver client
-- Tauri's `beforeBuildCommand` only runs via `cargo tauri build` — in CI with `cargo build`, the frontend must be built manually first (`npm run build` in `gui-frontend/`)
+- Tauri's `beforeBuildCommand` only runs via `cargo tauri build` — in CI with `cargo build`, the frontend must be built manually first (`pnpm run build` in `gui-frontend/`)
