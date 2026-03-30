@@ -378,7 +378,7 @@ pub async fn ask_question_from(
             e.to_string()
         })?;
 
-    engine.ask(question, None).await.map_err(|e| {
+    engine.ask(question, None, false).await.map_err(|e| {
         tracing::error!(error = %e, "✦ Ask: query failed");
         e.to_string()
     })
@@ -438,6 +438,7 @@ impl super_ragondin_codemode::interaction::UserInteraction for GuiInteraction {
 #[specta::specta]
 pub async fn ask_question(
     question: String,
+    web_search: bool,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     use super_ragondin_codemode::engine::CodeModeEngine;
@@ -452,7 +453,10 @@ pub async fn ask_question(
         .await
         .map_err(|e| e.to_string())?;
 
-    engine.ask(&question, None).await.map_err(|e| e.to_string())
+    engine
+        .ask(&question, None, web_search)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Testable core: loads config from `config_path`, runs `SuggestionEngine`.
