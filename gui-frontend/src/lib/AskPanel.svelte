@@ -5,7 +5,7 @@
 
   type PanelState = 'loading' | 'no-api-key' | 'idle' | 'asking' | 'clarifying' | 'done' | 'error'
 
-  let state: PanelState = $state('loading')
+  let panelState: PanelState = $state('loading')
   let suggestions: string[] = $state([])
   let question: string = $state('')
   let lastQuestion: string = $state('')
@@ -26,7 +26,7 @@
       clarifyQuestion = event.payload.question
       clarifyChoices = event.payload.choices
       clarifyInput = ''
-      state = 'clarifying'
+      panelState = 'clarifying'
     })
     await loadSuggestions()
   })
@@ -36,19 +36,19 @@
   })
 
   async function loadSuggestions() {
-    state = 'loading'
+    panelState = 'loading'
     const result = await commands.getSuggestions()
     if (result.status === 'ok') {
       suggestions = result.data
-      state = 'idle'
+      panelState = 'idle'
     } else if (result.error === 'NoApiKey') {
-      state = 'no-api-key'
+      panelState = 'no-api-key'
     } else if (result.error === 'NoFilesIndexed') {
       suggestions = []
-      state = 'idle'
+      panelState = 'idle'
     } else {
       suggestions = []
-      state = 'idle'
+      panelState = 'idle'
     }
   }
 
@@ -56,14 +56,14 @@
     if (!q.trim()) return
     lastQuestion = q
     question = ''
-    state = 'asking'
+    panelState = 'asking'
     const result = await commands.askQuestion(q, webSearch)
     if (result.status === 'ok') {
       answer = result.data
-      state = 'done'
+      panelState = 'done'
     } else {
       errorMessage = result.error
-      state = 'error'
+      panelState = 'error'
     }
   }
 
@@ -82,14 +82,13 @@
 
   async function sendClarification(input: string) {
     if (!input.trim()) return
-    state = 'asking'
+    panelState = 'asking'
     const result = await commands.answerUser(input)
     if (result.status === 'ok') {
-      answer = result.data
-      state = 'done'
+      panelState = 'done'
     } else {
       errorMessage = result.error
-      state = 'error'
+      panelState = 'error'
     }
   }
 
@@ -132,10 +131,10 @@
   </div>
 
   <div class="panel-body">
-    {#if state === 'loading'}
+    {#if panelState === 'loading'}
       <p class="hint">Loading suggestions…</p>
 
-    {:else if state === 'no-api-key'}
+    {:else if panelState === 'no-api-key'}
       <div class="banner">
         <p class="banner-label">No OpenRouter API key configured.</p>
         <div class="key-form">
@@ -160,7 +159,7 @@
         {/if}
       </div>
 
-    {:else if state === 'idle'}
+    {:else if panelState === 'idle'}
       {#if suggestions.length > 0}
         <p class="hint">Not sure what to ask? Here are some ideas:</p>
         <ul class="chips">
@@ -176,14 +175,14 @@
         <p class="hint">No files indexed yet — waiting for first sync.</p>
       {/if}
 
-    {:else if state === 'asking'}
+    {:else if panelState === 'asking'}
       <div class="message user">{lastQuestion}</div>
       <div class="thinking">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
         Thinking…
       </div>
 
-    {:else if state === 'clarifying'}
+    {:else if panelState === 'clarifying'}
       <div class="message user">{lastQuestion}</div>
       <div class="clarify-box">
         <p class="clarify-question">{clarifyQuestion}</p>
@@ -213,33 +212,33 @@
         </div>
       </div>
 
-    {:else if state === 'done'}
+    {:else if panelState === 'done'}
       <div class="message user">{lastQuestion}</div>
       <div class="message assistant markdown">{@html marked(answer)}</div>
 
-    {:else if state === 'error'}
+    {:else if panelState === 'error'}
       <div class="message user">{lastQuestion}</div>
       <div class="message error-msg">{friendlyError(errorMessage)}</div>
     {/if}
   </div>
 
-  {#if state !== 'no-api-key'}
+  {#if panelState !== 'no-api-key'}
     <div class="input-row">
       <label class="web-search-toggle">
-        <input type="checkbox" bind:checked={webSearch} disabled={state === 'asking' || state === 'clarifying' || state === 'loading'} />
+        <input type="checkbox" bind:checked={webSearch} disabled={panelState === 'asking' || panelState === 'clarifying' || panelState === 'loading'} />
         <span class="web-search-label">🌐 Web</span>
       </label>
       <input
         type="text"
         bind:value={question}
-        placeholder={state === 'done' || state === 'error' ? 'Ask another question…' : 'Ask anything about your files…'}
-        disabled={state === 'asking' || state === 'clarifying' || state === 'loading'}
+        placeholder={panelState === 'done' || panelState === 'error' ? 'Ask another question…' : 'Ask anything about your files…'}
+        disabled={panelState === 'asking' || panelState === 'clarifying' || panelState === 'loading'}
         onkeydown={handleKeydown}
       />
       <button
         class="send-btn"
         onclick={() => ask(question)}
-        disabled={state === 'asking' || state === 'clarifying' || state === 'loading' || !question.trim()}
+        disabled={panelState === 'asking' || panelState === 'clarifying' || panelState === 'loading' || !question.trim()}
       >
         Ask
       </button>
