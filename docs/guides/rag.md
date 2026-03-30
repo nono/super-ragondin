@@ -32,6 +32,8 @@ JS sandbox + LLM tool-use loop for `ask` command:
 - `src/tools/generate_image.rs` - `generateImage(prompt, options?)` JS global — image generation via OpenRouter, returns base64 string, optionally saves to sync_dir
 - `src/tools/path_utils.rs` - `check_relative_path()` — shared path traversal validation used by `save_file` and `generate_image`
 - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
+- `src/tools/web_fetch.rs` - `webFetch(url)` JS global — HTTP GET with status/contentType/body response
+- `src/tools/web_search.rs` - `webSearch(query, options?)` JS global — Exa web search via OpenRouter (opt-in via `--web` flag)
 
 ## Environment Variables
 
@@ -43,6 +45,7 @@ JS sandbox + LLM tool-use loop for `ask` command:
 | `OPENROUTER_CHAT_MODEL` | `mistralai/mistral-small-2603` | Chat completion model (main reasoning loop) |
 | `OPENROUTER_SUBAGENT_MODEL` | `google/gemini-2.5-flash` | Model for sub-agent summarization calls (cheaper/faster) |
 | `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image-preview` | Image generation model |
+| `OPENROUTER_SEARCH_MODEL` | `exa/exa` | Web search model (Exa via OpenRouter) |
 
 The LanceDB database is stored at `<data_dir>/rag/` (e.g. `~/.local/share/super-ragondin/rag/`), accessible via `config.rag_dir()`.
 
