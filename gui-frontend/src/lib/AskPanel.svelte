@@ -17,6 +17,7 @@
   let apiKeyInput: string = $state('')
   let savingKey: boolean = $state(false)
   let keyError: string | null = $state(null)
+  let webSearch: boolean = $state(false)
 
   let unlistenAskUser: (() => void) | undefined
 
@@ -56,7 +57,7 @@
     lastQuestion = q
     question = ''
     state = 'asking'
-    const result = await commands.askQuestion(q)
+    const result = await commands.askQuestion(q, webSearch)
     if (result.status === 'ok') {
       answer = result.data
       state = 'done'
@@ -224,6 +225,10 @@
 
   {#if state !== 'no-api-key'}
     <div class="input-row">
+      <label class="web-search-toggle">
+        <input type="checkbox" bind:checked={webSearch} disabled={state === 'asking' || state === 'clarifying' || state === 'loading'} />
+        <span class="web-search-label">🌐 Web</span>
+      </label>
       <input
         type="text"
         bind:value={question}
@@ -462,6 +467,16 @@
     cursor: pointer;
   }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .web-search-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .web-search-toggle input { margin: 0; cursor: pointer; }
+  .web-search-toggle input:disabled { cursor: not-allowed; }
+  .web-search-label { font-size: 11px; color: #666; white-space: nowrap; }
 
   .clarify-box {
     background: #f7f7f3;
