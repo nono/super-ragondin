@@ -809,6 +809,167 @@ fn simulation_local_delete_while_stopped_reconciled_on_restart() {
     );
 }
 
+#[test]
+fn simulation_file_added_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Add a file locally while stopped
+    let file_id = LocalFileId::new(1, 9001);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: file_id,
+            parent_local_id: Some(root_local_id),
+            name: "added_offline.txt".to_string(),
+            content: b"added while stopped".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_file_deleted_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-to-delete");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "to_delete.txt".to_string(),
+            content: b"will be deleted".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id assigned by sync
+    let local_file_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "to_delete.txt")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Delete the file locally while stopped
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: local_file_id,
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_file_replaced_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-to-replace");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id,
+            parent_id: root_id,
+            name: "replaced.txt".to_string(),
+            content: b"original content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id assigned by sync
+    let old_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "replaced.txt")
+        .map(|n| n.id.clone())
+        .unwrap();
+    let root_local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name.is_empty())
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Delete old file and create a new one at the same name (different inode)
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: old_local_id,
+        })
+        .unwrap();
+    let new_local_id = LocalFileId::new(1, 9002);
+    runner
+        .apply(SimAction::LocalCreateFile {
+            local_id: new_local_id,
+            parent_local_id: Some(root_local_id),
+            name: "replaced.txt".to_string(),
+            content: b"replacement content".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    // Two sync rounds: first uploads the new file, second cleans up the old remote
+    runner.apply(SimAction::Sync).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
 // ==================== Idempotency Tests ====================
 
 #[test]
