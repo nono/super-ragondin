@@ -2370,3 +2370,83 @@ fn initial_scan_detects_file_replaced_while_stopped() {
         "plan should contain UploadNew for the replacement file"
     );
 }
+
+#[test]
+fn initial_scan_picks_up_file_added_while_stopped() {
+    use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalNode, PlanResult, SyncOp};
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    let root_meta = std::fs::symlink_metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Root
+    store
+        .insert_local_node(&LocalNode {
+            id: root_local_id.clone(),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: root_meta.mtime(),
+        })
+        .unwrap();
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("io.cozy.files.root-dir"),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 0,
+            rev: "1-root".to_string(),
+        })
+        .unwrap();
+    store
+        .insert_synced(&SyncedRecord {
+            local_id: root_local_id,
+            remote_id: RemoteId::new("io.cozy.files.root-dir"),
+            rel_path: String::new(),
+            md5sum: None,
+            size: None,
+            rev: "1-root".to_string(),
+            node_type: NodeType::Directory,
+            local_name: Some(String::new()),
+            local_parent_id: None,
+            remote_name: Some(String::new()),
+            remote_parent_id: None,
+        })
+        .unwrap();
+    store.flush().unwrap();
+
+    // Add a file while the client is "stopped"
+    std::fs::write(
+        sync_dir.path().join("offline.txt"),
+        b"created while stopped",
+    )
+    .unwrap();
+
+    // Restart: fresh engine, run initial_scan
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+    engine.initial_scan().unwrap();
+
+    let results = engine.plan().unwrap();
+    let has_upload = results.iter().any(
+        |r| matches!(r, PlanResult::Op(SyncOp::UploadNew { name, .. }) if name == "offline.txt"),
+    );
+    assert!(
+        has_upload,
+        "initial_scan should pick up file added while stopped"
+    );
+}
