@@ -2314,9 +2314,15 @@ fn initial_scan_detects_file_replaced_while_stopped() {
         .unwrap();
     store.flush().unwrap();
 
-    // Replace the file while "stopped": delete + create gives a new inode
+    // Replace the file while "stopped": write to a temp path first (while the
+    // old inode is still live), then atomically swap via rename.  This ensures
+    // the replacement file always gets a *different* inode than the original —
+    // a plain remove+write is not sufficient because the OS may immediately
+    // reuse the freed inode for the new file.
+    let tmp_path = sync_dir.path().join("replaced.txt.tmp");
+    std::fs::write(&tmp_path, b"replacement").unwrap();
     std::fs::remove_file(&file_path).unwrap();
-    std::fs::write(&file_path, b"replacement").unwrap();
+    std::fs::rename(&tmp_path, &file_path).unwrap();
 
     // Restart: fresh engine, run initial_scan
     let mut engine = SyncEngine::new(
