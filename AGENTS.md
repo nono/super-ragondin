@@ -12,6 +12,7 @@ Rust sync client for Cozy Cloud with RAG capabilities, organized as a Cargo work
 - Always run `cargo clippy --all-features` after editing Rust files and fix any warnings
 - Avoid unsafe unwrap() in async tests
 - Avoid code duplication between CLI and GUI
+- When you see a failing test or a clippy warning/error, fix it first even if it is not related to the current feature
 - Do not background long-running commands like `npm install` or `cargo test`; run them in the foreground and wait for completion before proceeding.
 
 ## Commands

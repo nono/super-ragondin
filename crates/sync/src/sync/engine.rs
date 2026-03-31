@@ -132,7 +132,6 @@ impl SyncEngine {
                         local_parent_id: None,
                         ..synced
                     };
-                    self.store.delete_synced(id)?;
                     self.store.insert_synced(&updated)?;
                 }
             }
