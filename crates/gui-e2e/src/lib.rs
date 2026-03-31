@@ -7,6 +7,24 @@ use thirtyfour::prelude::*;
 
 const TAURI_DRIVER_PORT: u16 = 4444;
 
+/// RAII guard that kills and waits on the `tauri-driver` child process.
+pub struct TauriDriverGuard(Child);
+
+impl TauriDriverGuard {
+    /// Wraps a `tauri-driver` child process for automatic cleanup.
+    #[must_use]
+    pub const fn new(child: Child) -> Self {
+        Self(child)
+    }
+}
+
+impl Drop for TauriDriverGuard {
+    fn drop(&mut self) {
+        self.0.kill().ok();
+        self.0.wait().ok();
+    }
+}
+
 /// Spawns `tauri-driver` and returns the child process handle.
 ///
 /// # Errors
@@ -242,6 +260,26 @@ impl ConfigGuard {
         std::fs::write(&path, config_json).expect("failed to write test config");
         Self { path, original }
     }
+
+    /// Remove the config file so the app starts in Unconfigured state.
+    /// Restores the original file (if any) on drop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the file exists but cannot be removed.
+    #[must_use]
+    pub fn remove() -> Self {
+        let path = app_config_path();
+        let original = match std::fs::read(&path) {
+            Ok(bytes) => OriginalConfig::Present(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => OriginalConfig::Absent,
+            Err(_) => OriginalConfig::Unreadable,
+        };
+        if path.exists() {
+            std::fs::remove_file(&path).expect("failed to remove config file");
+        }
+        Self { path, original }
+    }
 }
 
 impl Drop for ConfigGuard {
@@ -286,6 +324,7 @@ fn which(name: &str) -> Result<PathBuf, ()> {
 mod tests {
     use super::*;
     use image::{Rgb, RgbImage};
+    use serial_test::serial;
 
     fn solid_png(path: &std::path::Path, color: Rgb<u8>, w: u32, h: u32) {
         let mut img = RgbImage::new(w, h);
@@ -357,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn large_diff_above_threshold_fails_and_saves_diff_image() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
@@ -377,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn dimension_mismatch_returns_err() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
@@ -391,6 +432,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_snapshots_overwrites_reference_and_returns_ok() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
@@ -409,6 +451,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_snapshots_deletes_stale_diff_image() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
@@ -426,6 +469,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_snapshots_with_no_baseline_creates_it_and_returns_err() {
         let dir = tempfile::tempdir().unwrap();
         let shot = dir.path().join("shot.png");
