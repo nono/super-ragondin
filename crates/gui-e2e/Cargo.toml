@@ -15,5 +15,6 @@ dirs = "5"
 workspace = true
 
 [dev-dependencies]
+serial_test = "3.4.0"
 temp-env = "0.3"
 tempfile = "3"

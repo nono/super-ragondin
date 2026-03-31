@@ -82,9 +82,12 @@
 
   async function sendClarification(input: string) {
     if (!input.trim()) return
+    // Switch back to 'asking' — the original ask() call is still running
+    // and will set panelState to 'done' with the final answer.
     panelState = 'asking'
     const result = await commands.answerUser(input)
     if (result.status === 'ok') {
+      answer = result.data
       panelState = 'done'
     } else {
       errorMessage = result.error
