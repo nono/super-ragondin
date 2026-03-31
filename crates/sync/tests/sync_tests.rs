@@ -2067,3 +2067,140 @@ fn test_run_cycle_two_phase_move_before_delete() {
         "Two-phase execution should resolve without conflicts, got: {conflicts:?}"
     );
 }
+
+#[test]
+fn initial_scan_detects_file_deleted_while_stopped() {
+    use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{LocalNode, PlanResult, SyncOp};
+    use super_ragondin_sync::util::compute_md5_from_bytes;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    // Write the file before "stopping" so we can capture its real inode.
+    let file_path = sync_dir.path().join("synced.txt");
+    let content = b"hello";
+    std::fs::write(&file_path, content).unwrap();
+
+    let root_meta = std::fs::symlink_metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+    let file_meta = std::fs::symlink_metadata(&file_path).unwrap();
+    let file_local_id = LocalFileId::new(file_meta.dev(), file_meta.ino());
+    let md5 = compute_md5_from_bytes(content);
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Root
+    store
+        .insert_local_node(&LocalNode {
+            id: root_local_id.clone(),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: root_meta.mtime(),
+        })
+        .unwrap();
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("io.cozy.files.root-dir"),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 0,
+            rev: "1-root".to_string(),
+        })
+        .unwrap();
+    store
+        .insert_synced(&SyncedRecord {
+            local_id: root_local_id.clone(),
+            remote_id: RemoteId::new("io.cozy.files.root-dir"),
+            rel_path: String::new(),
+            md5sum: None,
+            size: None,
+            rev: "1-root".to_string(),
+            node_type: NodeType::Directory,
+            local_name: Some(String::new()),
+            local_parent_id: None,
+            remote_name: Some(String::new()),
+            remote_parent_id: None,
+        })
+        .unwrap();
+
+    // Previously-synced file
+    store
+        .insert_local_node(&LocalNode {
+            id: file_local_id.clone(),
+            parent_id: Some(root_local_id.clone()),
+            name: "synced.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some(md5.clone()),
+            size: Some(content.len() as u64),
+            mtime: file_meta.mtime(),
+        })
+        .unwrap();
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("remote-synced-1"),
+            parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+            name: "synced.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some(md5.clone()),
+            size: Some(content.len() as u64),
+            updated_at: 1000,
+            rev: "1-abc".to_string(),
+        })
+        .unwrap();
+    store
+        .insert_synced(&SyncedRecord {
+            local_id: file_local_id.clone(),
+            remote_id: RemoteId::new("remote-synced-1"),
+            rel_path: "synced.txt".to_string(),
+            md5sum: Some(md5),
+            size: Some(content.len() as u64),
+            rev: "1-abc".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("synced.txt".to_string()),
+            local_parent_id: Some(root_local_id.clone()),
+            remote_name: Some("synced.txt".to_string()),
+            remote_parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        })
+        .unwrap();
+    store.flush().unwrap();
+
+    // Delete the file while "stopped"
+    std::fs::remove_file(&file_path).unwrap();
+
+    // Restart: fresh engine, run initial_scan
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+    engine.initial_scan().unwrap();
+
+    // Stale local node must be gone
+    assert!(
+        engine
+            .store()
+            .get_local_node(&file_local_id)
+            .unwrap()
+            .is_none(),
+        "initial_scan should remove stale local node for file deleted while stopped"
+    );
+
+    // Plan must contain DeleteRemote (not NoOp)
+    let results = engine.plan().unwrap();
+    let has_delete = results.iter().any(|r| {
+        matches!(r, PlanResult::Op(SyncOp::DeleteRemote { remote_id, .. })
+            if remote_id.as_str() == "remote-synced-1")
+    });
+    assert!(
+        has_delete,
+        "plan should contain DeleteRemote for file deleted while stopped"
+    );
+}
