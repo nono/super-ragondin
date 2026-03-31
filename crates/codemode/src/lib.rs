@@ -3,6 +3,7 @@ pub mod interaction;
 pub(crate) mod llm;
 pub mod prompt;
 pub(crate) mod sandbox;
+pub mod session;
 pub mod suggestions;
 pub mod tools;
 
