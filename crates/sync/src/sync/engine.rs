@@ -10,6 +10,7 @@ use crate::remote::client::CozyClient;
 use crate::store::TreeStore;
 use crate::sync::conflict_name::generate_conflict_name;
 use crate::util::{compute_md5_from_bytes, compute_md5_from_path};
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,44 @@ impl SyncEngine {
 
         for node in &local_nodes {
             self.store.insert_local_node(node)?;
+        }
+
+        // Remove stale local nodes — nodes that were in the store from a previous
+        // session but are no longer present on disk (e.g. deleted while stopped).
+        // The root node is not returned by the scanner so we preserve it explicitly.
+        let root_meta = fs::symlink_metadata(&self.sync_dir)?;
+        let root_local_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+        let scanned_ids: HashSet<LocalFileId> = local_nodes
+            .iter()
+            .map(|n| n.id.clone())
+            .chain(std::iter::once(root_local_id))
+            .collect();
+        let stale_ids: Vec<LocalFileId> = self
+            .store
+            .list_all_local()?
+            .into_iter()
+            .map(|n| n.id)
+            .filter(|id| !scanned_ids.contains(id))
+            .collect();
+        if !stale_ids.is_empty() {
+            tracing::info!(count = stale_ids.len(), "🧹 Removing stale local nodes");
+            for id in &stale_ids {
+                self.store.delete_local_node(id)?;
+                // Clear location fields on the associated synced record so that
+                // reconcile_inodes (keyed on local_name + local_parent_id) does
+                // not mistakenly treat a new local node at the same path as an
+                // atomic save.  The synced record is kept so the planner can
+                // still generate DeleteRemote for the now-missing local file.
+                if let Some(synced) = self.store.get_synced_by_local(id)? {
+                    let updated = SyncedRecord {
+                        local_name: None,
+                        local_parent_id: None,
+                        ..synced
+                    };
+                    self.store.delete_synced(id)?;
+                    self.store.insert_synced(&updated)?;
+                }
+            }
         }
 
         tracing::info!(count, "🔍 Initial scan found nodes");
