@@ -2207,3 +2207,166 @@ fn initial_scan_detects_file_deleted_while_stopped() {
         "plan should contain DeleteRemote for file deleted while stopped"
     );
 }
+
+#[test]
+fn initial_scan_detects_file_replaced_while_stopped() {
+    use std::os::unix::fs::MetadataExt;
+    use super_ragondin_sync::model::{Conflict, LocalNode, PlanResult, SyncOp};
+    use super_ragondin_sync::util::compute_md5_from_bytes;
+
+    let store_dir = tempdir().unwrap();
+    let sync_dir = tempdir().unwrap();
+
+    // Write original file to get its inode.
+    let file_path = sync_dir.path().join("replaced.txt");
+    let old_content = b"original";
+    std::fs::write(&file_path, old_content).unwrap();
+
+    // Add a keeper file so the scan isn't empty after the replace (avoids EmptySyncDir guard)
+    std::fs::write(sync_dir.path().join("keeper.txt"), b"not replaced").unwrap();
+
+    let root_meta = std::fs::symlink_metadata(sync_dir.path()).unwrap();
+    let root_local_id = LocalFileId::new(root_meta.dev(), root_meta.ino());
+    let old_file_meta = std::fs::symlink_metadata(&file_path).unwrap();
+    let old_file_local_id = LocalFileId::new(old_file_meta.dev(), old_file_meta.ino());
+    let old_md5 = compute_md5_from_bytes(old_content);
+
+    let store = TreeStore::open(store_dir.path()).unwrap();
+
+    // Root
+    store
+        .insert_local_node(&LocalNode {
+            id: root_local_id.clone(),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            mtime: root_meta.mtime(),
+        })
+        .unwrap();
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("io.cozy.files.root-dir"),
+            parent_id: None,
+            name: String::new(),
+            node_type: NodeType::Directory,
+            md5sum: None,
+            size: None,
+            updated_at: 0,
+            rev: "1-root".to_string(),
+        })
+        .unwrap();
+    store
+        .insert_synced(&SyncedRecord {
+            local_id: root_local_id.clone(),
+            remote_id: RemoteId::new("io.cozy.files.root-dir"),
+            rel_path: String::new(),
+            md5sum: None,
+            size: None,
+            rev: "1-root".to_string(),
+            node_type: NodeType::Directory,
+            local_name: Some(String::new()),
+            local_parent_id: None,
+            remote_name: Some(String::new()),
+            remote_parent_id: None,
+        })
+        .unwrap();
+
+    // Previously-synced file (old version)
+    store
+        .insert_local_node(&LocalNode {
+            id: old_file_local_id.clone(),
+            parent_id: Some(root_local_id.clone()),
+            name: "replaced.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some(old_md5.clone()),
+            size: Some(old_content.len() as u64),
+            mtime: old_file_meta.mtime(),
+        })
+        .unwrap();
+    store
+        .insert_remote_node(&RemoteNode {
+            id: RemoteId::new("remote-replaced-1"),
+            parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+            name: "replaced.txt".to_string(),
+            node_type: NodeType::File,
+            md5sum: Some(old_md5.clone()),
+            size: Some(old_content.len() as u64),
+            updated_at: 1000,
+            rev: "1-orig".to_string(),
+        })
+        .unwrap();
+    store
+        .insert_synced(&SyncedRecord {
+            local_id: old_file_local_id.clone(),
+            remote_id: RemoteId::new("remote-replaced-1"),
+            rel_path: "replaced.txt".to_string(),
+            md5sum: Some(old_md5),
+            size: Some(old_content.len() as u64),
+            rev: "1-orig".to_string(),
+            node_type: NodeType::File,
+            local_name: Some("replaced.txt".to_string()),
+            local_parent_id: Some(root_local_id.clone()),
+            remote_name: Some("replaced.txt".to_string()),
+            remote_parent_id: Some(RemoteId::new("io.cozy.files.root-dir")),
+        })
+        .unwrap();
+    store.flush().unwrap();
+
+    // Replace the file while "stopped": delete + create gives a new inode
+    std::fs::remove_file(&file_path).unwrap();
+    std::fs::write(&file_path, b"replacement").unwrap();
+
+    // Restart: fresh engine, run initial_scan
+    let mut engine = SyncEngine::new(
+        store,
+        sync_dir.path().to_path_buf(),
+        sync_dir.path().join(".staging"),
+        IgnoreRules::none(),
+    );
+    engine.initial_scan().unwrap();
+
+    // Stale local node for old file must be gone
+    assert!(
+        engine
+            .store()
+            .get_local_node(&old_file_local_id)
+            .unwrap()
+            .is_none(),
+        "initial_scan should remove stale local node for replaced file"
+    );
+
+    let results = engine.plan().unwrap();
+
+    // Must NOT produce a NameCollision conflict for the new file
+    let has_name_collision = results.iter().any(|r| {
+        matches!(
+            r,
+            PlanResult::Conflict(Conflict {
+                kind: ConflictKind::NameCollision,
+                ..
+            })
+        )
+    });
+    assert!(
+        !has_name_collision,
+        "replaced file should not produce NameCollision conflict"
+    );
+
+    // Must plan DeleteRemote for the old remote file
+    let has_delete = results.iter().any(|r| {
+        matches!(r, PlanResult::Op(SyncOp::DeleteRemote { remote_id, .. })
+            if remote_id.as_str() == "remote-replaced-1")
+    });
+    assert!(has_delete, "plan should contain DeleteRemote for old file");
+
+    // Must plan UploadNew for the new file
+    let has_upload = results.iter().any(
+        |r| matches!(r, PlanResult::Op(SyncOp::UploadNew { name, .. }) if name == "replaced.txt"),
+    );
+    assert!(
+        has_upload,
+        "plan should contain UploadNew for the replacement file"
+    );
+}
