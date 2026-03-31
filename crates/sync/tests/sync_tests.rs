@@ -2171,6 +2171,9 @@ fn initial_scan_detects_file_deleted_while_stopped() {
         .unwrap();
     store.flush().unwrap();
 
+    // Add a second file so the scan isn't empty (avoids the EmptySyncDir safety guard)
+    std::fs::write(sync_dir.path().join("keeper.txt"), b"not deleted").unwrap();
+
     // Delete the file while "stopped"
     std::fs::remove_file(&file_path).unwrap();
 
