@@ -376,7 +376,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
         let answer = engine
-            .ask(&question, cwd, web_search)
+            .ask(&question, cwd, web_search, false)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         println!("{answer}");

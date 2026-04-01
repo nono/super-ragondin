@@ -106,7 +106,12 @@ async fn test_engine_ask_with_user_clarification() {
     );
 
     let answer = engine
-        .ask("Generate a report about recent documents", None, false)
+        .ask(
+            "Generate a report about recent documents",
+            None,
+            false,
+            true,
+        )
         .await
         .expect("ask should succeed");
 
