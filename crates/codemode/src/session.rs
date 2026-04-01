@@ -113,6 +113,42 @@ impl Session {
         }
         Ok(best)
     }
+
+    /// Build a condensed summary of previous turns for LLM context injection.
+    ///
+    /// Returns `None` if the session has no turns. Limits to the last `max_turns`
+    /// turns and truncates long answers.
+    #[must_use]
+    pub fn history_summary(&self, max_turns: usize) -> Option<String> {
+        const MAX_ANSWER_CHARS: usize = 500;
+        const MAX_SUMMARY_CHARS: usize = 2000;
+
+        if self.turns.is_empty() {
+            return None;
+        }
+
+        let start = self.turns.len().saturating_sub(max_turns);
+        let mut lines = vec!["[Session history]".to_string()];
+        let mut total_len = lines[0].len();
+
+        for turn in &self.turns[start..] {
+            let q_line = format!("Q: {}", turn.question);
+            let answer = if turn.answer.len() > MAX_ANSWER_CHARS {
+                let end = turn.answer.floor_char_boundary(MAX_ANSWER_CHARS);
+                format!("{}…", &turn.answer[..end])
+            } else {
+                turn.answer.clone()
+            };
+            let a_line = format!("A: {answer}");
+            total_len += q_line.len() + a_line.len() + 2;
+            if total_len > MAX_SUMMARY_CHARS {
+                break;
+            }
+            lines.push(q_line);
+            lines.push(a_line);
+        }
+        Some(lines.join("\n"))
+    }
 }
 
 #[cfg(test)]
@@ -214,5 +250,76 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.id, s2.id);
+    }
+
+    #[test]
+    fn history_summary_empty_session() {
+        let session = Session::new("m", false);
+        let summary = session.history_summary(5);
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn history_summary_formats_turns() {
+        let mut session = Session::new("m", false);
+        session.add_turn(Turn {
+            timestamp: Utc::now(),
+            question: "What is X?".to_string(),
+            context_dir: None,
+            tool_calls: vec![],
+            interactions: vec![],
+            answer: "X is Y.".to_string(),
+        });
+        session.add_turn(Turn {
+            timestamp: Utc::now(),
+            question: "And Z?".to_string(),
+            context_dir: None,
+            tool_calls: vec![],
+            interactions: vec![],
+            answer: "Z is W.".to_string(),
+        });
+        let summary = session.history_summary(5).unwrap();
+        assert!(summary.contains("[Session history]"));
+        assert!(summary.contains("Q: What is X?"));
+        assert!(summary.contains("A: X is Y."));
+        assert!(summary.contains("Q: And Z?"));
+        assert!(summary.contains("A: Z is W."));
+    }
+
+    #[test]
+    fn history_summary_limits_to_max_turns() {
+        let mut session = Session::new("m", false);
+        for i in 0..10 {
+            session.add_turn(Turn {
+                timestamp: Utc::now(),
+                question: format!("q{i}"),
+                context_dir: None,
+                tool_calls: vec![],
+                interactions: vec![],
+                answer: format!("a{i}"),
+            });
+        }
+        let summary = session.history_summary(3).unwrap();
+        assert!(!summary.contains("Q: q0"));
+        assert!(!summary.contains("Q: q6"));
+        assert!(summary.contains("Q: q7"));
+        assert!(summary.contains("Q: q8"));
+        assert!(summary.contains("Q: q9"));
+    }
+
+    #[test]
+    fn history_summary_truncates_long_answers() {
+        let mut session = Session::new("m", false);
+        let long_answer = "x".repeat(3000);
+        session.add_turn(Turn {
+            timestamp: Utc::now(),
+            question: "q".to_string(),
+            context_dir: None,
+            tool_calls: vec![],
+            interactions: vec![],
+            answer: long_answer,
+        });
+        let summary = session.history_summary(5).unwrap();
+        assert!(summary.len() < 2500, "summary too long: {}", summary.len());
     }
 }
