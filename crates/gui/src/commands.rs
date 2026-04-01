@@ -378,7 +378,7 @@ pub async fn ask_question_from(
             e.to_string()
         })?;
 
-    engine.ask(question, None, false).await.map_err(|e| {
+    engine.ask(question, None, false, false).await.map_err(|e| {
         tracing::error!(error = %e, "✦ Ask: query failed");
         e.to_string()
     })
@@ -454,7 +454,7 @@ pub async fn ask_question(
         .map_err(|e| e.to_string())?;
 
     engine
-        .ask(&question, None, web_search)
+        .ask(&question, None, web_search, false)
         .await
         .map_err(|e| e.to_string())
 }

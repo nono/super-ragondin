@@ -130,6 +130,7 @@ impl CodeModeEngine {
         question: &str,
         context_dir: Option<std::path::PathBuf>,
         web_search: bool,
+        new_session: bool,
     ) -> Result<String> {
         tracing::info!(question, "✦ Ask: engine loop starting");
         let client = reqwest::Client::builder()
@@ -140,11 +141,26 @@ impl CodeModeEngine {
         let api_url = &self.config.api_url;
         let model = &self.config.chat_model;
 
-        let context_msg = self.build_context_message(context_dir).await;
+        let sessions_dir = self.sync_dir.join("Settings/Super-Ragondin/sessions");
+        let mut session = if new_session {
+            crate::session::Session::new(model, web_search)
+        } else {
+            crate::session::Session::find_recent(
+                &sessions_dir,
+                std::time::Duration::from_secs(1800),
+            )?
+            .unwrap_or_else(|| crate::session::Session::new(model, web_search))
+        };
+
+        let context_msg = self.build_context_message(context_dir.clone()).await;
 
         let mut messages = vec![
             serde_json::json!({"role": "system", "content": system_prompt(self.interaction.is_some(), web_search)}),
         ];
+
+        if let Some(history) = session.history_summary(5) {
+            messages.push(serde_json::json!({"role": "user", "content": history}));
+        }
 
         if let Some(ctx) = context_msg {
             messages.push(serde_json::json!({"role": "user", "content": ctx}));
@@ -153,6 +169,7 @@ impl CodeModeEngine {
 
         let tools = vec![execute_js_tool_definition()];
         let scratchpad = new_scratchpad();
+        let mut turn_tool_calls: Vec<crate::session::ToolCallRecord> = Vec::new();
 
         for iteration in 0..MAX_ITERATIONS {
             tracing::debug!(
@@ -210,17 +227,22 @@ impl CodeModeEngine {
                             interaction_clone,
                             web_search,
                         );
-                        (id_clone, sandbox.execute(&code_clone))
+                        let result = sandbox.execute(&code_clone);
+                        (id_clone, code_clone, result)
                     }));
                 }
 
                 for handle in handles {
-                    let (id, result) = handle.await.context("spawn_blocking panicked")?;
+                    let (id, code, result) = handle.await.context("spawn_blocking panicked")?;
                     let tool_result = match result {
                         Ok(json_str) => json_str,
                         Err(err_msg) => err_msg, // JS errors returned as strings for LLM to adapt
                     };
                     tracing::debug!(result = %tool_result, "execute_js result");
+                    turn_tool_calls.push(crate::session::ToolCallRecord {
+                        code,
+                        result: tool_result.clone(),
+                    });
                     messages.push(serde_json::json!({
                         "role": "tool",
                         "tool_call_id": id,
@@ -233,6 +255,23 @@ impl CodeModeEngine {
                     answer_len = text.len(),
                     "✦ Ask: finished with answer"
                 );
+                let context_dir_str = context_dir.as_ref().and_then(|p| {
+                    p.strip_prefix(&self.sync_dir)
+                        .ok()
+                        .map(|r| r.to_string_lossy().into_owned())
+                });
+                let turn = crate::session::Turn {
+                    timestamp: chrono::Utc::now(),
+                    question: question.to_string(),
+                    context_dir: context_dir_str,
+                    tool_calls: turn_tool_calls,
+                    interactions: vec![],
+                    answer: text.clone(),
+                };
+                session.add_turn(turn);
+                if let Err(e) = session.save(&sessions_dir) {
+                    tracing::warn!(error = %e, "failed to save session");
+                }
                 return Ok(text);
             } else {
                 tracing::error!(iteration, response = %response, "✦ Ask: unexpected response format");
