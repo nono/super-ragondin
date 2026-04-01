@@ -326,10 +326,11 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         })?;
     let rt = tokio::runtime::Runtime::new()?;
 
-    let web_search = args.first().is_some_and(|a| a == "--web");
+    let web_search = args.iter().any(|a| a == "--web");
+    let new_session = args.iter().any(|a| a == "--new-session");
     let question_args: Vec<&str> = args
         .iter()
-        .skip(usize::from(web_search))
+        .filter(|a| *a != "--web" && *a != "--new-session")
         .map(String::as_str)
         .collect();
 
@@ -376,7 +377,7 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
         let answer = engine
-            .ask(&question, cwd, web_search, false)
+            .ask(&question, cwd, web_search, new_session)
             .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         println!("{answer}");
