@@ -18,6 +18,7 @@
   let savingKey: boolean = $state(false)
   let keyError: string | null = $state(null)
   let webSearch: boolean = $state(false)
+  let newSession: boolean = $state(false)
 
   let unlistenAskUser: (() => void) | undefined
 
@@ -57,7 +58,9 @@
     lastQuestion = q
     question = ''
     panelState = 'asking'
-    const result = await commands.askQuestion(q, webSearch)
+    const forceNew = newSession
+    newSession = false
+    const result = await commands.askQuestion(q, webSearch, forceNew)
     if (result.status === 'ok') {
       answer = result.data
       panelState = 'done'
@@ -231,6 +234,14 @@
         <input type="checkbox" bind:checked={webSearch} disabled={panelState === 'asking' || panelState === 'clarifying' || panelState === 'loading'} />
         <span class="web-search-label">🌐 Web</span>
       </label>
+      <button
+        class="new-session-btn"
+        onclick={() => { newSession = true }}
+        disabled={panelState === 'asking' || panelState === 'clarifying' || panelState === 'loading'}
+        title="Start a new conversation"
+      >
+        ✦ New
+      </button>
       <input
         type="text"
         bind:value={question}
@@ -479,6 +490,20 @@
   .web-search-toggle input { margin: 0; cursor: pointer; }
   .web-search-toggle input:disabled { cursor: not-allowed; }
   .web-search-label { font-size: 11px; color: #666; white-space: nowrap; }
+
+  .new-session-btn {
+    padding: 6px 10px;
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #666;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .new-session-btn:hover { background: #f5f5f5; border-color: #bbb; }
+  .new-session-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .clarify-box {
     background: #f7f7f3;

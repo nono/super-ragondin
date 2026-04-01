@@ -439,6 +439,7 @@ impl super_ragondin_codemode::interaction::UserInteraction for GuiInteraction {
 pub async fn ask_question(
     question: String,
     web_search: bool,
+    new_session: bool,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     use super_ragondin_codemode::engine::CodeModeEngine;
@@ -454,7 +455,7 @@ pub async fn ask_question(
         .map_err(|e| e.to_string())?;
 
     engine
-        .ask(&question, None, web_search, false)
+        .ask(&question, None, web_search, new_session)
         .await
         .map_err(|e| e.to_string())
 }

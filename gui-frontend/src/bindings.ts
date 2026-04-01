@@ -54,9 +54,9 @@ async getSuggestions() : Promise<Result<string[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async askQuestion(question: string, webSearch: boolean) : Promise<Result<string, string>> {
+async askQuestion(question: string, webSearch: boolean, newSession: boolean) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ask_question", { question, web_search: webSearch }) };
+    return { status: "ok", data: await TAURI_INVOKE("ask_question", { question, webSearch, newSession }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
