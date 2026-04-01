@@ -903,6 +903,65 @@ fn simulation_file_deleted_while_stopped_syncs_on_restart() {
 }
 
 #[test]
+fn simulation_local_dir_deleted_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    // Create a subdirectory with a file inside
+    let subdir_id = RemoteId::new("subdir-to-delete");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: subdir_id.clone(),
+            parent_id: Some(root_id),
+            name: "docs".to_string(),
+        })
+        .unwrap();
+    let file_in_dir_id = RemoteId::new("file-inside-subdir");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_in_dir_id,
+            parent_id: subdir_id,
+            name: "notes.txt".to_string(),
+            content: b"notes content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id assigned to the subdirectory
+    let local_dir_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "docs")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Delete the directory (and its file) locally while stopped
+    runner
+        .apply(SimAction::LocalDeleteFile {
+            local_id: local_dir_id,
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
 fn simulation_file_replaced_while_stopped_syncs_on_restart() {
     let dir = tempdir().unwrap();
     let store = TreeStore::open(dir.path()).unwrap();
@@ -964,6 +1023,184 @@ fn simulation_file_replaced_while_stopped_syncs_on_restart() {
 
     runner.apply(SimAction::RestartClient).unwrap();
     // Two sync rounds: first uploads the new file, second cleans up the old remote
+    runner.apply(SimAction::Sync).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+// ==================== Remote While Stopped Tests ====================
+
+#[test]
+fn simulation_remote_file_created_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Create a file on the remote while the client is stopped
+    let remote_file_id = RemoteId::new("remote-created-while-stopped");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: remote_file_id,
+            parent_id: root_id,
+            name: "remote_new.txt".to_string(),
+            content: b"created on remote while stopped".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_remote_file_deleted_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-to-remote-delete");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "remote_delete.txt".to_string(),
+            content: b"will be deleted remotely".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Delete the file on the remote while the client is stopped
+    runner
+        .apply(SimAction::RemoteDeleteFile { id: file_id })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_remote_file_modified_while_stopped_syncs_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-to-remote-modify");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "remote_modify.txt".to_string(),
+            content: b"original content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Modify the file on the remote while the client is stopped
+    runner
+        .apply(SimAction::RemoteModifyFile {
+            id: file_id,
+            content: b"modified on remote while stopped".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    runner.check_convergence().unwrap();
+}
+
+#[test]
+fn simulation_both_sides_modify_file_while_stopped_converges_on_restart() {
+    let dir = tempdir().unwrap();
+    let store = TreeStore::open(dir.path()).unwrap();
+    let mut runner = SimulationRunner::new(store, dir.path().join("sync"));
+
+    let root_id = RemoteId::new("io.cozy.files.root-dir");
+    runner
+        .apply(SimAction::RemoteCreateDir {
+            id: root_id.clone(),
+            parent_id: None,
+            name: String::new(),
+        })
+        .unwrap();
+
+    let file_id = RemoteId::new("file-modified-on-both-sides");
+    runner
+        .apply(SimAction::RemoteCreateFile {
+            id: file_id.clone(),
+            parent_id: root_id,
+            name: "shared.txt".to_string(),
+            content: b"original content".to_vec(),
+        })
+        .unwrap();
+    runner.apply(SimAction::Sync).unwrap();
+
+    // Find the local id assigned by sync
+    let local_id = runner
+        .local_fs
+        .list_all()
+        .into_iter()
+        .find(|n| n.name == "shared.txt")
+        .map(|n| n.id.clone())
+        .unwrap();
+
+    runner.apply(SimAction::StopClient).unwrap();
+
+    // Both sides modify the same file while the client is stopped
+    runner
+        .apply(SimAction::LocalModifyFile {
+            local_id,
+            content: b"local modification while stopped".to_vec(),
+        })
+        .unwrap();
+    runner
+        .apply(SimAction::RemoteModifyFile {
+            id: file_id,
+            content: b"remote modification while stopped".to_vec(),
+        })
+        .unwrap();
+
+    runner.apply(SimAction::RestartClient).unwrap();
+    // First sync resolves the BothModified conflict (remote wins),
+    // second sync confirms the resolved state is stable.
     runner.apply(SimAction::Sync).unwrap();
     runner.apply(SimAction::Sync).unwrap();
 
