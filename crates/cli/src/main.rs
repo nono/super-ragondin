@@ -46,6 +46,7 @@ fn main() -> Result<()> {
     }
 }
 
+// Returns Result<()> for consistency with other cmd_* functions used in the match.
 #[allow(clippy::unnecessary_wraps)]
 fn cmd_version() -> Result<()> {
     println!("super-ragondin {}", env!("CARGO_PKG_VERSION"));
