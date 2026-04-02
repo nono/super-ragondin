@@ -34,6 +34,7 @@ JS sandbox + LLM tool-use loop for `ask` command:
 - `src/tools/scratchpad.rs` - `remember(key, value)` / `recall(key)` JS globals — in-session key-value scratchpad shared across tool calls within one `ask()` session
 - `src/tools/web_fetch.rs` - `webFetch(url)` JS global — HTTP GET with status/contentType/body response
 - `src/tools/web_search.rs` - `webSearch(query, options?)` JS global — Exa web search via OpenRouter (opt-in via `--web` flag)
+- `src/session.rs` - `Session` — persistent multi-turn session: save/load JSON, `find_recent()` with 30-min timeout, `history_summary()` for LLM context injection
 
 ## Environment Variables
 
@@ -58,6 +59,7 @@ The LanceDB database is stored at `<data_dir>/rag/` (e.g. `~/.local/share/super-
 - `detect_mime()` extension fallback must cover common text-based extensions (`.json`, `.yml`, `.rs`, etc.) — `infer` returns `None` for these and they default to `application/octet-stream`, causing the text extractor to skip them
 - chonkie 0.1.1 feature is `tiktoken` (not `tiktoken-rs`)
 - `OPENROUTER_API_KEY` resolution must check both environment variable and config file (`api_key` field) with consistent precedence across CLI and GUI
+- Sessions are stored as JSON files in `{sync_dir}/Settings/Super-Ragondin/sessions/` — one file per session, named by UTC timestamp (e.g. `2026-03-31T14-30-00Z.json`). They are indexed by RAG for insights.
 
 ## References
 
