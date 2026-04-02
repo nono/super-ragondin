@@ -6,6 +6,7 @@
   let status: SyncState = $state('Idle')
   let lastSync: string | null = $state(null)
   let recentFiles: string[] = $state([])
+  let version: string = $state('')
 
   let unlistenSyncStatus: (() => void) | undefined
 
@@ -26,6 +27,8 @@
       }
     })
     commands.startSync()
+    const v = await commands.getVersion()
+    version = v
     await refreshRecentFiles()
   })
 
@@ -57,6 +60,7 @@
 
 <div class="panel">
   <div class="app-title">Super Ragondin</div>
+  <p class="version">v{version}</p>
 
   <div class="status-badge" class:syncing={status === 'Syncing'}>
     <span class="dot"></span>
@@ -100,6 +104,10 @@
     letter-spacing: 0.08em;
     color: #888;
     text-transform: uppercase;
+  }
+  .version {
+    font-size: 10px;
+    color: #aaa;
   }
   .status-badge {
     display: flex;
