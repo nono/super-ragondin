@@ -488,6 +488,12 @@ pub async fn get_suggestions() -> Result<Vec<String>, String> {
     get_suggestions_from(&config_path()).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Build the tauri-specta builder — shared by `main()` and the export test.
 pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
@@ -501,6 +507,7 @@ pub fn make_builder() -> tauri_specta::Builder<tauri::Wry> {
             get_suggestions,
             ask_question,
             answer_user,
+            get_version,
         ])
         .events(tauri_specta::collect_events![
             AuthCompleteEvent,

@@ -56,7 +56,7 @@ async getSuggestions() : Promise<Result<string[], string>> {
 },
 async askQuestion(question: string, webSearch: boolean, newSession: boolean) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("ask_question", { question, web_search: webSearch, new_session: newSession }) };
+    return { status: "ok", data: await TAURI_INVOKE("ask_question", { question, webSearch, newSession }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -74,6 +74,9 @@ async answerUser(answer: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getVersion() : Promise<string> {
+    return await TAURI_INVOKE("get_version");
 }
 }
 
