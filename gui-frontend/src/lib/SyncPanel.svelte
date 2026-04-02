@@ -108,6 +108,7 @@
   .version {
     font-size: 10px;
     color: #aaa;
+    margin: 0;
   }
   .status-badge {
     display: flex;
