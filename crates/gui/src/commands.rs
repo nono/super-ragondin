@@ -378,10 +378,13 @@ pub async fn ask_question_from(
             e.to_string()
         })?;
 
-    engine.ask(question, None, false, false).await.map_err(|e| {
-        tracing::error!(error = %e, "✦ Ask: query failed");
-        e.to_string()
-    })
+    engine
+        .ask(&question, None, false, false)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "✦ Ask: query failed");
+            e.to_string()
+        })
 }
 
 /// Deliver the user's answer to a pending `askUser()` call in the codemode sandbox.
