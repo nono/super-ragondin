@@ -27,6 +27,7 @@ fn main() -> Result<()> {
         Some("watch") => cmd_watch(),
         Some("status") => cmd_status(),
         Some("ask") => cmd_ask(&args[2..]),
+        Some("version") => cmd_version(),
         _ => {
             println!("Usage: super-ragondin <command>");
             println!();
@@ -39,9 +40,16 @@ fn main() -> Result<()> {
             println!(
                 "  ask [--web] <question>           Ask a question (--web enables web search)"
             );
+            println!("  version                          Show version");
             Ok(())
         }
     }
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn cmd_version() -> Result<()> {
+    println!("super-ragondin {}", env!("CARGO_PKG_VERSION"));
+    Ok(())
 }
 
 fn config_path() -> PathBuf {
