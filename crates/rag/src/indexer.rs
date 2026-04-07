@@ -27,7 +27,7 @@ pub async fn reconcile(
         .filter_map(|r| r.md5sum.as_deref().map(|md5| (r.rel_path.as_str(), md5)))
         .collect();
 
-    let indexed = rag_store.list_indexed().await?;
+    let indexed = rag_store.list_indexed()?;
     let indexed_map: HashMap<String, String> =
         indexed.into_iter().map(|d| (d.doc_id, d.md5sum)).collect();
 
@@ -52,7 +52,7 @@ pub async fn reconcile(
     for doc_id in indexed_map.keys() {
         if !synced_map.contains_key(doc_id.as_str()) {
             tracing::debug!(doc_id, "Removing deleted file from index");
-            rag_store.delete_doc(doc_id).await?;
+            rag_store.delete_doc(doc_id)?;
         }
     }
 
@@ -75,18 +75,18 @@ pub async fn reconcile(
 
         let mime_type = detect_mime(&file_path);
 
-        rag_store.delete_doc(rel_path).await?;
+        rag_store.delete_doc(rel_path)?;
 
         match index_file(rel_path, &file_path, &mime_type, mtime, md5sum, embedder).await {
             Ok(chunks) if chunks.is_empty() => {
-                rag_store.upsert_skipped(rel_path, md5sum).await?;
+                rag_store.upsert_skipped(rel_path, md5sum)?;
                 tracing::debug!(
                     rel_path,
                     "File produced no indexable content, marked as skipped"
                 );
             }
             Ok(chunks) => {
-                rag_store.upsert_chunks(&chunks).await?;
+                rag_store.upsert_chunks(&chunks)?;
                 tracing::info!(rel_path, chunks = chunks.len(), "Indexed file");
             }
             Err(e) => {
@@ -111,7 +111,7 @@ pub async fn reconcile_if_configured(
     let mut rag_config = RagConfig::from_env_with_db_path(db_path);
     rag_config.api_key = api_key;
     let embedder = OpenRouterEmbedder::new(rag_config.clone());
-    let rag_store = match RagStore::open(&rag_config.db_path).await {
+    let rag_store = match RagStore::open(&rag_config.db_path) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to open RAG store (non-fatal)");
@@ -188,13 +188,11 @@ async fn index_file(
     }
 
     let chunk_count = texts.len();
-    let embeddings = embedder.embed_texts(&texts).await?;
-    tracing::debug!(chunk_count, "embedded chunks");
+    tracing::debug!(chunk_count, "chunked text");
     let chunks = texts
         .into_iter()
-        .zip(embeddings)
         .enumerate()
-        .map(|(i, (text, embedding))| ChunkRecord {
+        .map(|(i, text)| ChunkRecord {
             id: format!("{rel_path}:{i}"),
             doc_id: rel_path.to_string(),
             mime_type: mime_type.to_string(),
@@ -202,7 +200,6 @@ async fn index_file(
             chunk_index: u32::try_from(i).expect("chunk index fits u32"),
             chunk_text: text,
             md5sum: md5sum.to_string(),
-            embedding,
         })
         .collect();
 
@@ -260,7 +257,7 @@ mod tests {
         )
         .unwrap();
 
-        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let rag_store = RagStore::open(db_dir.path()).unwrap();
         let embedder = StubEmbedder;
         let records = vec![synced_record("notes/hello.txt", "abc123")];
 
@@ -268,7 +265,7 @@ mod tests {
             .await
             .unwrap();
 
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].doc_id, "notes/hello.txt");
     }
@@ -278,21 +275,18 @@ mod tests {
         let db_dir = tempdir().unwrap();
         let sync_dir = tempdir().unwrap();
 
-        // Write a binary file that will produce no chunks (application/octet-stream, no extractor)
         let file_path = sync_dir.path().join("binary.bin");
         std::fs::write(&file_path, b"\x00\x01\x02\x03\xff\xfe binary junk").unwrap();
 
-        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let rag_store = RagStore::open(db_dir.path()).unwrap();
         let embedder = StubEmbedder;
         let records = vec![synced_record("binary.bin", "deadbeef")];
 
-        // First run: file is processed, produces no chunks, should be marked as skipped
         reconcile(&records, sync_dir.path(), &rag_store, &embedder)
             .await
             .unwrap();
 
-        // Skipped entry should now be recorded
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert_eq!(
             indexed.len(),
             1,
@@ -301,14 +295,11 @@ mod tests {
         assert_eq!(indexed[0].doc_id, "binary.bin");
         assert_eq!(indexed[0].md5sum, "deadbeef");
 
-        // Second run: same md5sum → should be skipped without re-processing
-        // (We verify this indirectly: list_indexed still has exactly one entry,
-        // not two, confirming no duplicate was inserted.)
         reconcile(&records, sync_dir.path(), &rag_store, &embedder)
             .await
             .unwrap();
 
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert_eq!(indexed.len(), 1, "no duplicate entry after second run");
     }
 
@@ -317,10 +308,9 @@ mod tests {
         let db_dir = tempdir().unwrap();
         let sync_dir = tempdir().unwrap();
 
-        // First: binary file, no chunks → skipped
         let file_path = sync_dir.path().join("doc.bin");
         std::fs::write(&file_path, b"\x00binary").unwrap();
-        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let rag_store = RagStore::open(db_dir.path()).unwrap();
         let embedder = StubEmbedder;
 
         reconcile(
@@ -332,10 +322,9 @@ mod tests {
         .await
         .unwrap();
 
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert_eq!(indexed[0].md5sum, "md5_v1");
 
-        // Now file changes to text content — new md5sum triggers re-processing
         std::fs::write(
             &file_path,
             "Now this is indexable text content for the RAG.",
@@ -351,8 +340,7 @@ mod tests {
         .await
         .unwrap();
 
-        // File should now be properly indexed with the new md5sum
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].md5sum, "md5_v2");
     }
@@ -360,17 +348,15 @@ mod tests {
     #[tokio::test]
     async fn test_reconcile_if_configured_is_noop_when_api_key_absent() {
         let sync_dir = tempdir().unwrap();
-        // Pass a non-existent db_path — if it tried to open it, it would fail
         let db_path = sync_dir.path().join("nonexistent_db");
         reconcile_if_configured(None, db_path, &[], sync_dir.path()).await;
-        // no panic, no DB opened = pass
     }
 
     #[tokio::test]
     async fn test_reconcile_removes_deleted_file() {
         let db_dir = tempdir().unwrap();
         let sync_dir = tempdir().unwrap();
-        let rag_store = RagStore::open(db_dir.path()).await.unwrap();
+        let rag_store = RagStore::open(db_dir.path()).unwrap();
         let embedder = StubEmbedder;
 
         rag_store
@@ -382,16 +368,14 @@ mod tests {
                 chunk_index: 0,
                 chunk_text: "old content".to_string(),
                 md5sum: "deadbeef".to_string(),
-                embedding: vec![0.0_f32; 1024],
             }])
-            .await
             .unwrap();
 
         reconcile(&[], sync_dir.path(), &rag_store, &embedder)
             .await
             .unwrap();
 
-        let indexed = rag_store.list_indexed().await.unwrap();
+        let indexed = rag_store.list_indexed().unwrap();
         assert!(indexed.is_empty());
     }
 }
