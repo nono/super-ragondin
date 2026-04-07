@@ -1,6 +1,6 @@
 use crate::chunker;
 use crate::config::RagConfig;
-use crate::embedder::{Embedder, OpenRouterEmbedder};
+use crate::embedder::{OpenRouterVision, VisionDescriber};
 use crate::extractor;
 use crate::store::{ChunkRecord, RagStore};
 use anyhow::Result;
@@ -8,18 +8,18 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use super_ragondin_sync::model::{NodeType, SyncedRecord};
 
-/// Reconcile `LanceDB` index against the current set of synced records.
+/// Reconcile Tantivy index against the current set of synced records.
 /// - Files in synced but not indexed (or with different md5sum) → index.
-/// - Doc IDs in `LanceDB` not present in synced → delete.
+/// - Doc IDs in index not present in synced → delete.
 ///
 /// # Errors
-/// Returns error if any database or embedding operation fails.
-#[tracing::instrument(skip(synced, rag_store, embedder), fields(synced_count = synced.len(), sync_dir = %sync_dir.display()))]
+/// Returns error if any database or vision operation fails.
+#[tracing::instrument(skip(synced, rag_store, describer), fields(synced_count = synced.len(), sync_dir = %sync_dir.display()))]
 pub async fn reconcile(
     synced: &[SyncedRecord],
     sync_dir: &Path,
     rag_store: &RagStore,
-    embedder: &dyn Embedder,
+    describer: &dyn VisionDescriber,
 ) -> Result<()> {
     let synced_map: HashMap<&str, &str> = synced
         .iter()
@@ -77,7 +77,7 @@ pub async fn reconcile(
 
         rag_store.delete_doc(rel_path)?;
 
-        match index_file(rel_path, &file_path, &mime_type, mtime, md5sum, embedder).await {
+        match index_file(rel_path, &file_path, &mime_type, mtime, md5sum, describer).await {
             Ok(chunks) if chunks.is_empty() => {
                 rag_store.upsert_skipped(rel_path, md5sum)?;
                 tracing::debug!(
@@ -98,19 +98,29 @@ pub async fn reconcile(
     Ok(())
 }
 
-/// Run RAG reconciliation if an API key is available.
-/// When `api_key` is `None` this is a no-op. Failures are logged as warnings
-/// and do not propagate — reconciliation is always non-fatal.
+struct NoOpDescriber;
+
+#[async_trait::async_trait]
+impl VisionDescriber for NoOpDescriber {
+    async fn describe_image(&self, _image_b64: &str, _mime: &str) -> Result<String> {
+        anyhow::bail!("no API key configured — image description unavailable")
+    }
+}
+
+/// Run RAG reconciliation, falling back to a no-op describer when `api_key` is `None`.
+///
+/// Text files are indexed regardless of API key; image description is skipped.
+/// Failures are logged as warnings and do not propagate — reconciliation is non-fatal.
 pub async fn reconcile_if_configured(
     api_key: Option<String>,
     db_path: PathBuf,
     synced: &[SyncedRecord],
     sync_dir: &Path,
 ) {
-    let Some(api_key) = api_key else { return };
     let mut rag_config = RagConfig::from_env_with_db_path(db_path);
-    rag_config.api_key = api_key;
-    let embedder = OpenRouterEmbedder::new(rag_config.clone());
+    if let Some(key) = api_key {
+        rag_config.api_key = key;
+    }
     let rag_store = match RagStore::open(&rag_config.db_path) {
         Ok(s) => s,
         Err(e) => {
@@ -118,7 +128,14 @@ pub async fn reconcile_if_configured(
             return;
         }
     };
-    if let Err(e) = reconcile(synced, sync_dir, &rag_store, &embedder).await {
+    let result = if rag_config.api_key.is_empty() {
+        let describer = NoOpDescriber;
+        reconcile(synced, sync_dir, &rag_store, &describer).await
+    } else {
+        let describer = OpenRouterVision::new(rag_config);
+        reconcile(synced, sync_dir, &rag_store, &describer).await
+    };
+    if let Err(e) = result {
         tracing::warn!(error = %e, "RAG reconciliation failed (non-fatal)");
     }
 }
@@ -137,19 +154,19 @@ fn detect_mime(path: &Path) -> String {
     }
 }
 
-#[tracing::instrument(skip(file_path, mtime, md5sum, embedder), fields(rel_path = rel_path, mime_type = mime_type))]
+#[tracing::instrument(skip(file_path, mtime, md5sum, describer), fields(rel_path = rel_path, mime_type = mime_type))]
 async fn index_file(
     rel_path: &str,
     file_path: &Path,
     mime_type: &str,
     mtime: i64,
     md5sum: &str,
-    embedder: &dyn Embedder,
+    describer: &dyn VisionDescriber,
 ) -> Result<Vec<ChunkRecord>> {
     let texts: Vec<String> = match mime_type {
         "image/jpeg" | "image/png" | "image/webp" | "image/gif" => {
             let b64 = crate::extractor::image::read_as_base64(file_path)?;
-            let description = embedder.describe_image(&b64, mime_type).await?;
+            let description = describer.describe_image(&b64, mime_type).await?;
             chunker::chunk_text_single(&description)
         }
         _ => {
@@ -161,7 +178,7 @@ async fn index_file(
                         match crate::extractor::pdf::render_first_page_as_base64(file_path) {
                             Ok(b64) => {
                                 let description =
-                                    embedder.describe_image(&b64, "image/png").await?;
+                                    describer.describe_image(&b64, "image/png").await?;
                                 chunker::chunk_text_single(&description)
                             }
                             Err(e) => {
@@ -209,18 +226,15 @@ async fn index_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embedder::Embedder;
+    use crate::embedder::VisionDescriber;
     use crate::store::RagStore;
     use async_trait::async_trait;
     use tempfile::tempdir;
 
-    struct StubEmbedder;
+    struct StubDescriber;
 
     #[async_trait]
-    impl Embedder for StubEmbedder {
-        async fn embed_texts(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
-            Ok(texts.iter().map(|_| vec![0.0_f32; 1024]).collect())
-        }
+    impl VisionDescriber for StubDescriber {
         async fn describe_image(&self, _b64: &str, _mime: &str) -> anyhow::Result<String> {
             Ok("stub image description".to_string())
         }
@@ -258,10 +272,10 @@ mod tests {
         .unwrap();
 
         let rag_store = RagStore::open(db_dir.path()).unwrap();
-        let embedder = StubEmbedder;
+        let describer = StubDescriber;
         let records = vec![synced_record("notes/hello.txt", "abc123")];
 
-        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+        reconcile(&records, sync_dir.path(), &rag_store, &describer)
             .await
             .unwrap();
 
@@ -279,10 +293,10 @@ mod tests {
         std::fs::write(&file_path, b"\x00\x01\x02\x03\xff\xfe binary junk").unwrap();
 
         let rag_store = RagStore::open(db_dir.path()).unwrap();
-        let embedder = StubEmbedder;
+        let describer = StubDescriber;
         let records = vec![synced_record("binary.bin", "deadbeef")];
 
-        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+        reconcile(&records, sync_dir.path(), &rag_store, &describer)
             .await
             .unwrap();
 
@@ -295,7 +309,7 @@ mod tests {
         assert_eq!(indexed[0].doc_id, "binary.bin");
         assert_eq!(indexed[0].md5sum, "deadbeef");
 
-        reconcile(&records, sync_dir.path(), &rag_store, &embedder)
+        reconcile(&records, sync_dir.path(), &rag_store, &describer)
             .await
             .unwrap();
 
@@ -311,13 +325,13 @@ mod tests {
         let file_path = sync_dir.path().join("doc.bin");
         std::fs::write(&file_path, b"\x00binary").unwrap();
         let rag_store = RagStore::open(db_dir.path()).unwrap();
-        let embedder = StubEmbedder;
+        let describer = StubDescriber;
 
         reconcile(
             &[synced_record("doc.bin", "md5_v1")],
             sync_dir.path(),
             &rag_store,
-            &embedder,
+            &describer,
         )
         .await
         .unwrap();
@@ -335,7 +349,7 @@ mod tests {
             &[synced_record("doc.bin", "md5_v2")],
             sync_dir.path(),
             &rag_store,
-            &embedder,
+            &describer,
         )
         .await
         .unwrap();
@@ -348,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn test_reconcile_if_configured_is_noop_when_api_key_absent() {
         let sync_dir = tempdir().unwrap();
-        let db_path = sync_dir.path().join("nonexistent_db");
+        let db_path = sync_dir.path().join("rag_db");
         reconcile_if_configured(None, db_path, &[], sync_dir.path()).await;
     }
 
@@ -357,7 +371,7 @@ mod tests {
         let db_dir = tempdir().unwrap();
         let sync_dir = tempdir().unwrap();
         let rag_store = RagStore::open(db_dir.path()).unwrap();
-        let embedder = StubEmbedder;
+        let describer = StubDescriber;
 
         rag_store
             .upsert_chunks(&[crate::store::ChunkRecord {
@@ -371,7 +385,7 @@ mod tests {
             }])
             .unwrap();
 
-        reconcile(&[], sync_dir.path(), &rag_store, &embedder)
+        reconcile(&[], sync_dir.path(), &rag_store, &describer)
             .await
             .unwrap();
 
