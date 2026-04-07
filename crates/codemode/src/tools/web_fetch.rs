@@ -118,7 +118,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox().await;
+        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox();
         let uri = mock_server.uri();
         let result = tokio::task::spawn_blocking(move || {
             let code = format!(r#"webFetch("{uri}")"#);
@@ -147,7 +147,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox().await;
+        let (sandbox, _db, _sync) = crate::sandbox::tests::make_sandbox();
         let uri = mock_server.uri();
         let result = tokio::task::spawn_blocking(move || {
             let code = format!(r#"webFetch("{uri}")"#);

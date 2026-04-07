@@ -30,12 +30,9 @@ fn get_document_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
             JsNativeError::error().with_message("sandbox context not initialized")
         })?;
         let store = std::sync::Arc::clone(&sandbox.store);
-        sandbox.handle.block_on(async move {
-            store
-                .get_chunks(&doc_id)
-                .await
-                .map_err(|e| JsNativeError::error().with_message(e.to_string()))
-        })
+        store
+            .get_chunks(&doc_id)
+            .map_err(|e| JsNativeError::error().with_message(e.to_string()))
     })?;
 
     let json_chunks: Vec<serde_json::Value> = chunks

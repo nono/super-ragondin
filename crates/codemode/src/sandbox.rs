@@ -4,7 +4,7 @@ use std::sync::Arc;
 use boa_engine::{Context, JsError, JsValue, Source, js_string};
 use serde_json::Value as SerdeValue;
 use super_ragondin_cozy_client::client::CozyClient;
-use super_ragondin_rag::{config::RagConfig, embedder::OpenRouterEmbedder, store::RagStore};
+use super_ragondin_rag::{config::RagConfig, store::RagStore};
 
 use crate::interaction::UserInteraction;
 use crate::tools;
@@ -12,12 +12,11 @@ use crate::tools;
 /// Shared Rust state available to all JS native functions during a single execution.
 /// Set via thread-local before each Boa evaluation; cleared after.
 ///
-/// All tool functions (`search`, `listFiles`, etc.) access this to reach the store,
-/// embedder, and Tokio runtime handle.
+/// All tool functions (`search`, `listFiles`, etc.) access this to reach the store
+/// and Tokio runtime handle.
 #[allow(dead_code)]
 pub struct SandboxContext {
     pub store: Arc<RagStore>,
-    pub embedder: Arc<OpenRouterEmbedder>,
     pub config: RagConfig,
     pub handle: tokio::runtime::Handle,
     pub sync_dir: std::path::PathBuf,
@@ -107,12 +106,10 @@ impl Sandbox {
     /// Returns `Err(String)` with a human-readable message on JS or Rust error.
     pub fn execute(&self, code: &str) -> Result<String, String> {
         let handle = tokio::runtime::Handle::current();
-        let embedder = Arc::new(OpenRouterEmbedder::new(self.config.clone()));
 
         SANDBOX_CTX.with(|cell| {
             *cell.borrow_mut() = Some(SandboxContext {
                 store: Arc::clone(&self.store),
-                embedder,
                 config: self.config.clone(),
                 handle,
                 sync_dir: self.sync_dir.clone(),
@@ -182,15 +179,11 @@ pub(crate) mod tests {
     use super_ragondin_rag::{config::RagConfig, store::RagStore};
     use tempfile::tempdir;
 
-    pub(crate) async fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
+    pub(crate) fn make_sandbox() -> (Sandbox, tempfile::TempDir, tempfile::TempDir) {
         use crate::tools::scratchpad::new_scratchpad;
         let db_dir = tempdir().expect("failed to create temp db dir");
         let sync_dir = tempdir().expect("failed to create temp sync dir");
-        let store = Arc::new(
-            RagStore::open(db_dir.path())
-                .await
-                .expect("failed to open RagStore"),
-        );
+        let store = Arc::new(RagStore::open(db_dir.path()).expect("failed to open RagStore"));
         let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
         let sandbox = Sandbox::new(
             store,
@@ -206,21 +199,21 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_arithmetic() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("1 + 2").unwrap();
         assert_eq!(result, "3");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_returns_last_expression() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("const x = 10; x * 2").unwrap();
         assert_eq!(result, "20");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_js_error_returns_err_string() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("undeclaredFunction()");
         assert!(result.is_err());
         let msg = result.unwrap_err();
@@ -229,7 +222,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_object_result() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("({ a: 1, b: 'hello' })").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["a"], 1);
@@ -238,7 +231,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_fresh_context_per_call() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         // Set a variable in one call
         sandbox.execute("var x = 42;").ok();
         // It must NOT be visible in the next call
@@ -248,7 +241,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_sandbox_globals_registered() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         for fn_name in &[
             "search",
             "listFiles",
@@ -274,7 +267,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_save_file_creates_file() {
-        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, sync_dir) = make_sandbox();
         let result = sandbox
             .execute(r#"saveFile("hello.txt", "world")"#)
             .unwrap();
@@ -286,7 +279,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_mkdir_creates_directory() {
-        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, sync_dir) = make_sandbox();
         let result = sandbox.execute(r#"mkdir("my-project/sub")"#).unwrap();
         assert_eq!(result, "null");
         assert!(sync_dir.path().join("my-project/sub").is_dir());
@@ -294,7 +287,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_list_dirs_returns_directories() {
-        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, sync_dir) = make_sandbox();
         // Create some directories in the sync dir
         std::fs::create_dir(sync_dir.path().join("alpha")).expect("create alpha");
         std::fs::create_dir(sync_dir.path().join("beta")).expect("create beta");
@@ -306,7 +299,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_image_rejects_path_traversal() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute(r#"generateImage("test", { path: "../escape.png" })"#);
         assert!(result.is_err());
         let msg = result.unwrap_err();
@@ -318,7 +311,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_image_rejects_reference_traversal() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute(r#"generateImage("test", { reference: "../secret.png" })"#);
         assert!(result.is_err());
         let msg = result.unwrap_err();
@@ -330,7 +323,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_generate_image_nonexistent_reference_returns_io_error() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute(r#"generateImage("test", { reference: "nonexistent.png" })"#);
         assert!(result.is_err());
         // Should be an IO error about the missing file, not a path error
@@ -374,7 +367,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires OPENROUTER_API_KEY"]
     async fn test_generate_image_basic() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox
             .execute(
                 r#"generateImage("a simple red circle on white background", { size: "0.5K" })"#,
@@ -397,7 +390,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires OPENROUTER_API_KEY"]
     async fn test_generate_image_saves_file() {
-        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, sync_dir) = make_sandbox();
         sandbox
             .execute(r#"generateImage("a simple blue square", { path: "generated/out.png", size: "0.5K" })"#)
             .expect("generateImage with path should succeed");
@@ -416,8 +409,8 @@ pub(crate) mod tests {
         let db_a = tempdir()?;
         let db_b = tempdir()?;
         let sync_dir = tempdir()?;
-        let store_a = Arc::new(RagStore::open(db_a.path()).await?);
-        let store_b = Arc::new(RagStore::open(db_b.path()).await?);
+        let store_a = Arc::new(RagStore::open(db_a.path())?);
+        let store_b = Arc::new(RagStore::open(db_b.path())?);
         let config_a = RagConfig::from_env_with_db_path(db_a.path().to_path_buf());
         let config_b = RagConfig::from_env_with_db_path(db_b.path().to_path_buf());
         let scratchpad = new_scratchpad();
@@ -451,7 +444,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_scratchpad_recall_missing_key_returns_null()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (sandbox, _db, _sync) = make_sandbox().await;
+        let (sandbox, _db, _sync) = make_sandbox();
         let result = sandbox.execute(r#"recall("nonexistent")"#)?;
         assert_eq!(result, "null");
         Ok(())
@@ -460,7 +453,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_scratchpad_overwrite() -> Result<(), Box<dyn std::error::Error>> {
         // make_sandbox() creates one scratchpad, so all three execute() calls share it.
-        let (sandbox, _db, _sync) = make_sandbox().await;
+        let (sandbox, _db, _sync) = make_sandbox();
         sandbox.execute(r#"remember("k", "first")"#)?;
         sandbox.execute(r#"remember("k", "second")"#)?;
         let result = sandbox.execute(r#"recall("k")"#)?;
@@ -470,7 +463,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_ask_user_not_registered_without_interaction() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("typeof askUser").unwrap();
         assert_eq!(
             result, "\"undefined\"",
@@ -492,7 +485,7 @@ pub(crate) mod tests {
 
         let db_dir = tempdir().expect("db_dir");
         let sync_dir = tempdir().expect("sync_dir");
-        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let store = Arc::new(RagStore::open(db_dir.path()).expect("store"));
         let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
         let interaction: Arc<dyn crate::interaction::UserInteraction> =
             Arc::new(Always("choice B".to_string()));
@@ -526,7 +519,7 @@ pub(crate) mod tests {
 
         let db_dir = tempdir().expect("db_dir");
         let sync_dir = tempdir().expect("sync_dir");
-        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let store = Arc::new(RagStore::open(db_dir.path()).expect("store"));
         let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
         let interaction: Arc<dyn crate::interaction::UserInteraction> =
             Arc::new(Always("option two".to_string()));
@@ -550,7 +543,7 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires OPENROUTER_API_KEY"]
     async fn test_generate_image_with_reference() {
-        let (sandbox, _db_dir, sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, sync_dir) = make_sandbox();
 
         // Write a minimal valid 1x1 PNG as the reference image
         let minimal_png: &[u8] = &[
@@ -575,7 +568,7 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_web_search_not_registered_by_default() {
-        let (sandbox, _db_dir, _sync_dir) = make_sandbox().await;
+        let (sandbox, _db_dir, _sync_dir) = make_sandbox();
         let result = sandbox.execute("typeof webSearch").unwrap();
         assert_eq!(
             result, "\"undefined\"",
@@ -588,7 +581,7 @@ pub(crate) mod tests {
         use crate::tools::scratchpad::new_scratchpad;
         let db_dir = tempdir().expect("db_dir");
         let sync_dir = tempdir().expect("sync_dir");
-        let store = Arc::new(RagStore::open(db_dir.path()).await.expect("store"));
+        let store = Arc::new(RagStore::open(db_dir.path()).expect("store"));
         let config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
         let sandbox = Sandbox::new(
             store,

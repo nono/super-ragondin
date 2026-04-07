@@ -347,7 +347,6 @@ fn cmd_ask(args: &[String]) -> Result<()> {
         rt.block_on(async {
             let engine =
                 super_ragondin_codemode::suggestions::SuggestionEngine::new(rag_config, config.sync_dir)
-                    .await
                     .map_err(|e| Error::Permanent(format!("{e:#}")))?;
             let cwd = std::env::current_dir().ok();
             match engine.generate(cwd).await {
@@ -382,7 +381,6 @@ fn cmd_ask(args: &[String]) -> Result<()> {
             std::sync::Arc<dyn super_ragondin_codemode::interaction::UserInteraction>,
         > = Some(std::sync::Arc::new(CliInteraction));
         let engine = CodeModeEngine::new(rag_config, config.sync_dir, cozy_client, interaction)
-            .await
             .map_err(|e| Error::Permanent(format!("{e:#}")))?;
         let cwd = std::env::current_dir().ok();
         let answer = engine

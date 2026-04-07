@@ -371,12 +371,10 @@ pub async fn ask_question_from(
 
     let (rag_config, config) = load_rag_config(config_path)?;
 
-    let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, None)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "✦ Ask: failed to create engine");
-            e.to_string()
-        })?;
+    let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, None).map_err(|e| {
+        tracing::error!(error = %e, "✦ Ask: failed to create engine");
+        e.to_string()
+    })?;
 
     engine
         .ask(&question, None, false, false)
@@ -454,7 +452,6 @@ pub async fn ask_question(
         std::sync::Arc::new(GuiInteraction { app_handle });
 
     let engine = CodeModeEngine::new(rag_config, config.sync_dir, None, Some(interaction))
-        .await
         .map_err(|e| e.to_string())?;
 
     engine
@@ -469,9 +466,7 @@ pub async fn get_suggestions_from(config_path: &std::path::Path) -> Result<Vec<S
 
     let (rag_config, config) = load_rag_config(config_path)?;
 
-    let engine = SuggestionEngine::new(rag_config, config.sync_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    let engine = SuggestionEngine::new(rag_config, config.sync_dir).map_err(|e| e.to_string())?;
 
     engine.generate(None).await.map_err(|e| {
         if e.downcast_ref::<NoFilesIndexed>().is_some() {
