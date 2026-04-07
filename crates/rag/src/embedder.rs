@@ -4,20 +4,18 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 #[async_trait]
-pub trait Embedder: Send + Sync {
-    /// Embed a batch of texts. Returns one Vec<f32> per input.
-    async fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+pub trait VisionDescriber: Send + Sync {
     /// Call vision LLM to describe an image. `image_b64` is base64-encoded bytes.
     /// `mime` is e.g. "image/png".
     async fn describe_image(&self, image_b64: &str, mime: &str) -> Result<String>;
 }
 
-pub struct OpenRouterEmbedder {
+pub struct OpenRouterVision {
     client: reqwest::Client,
     config: RagConfig,
 }
 
-impl OpenRouterEmbedder {
+impl OpenRouterVision {
     #[must_use]
     pub fn new(config: RagConfig) -> Self {
         Self {
@@ -25,22 +23,6 @@ impl OpenRouterEmbedder {
             config,
         }
     }
-}
-
-#[derive(Serialize)]
-struct EmbedRequest<'a> {
-    model: &'a str,
-    input: &'a [String],
-}
-
-#[derive(Deserialize)]
-struct EmbedResponse {
-    data: Vec<EmbedData>,
-}
-
-#[derive(Deserialize)]
-struct EmbedData {
-    embedding: Vec<f32>,
 }
 
 #[derive(Serialize)]
@@ -72,7 +54,6 @@ struct ChatMessageResponse {
 }
 
 const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
-const BATCH_SIZE: usize = 100;
 const MAX_RETRIES: u32 = 3;
 
 #[allow(clippy::future_not_send)]
@@ -124,27 +105,7 @@ async fn post_with_retry(
 }
 
 #[async_trait]
-impl Embedder for OpenRouterEmbedder {
-    async fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut all = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(BATCH_SIZE) {
-            let body = EmbedRequest {
-                model: &self.config.embed_model,
-                input: chunk,
-            };
-            let resp = post_with_retry(
-                &self.client,
-                &format!("{OPENROUTER_BASE}/embeddings"),
-                &self.config.api_key,
-                &body,
-            )
-            .await?;
-            let parsed: EmbedResponse = resp.json().await?;
-            all.extend(parsed.data.into_iter().map(|d| d.embedding));
-        }
-        Ok(all)
-    }
-
+impl VisionDescriber for OpenRouterVision {
     async fn describe_image(&self, image_b64: &str, mime: &str) -> Result<String> {
         let data_url = format!("data:{mime};base64,{image_b64}");
         let body = ChatRequest {
@@ -185,26 +146,20 @@ impl Embedder for OpenRouterEmbedder {
 mod tests {
     use super::*;
 
-    struct StubEmbedder;
+    struct StubDescriber;
 
     #[async_trait::async_trait]
-    impl Embedder for StubEmbedder {
-        async fn embed_texts(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
-            Ok(texts.iter().map(|_| vec![0.0_f32; 1024]).collect())
-        }
+    impl VisionDescriber for StubDescriber {
         async fn describe_image(&self, _image_b64: &str, _mime: &str) -> anyhow::Result<String> {
             Ok("a test image".to_string())
         }
     }
 
     #[tokio::test]
-    async fn test_stub_embed() -> anyhow::Result<()> {
-        let e = StubEmbedder;
-        let result = e
-            .embed_texts(&["hello".to_string(), "world".to_string()])
-            .await?;
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].len(), 1024);
+    async fn test_stub_describe_image() -> anyhow::Result<()> {
+        let d = StubDescriber;
+        let result = d.describe_image("base64data", "image/png").await?;
+        assert_eq!(result, "a test image");
         Ok(())
     }
 }
