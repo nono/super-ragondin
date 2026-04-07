@@ -1,5 +1,4 @@
 use boa_engine::{Context, JsError, JsNativeError, JsResult, JsValue, NativeFunction, js_string};
-use super_ragondin_rag::embedder::Embedder;
 use super_ragondin_rag::store::MetadataFilter;
 
 use crate::sandbox::{SANDBOX_CTX, serde_to_jsvalue};
@@ -56,19 +55,10 @@ fn search_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
             JsNativeError::error().with_message("sandbox context not initialized")
         })?;
         let store = std::sync::Arc::clone(&sandbox.store);
-        let embedder = std::sync::Arc::clone(&sandbox.embedder);
         let filter_opt = if has_filter { Some(filter) } else { None };
-        sandbox.handle.block_on(async move {
-            let vecs = embedder
-                .embed_texts(&[query])
-                .await
-                .map_err(|e| JsNativeError::error().with_message(e.to_string()))?;
-            let vec = vecs.into_iter().next().unwrap_or_default();
-            store
-                .search(&vec, limit, filter_opt.as_ref())
-                .await
-                .map_err(|e| JsNativeError::error().with_message(e.to_string()))
-        })
+        store
+            .search(&query, limit, filter_opt.as_ref())
+            .map_err(|e| JsNativeError::error().with_message(e.to_string()))
     })?;
 
     // Convert to JS: [{ doc_id, chunk_text, mime_type, mtime }]

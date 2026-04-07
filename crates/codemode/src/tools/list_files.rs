@@ -53,12 +53,9 @@ fn list_files_fn(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
         })?;
         let store = std::sync::Arc::clone(&sandbox.store);
         let filter_opt = if has_filter { Some(filter) } else { None };
-        sandbox.handle.block_on(async move {
-            store
-                .list_docs(filter_opt.as_ref(), sort, limit)
-                .await
-                .map_err(|e| JsNativeError::error().with_message(e.to_string()))
-        })
+        store
+            .list_docs(filter_opt.as_ref(), sort, limit)
+            .map_err(|e| JsNativeError::error().with_message(e.to_string()))
     })?;
 
     let json_docs: Vec<serde_json::Value> = docs

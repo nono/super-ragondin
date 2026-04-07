@@ -87,11 +87,7 @@ async fn test_engine_ask_with_user_clarification() {
 
     let db_dir = tempfile::tempdir().expect("db_dir");
     let sync_dir = tempfile::tempdir().expect("sync_dir");
-    let store = Arc::new(
-        RagStore::open(db_dir.path())
-            .await
-            .expect("failed to open store"),
-    );
+    let store = Arc::new(RagStore::open(db_dir.path()).expect("failed to open store"));
     let mut config = RagConfig::from_env_with_db_path(db_dir.path().to_path_buf());
     config.api_key = "test-key".to_string();
     config.api_url = format!("{}/api/v1/chat/completions", mock_server.uri());

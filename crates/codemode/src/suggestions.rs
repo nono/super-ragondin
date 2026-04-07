@@ -37,8 +37,8 @@ impl SuggestionEngine {
     ///
     /// # Errors
     /// Returns an error if the RAG store cannot be opened.
-    pub async fn new(config: RagConfig, sync_dir: PathBuf) -> Result<Self> {
-        let store = RagStore::open(&config.db_path).await?;
+    pub fn new(config: RagConfig, sync_dir: PathBuf) -> Result<Self> {
+        let store = RagStore::open(&config.db_path)?;
         Ok(Self {
             config,
             sync_dir,
@@ -52,7 +52,7 @@ impl SuggestionEngine {
     /// Returns an error if no files are indexed or suggestion generation fails.
     pub async fn generate(&self, cwd: Option<PathBuf>) -> Result<Vec<String>> {
         // Phase 1a: store queries (fast, no timeout)
-        let docs = query_docs(&self.store, &self.sync_dir, cwd).await?;
+        let docs = query_docs(&self.store, &self.sync_dir, cwd.as_deref())?;
 
         // Phase 1b: fetch chunk text for up to 5 docs
         let mut doc_texts = Vec::new();
@@ -60,7 +60,6 @@ impl SuggestionEngine {
             let chunks = self
                 .store
                 .get_chunks(&doc.doc_id)
-                .await
                 .unwrap_or_else(|_| vec![]);
             let text: String = chunks
                 .iter()
@@ -125,14 +124,13 @@ impl SuggestionEngine {
 ///
 /// # Errors
 /// Returns a [`NoFilesIndexed`] error if the store is empty.
-pub(crate) async fn query_docs(
+pub(crate) fn query_docs(
     store: &RagStore,
     sync_dir: &std::path::Path,
-    cwd: Option<PathBuf>,
+    cwd: Option<&std::path::Path>,
 ) -> Result<Vec<DocInfo>> {
     // Step 1-2: try prefix query if cwd is inside sync_dir and prefix is non-empty
     let prefix = cwd
-        .as_deref()
         .and_then(|c| c.strip_prefix(sync_dir).ok())
         .and_then(|rel| {
             let s = rel.to_string_lossy().into_owned();
@@ -146,18 +144,16 @@ pub(crate) async fn query_docs(
             after: None,
             before: None,
         };
-        let docs = store
-            .list_docs(Some(&filter), DocSort::Recent, Some(10))
-            .await?;
+        let docs = store.list_docs(Some(&filter), DocSort::Recent, Some(10))?;
         if docs.is_empty() {
             // Fallback to whole-store query
-            store.list_docs(None, DocSort::Recent, Some(10)).await?
+            store.list_docs(None, DocSort::Recent, Some(10))?
         } else {
             docs
         }
     } else {
         // No usable prefix — whole-store query
-        store.list_docs(None, DocSort::Recent, Some(10)).await?
+        store.list_docs(None, DocSort::Recent, Some(10))?
     };
 
     if docs.is_empty() {
@@ -280,18 +276,18 @@ mod tests {
 
     use super_ragondin_rag::store::RagStore;
 
-    async fn empty_store() -> (RagStore, tempfile::TempDir) {
+    fn empty_store() -> (RagStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let store = RagStore::open(dir.path()).await.unwrap();
+        let store = RagStore::open(dir.path()).unwrap();
         (store, dir)
     }
 
     #[tokio::test]
     async fn test_query_docs_cwd_outside_sync_dir_uses_whole_store() {
-        let (store, _dir) = empty_store().await;
+        let (store, _dir) = empty_store();
         let sync_dir = PathBuf::from("/tmp/sync");
         let cwd = Some(PathBuf::from("/home/user/other"));
-        let result = super::query_docs(&store, sync_dir.as_path(), cwd).await;
+        let result = super::query_docs(&store, sync_dir.as_path(), cwd.as_deref());
         assert!(result.is_err());
         assert!(
             result
@@ -303,9 +299,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_docs_cwd_none_uses_whole_store() {
-        let (store, _dir) = empty_store().await;
+        let (store, _dir) = empty_store();
         let sync_dir = PathBuf::from("/tmp/sync");
-        let result = super::query_docs(&store, sync_dir.as_path(), None).await;
+        let result = super::query_docs(&store, sync_dir.as_path(), None);
         assert!(result.is_err());
         assert!(
             result
@@ -318,10 +314,10 @@ mod tests {
     #[tokio::test]
     async fn test_query_docs_cwd_at_sync_dir_root_uses_whole_store() {
         // cwd == sync_dir → strip_prefix yields "" → no prefix → whole-store
-        let (store, _dir) = empty_store().await;
+        let (store, _dir) = empty_store();
         let sync_dir = PathBuf::from("/tmp/sync");
         let cwd = Some(PathBuf::from("/tmp/sync"));
-        let result = super::query_docs(&store, sync_dir.as_path(), cwd).await;
+        let result = super::query_docs(&store, sync_dir.as_path(), cwd.as_deref());
         assert!(result.is_err());
         assert!(
             result
