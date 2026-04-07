@@ -7,7 +7,6 @@ pub const OPENROUTER_IMAGE_MODEL_DEFAULT: &str = "google/gemini-3.1-flash-image-
 #[derive(Clone)]
 pub struct RagConfig {
     pub api_key: String,
-    pub embed_model: String,
     pub vision_model: String,
     pub chat_model: String,
     pub subagent_model: String,
@@ -21,7 +20,6 @@ impl std::fmt::Debug for RagConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RagConfig")
             .field("api_key", &"***")
-            .field("embed_model", &self.embed_model)
             .field("vision_model", &self.vision_model)
             .field("chat_model", &self.chat_model)
             .field("subagent_model", &self.subagent_model)
@@ -48,8 +46,6 @@ impl RagConfig {
     pub fn from_env_with_db_path(db_path: PathBuf) -> Self {
         Self {
             api_key: std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
-            embed_model: std::env::var("OPENROUTER_EMBED_MODEL")
-                .unwrap_or_else(|_| "baai/bge-m3".to_string()),
             vision_model: std::env::var("OPENROUTER_VISION_MODEL")
                 .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string()),
             chat_model: std::env::var("OPENROUTER_CHAT_MODEL")
@@ -75,7 +71,6 @@ mod tests {
         temp_env::with_vars_unset(
             [
                 "OPENROUTER_API_KEY",
-                "OPENROUTER_EMBED_MODEL",
                 "OPENROUTER_VISION_MODEL",
                 "OPENROUTER_CHAT_MODEL",
                 "OPENROUTER_SUBAGENT_MODEL",
@@ -84,7 +79,6 @@ mod tests {
             ],
             || {
                 let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
-                assert_eq!(config.embed_model, "baai/bge-m3");
                 assert_eq!(config.vision_model, "google/gemini-2.5-flash");
                 assert_eq!(config.chat_model, "mistralai/mistral-small-2603");
                 assert_eq!(config.subagent_model, "google/gemini-2.5-flash");
@@ -96,17 +90,10 @@ mod tests {
 
     #[test]
     fn test_config_from_env() {
-        temp_env::with_vars(
-            [
-                ("OPENROUTER_API_KEY", Some("test-key")),
-                ("OPENROUTER_EMBED_MODEL", Some("custom/model")),
-            ],
-            || {
-                let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
-                assert_eq!(config.api_key, "test-key");
-                assert_eq!(config.embed_model, "custom/model");
-            },
-        );
+        temp_env::with_vars([("OPENROUTER_API_KEY", Some("test-key"))], || {
+            let config = RagConfig::from_env_with_db_path(PathBuf::from("/tmp/test.db"));
+            assert_eq!(config.api_key, "test-key");
+        });
     }
 
     #[test]
@@ -193,7 +180,6 @@ mod tests {
         temp_env::with_vars_unset(
             [
                 "OPENROUTER_API_KEY",
-                "OPENROUTER_EMBED_MODEL",
                 "OPENROUTER_VISION_MODEL",
                 "OPENROUTER_CHAT_MODEL",
                 "OPENROUTER_SUBAGENT_MODEL",
