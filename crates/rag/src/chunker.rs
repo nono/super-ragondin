@@ -1,14 +1,14 @@
 use anyhow::Result;
 use chonkie::{RecursiveChunker, SentenceChunker, TokenChunker, types::RecursiveRules};
 
-const PROSE_CHUNK_SIZE: usize = 512;
-const PROSE_OVERLAP: usize = 50;
-const TABLE_CHUNK_SIZE: usize = 256;
+const PROSE_CHUNK_SIZE: usize = 2000;
+const PROSE_OVERLAP: usize = 200;
+const TABLE_CHUNK_SIZE: usize = 1000;
 
 /// Minimum sentence length for `SentenceChunker` (in tokens).
 const SENTENCE_MIN_CHARS: usize = 1;
 /// Maximum sentences per chunk before forced split.
-const SENTENCE_MAX_PER_CHUNK: usize = 12;
+const SENTENCE_MAX_PER_CHUNK: usize = 48;
 /// Delimiters used to detect sentence boundaries.
 const SENTENCE_DELIMITERS: &[&str] = &[".", "!", "?", "\n"];
 
